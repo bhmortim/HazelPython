@@ -12,9 +12,14 @@ from typing import (
     Set,
     Tuple,
     TypeVar,
+    TYPE_CHECKING,
 )
 
 from hazelcast.proxy.base import Proxy, ProxyContext
+
+if TYPE_CHECKING:
+    from hazelcast.near_cache import NearCache
+    from hazelcast.config import NearCacheConfig
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -116,9 +121,24 @@ class MapProxy(Proxy, Generic[K, V]):
 
     SERVICE_NAME = "hz:impl:mapService"
 
-    def __init__(self, name: str, context: Optional[ProxyContext] = None):
+    def __init__(
+        self,
+        name: str,
+        context: Optional[ProxyContext] = None,
+        near_cache: Optional["NearCache"] = None,
+    ):
         super().__init__(self.SERVICE_NAME, name, context)
         self._entry_listeners: Dict[str, Tuple[EntryListener, bool]] = {}
+        self._near_cache: Optional["NearCache"] = near_cache
+
+    @property
+    def near_cache(self) -> Optional["NearCache"]:
+        """Get the near cache for this map."""
+        return self._near_cache
+
+    def set_near_cache(self, near_cache: "NearCache") -> None:
+        """Set the near cache for this map."""
+        self._near_cache = near_cache
 
     def put(self, key: K, value: V, ttl: float = -1) -> Optional[V]:
         """Set a key-value pair in the map.
@@ -145,6 +165,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain the previous value.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -158,7 +182,17 @@ class MapProxy(Proxy, Generic[K, V]):
         Returns:
             The value associated with the key, or None if not found.
         """
-        return self.get_async(key).result()
+        if self._near_cache is not None:
+            cached = self._near_cache.get(key)
+            if cached is not None:
+                return cached
+
+        value = self.get_async(key).result()
+
+        if self._near_cache is not None and value is not None:
+            self._near_cache.put(key, value)
+
+        return value
 
     def get_async(self, key: K) -> Future:
         """Get a value asynchronously.
@@ -170,6 +204,14 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain the value.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            cached = self._near_cache.get(key)
+            if cached is not None:
+                future: Future = Future()
+                future.set_result(cached)
+                return future
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -195,6 +237,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain the removed value.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -478,6 +524,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the clear is done.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate_all()
+
         future: Future = Future()
         future.set_result(None)
         return future

@@ -408,6 +408,8 @@ class SerializationConfig:
         self._default_integer_type = default_integer_type
         self._portable_factories: Dict[int, object] = {}
         self._data_serializable_factories: Dict[int, object] = {}
+        self._custom_serializers: Dict[type, object] = {}
+        self._compact_serializers: List[object] = []
 
     @property
     def portable_version(self) -> int:
@@ -444,6 +446,33 @@ class SerializationConfig:
     def add_data_serializable_factory(self, factory_id: int, factory: object) -> None:
         """Add a data serializable factory."""
         self._data_serializable_factories[factory_id] = factory
+
+    @property
+    def custom_serializers(self) -> Dict[type, object]:
+        """Get custom serializers."""
+        return self._custom_serializers
+
+    def add_custom_serializer(self, clazz: type, serializer: object) -> None:
+        """Add a custom serializer for a type.
+
+        Args:
+            clazz: The class to serialize.
+            serializer: The serializer instance.
+        """
+        self._custom_serializers[clazz] = serializer
+
+    @property
+    def compact_serializers(self) -> List[object]:
+        """Get compact serializers."""
+        return self._compact_serializers
+
+    def add_compact_serializer(self, serializer: object) -> None:
+        """Add a compact serializer.
+
+        Args:
+            serializer: The compact serializer instance.
+        """
+        self._compact_serializers.append(serializer)
 
     @classmethod
     def from_dict(cls, data: dict) -> "SerializationConfig":
