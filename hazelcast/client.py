@@ -4,7 +4,7 @@ import asyncio
 import threading
 import uuid
 from enum import Enum
-from typing import Callable, List, Optional, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from hazelcast.config import ClientConfig
 from hazelcast.exceptions import (
@@ -21,9 +21,42 @@ from hazelcast.listener import (
     FunctionMembershipListener,
     MembershipEvent,
     DistributedObjectListener,
+    DistributedObjectEvent,
+    DistributedObjectEventType,
     ListenerService,
 )
 from hazelcast.auth import AuthenticationService
+from hazelcast.proxy.base import DistributedObject, Proxy, ProxyContext
+
+if TYPE_CHECKING:
+    from hazelcast.proxy.map import Map
+    from hazelcast.proxy.queue import Queue
+    from hazelcast.proxy.collections import Set, List as HzList
+    from hazelcast.proxy.multi_map import MultiMap
+    from hazelcast.proxy.ringbuffer import Ringbuffer
+    from hazelcast.proxy.topic import Topic
+    from hazelcast.proxy.reliable_topic import ReliableTopic
+    from hazelcast.proxy.pn_counter import PNCounter
+    from hazelcast.cp.atomic import AtomicLong, AtomicReference
+    from hazelcast.cp.sync import CountDownLatch, Semaphore, FencedLock
+    from hazelcast.sql.service import SqlService
+    from hazelcast.jet.service import JetService
+
+
+SERVICE_NAME_MAP = "hz:impl:mapService"
+SERVICE_NAME_QUEUE = "hz:impl:queueService"
+SERVICE_NAME_SET = "hz:impl:setService"
+SERVICE_NAME_LIST = "hz:impl:listService"
+SERVICE_NAME_MULTI_MAP = "hz:impl:multiMapService"
+SERVICE_NAME_RINGBUFFER = "hz:impl:ringbufferService"
+SERVICE_NAME_TOPIC = "hz:impl:topicService"
+SERVICE_NAME_RELIABLE_TOPIC = "hz:impl:reliableTopicService"
+SERVICE_NAME_PN_COUNTER = "hz:impl:PNCounterService"
+SERVICE_NAME_ATOMIC_LONG = "hz:raft:atomicLongService"
+SERVICE_NAME_ATOMIC_REFERENCE = "hz:raft:atomicRefService"
+SERVICE_NAME_COUNT_DOWN_LATCH = "hz:raft:countDownLatchService"
+SERVICE_NAME_SEMAPHORE = "hz:raft:semaphoreService"
+SERVICE_NAME_FENCED_LOCK = "hz:raft:lockService"
 
 
 class ClientState(Enum):
@@ -73,6 +106,18 @@ class HazelcastClient:
         self._auth_service = AuthenticationService.from_config(self._config.security)
 
         self._connection_manager = None
+        self._invocation_service = None
+        self._serialization_service = None
+        self._partition_service = None
+        self._metrics_registry = None
+
+        self._proxy_context: Optional[ProxyContext] = None
+        self._proxies: Dict[Tuple[str, str], Proxy] = {}
+        self._proxies_lock = threading.Lock()
+
+        self._sql_service = None
+        self._jet_service = None
+
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread: Optional[threading.Thread] = None
 
@@ -111,6 +156,21 @@ class HazelcastClient:
     def lifecycle_service(self) -> ListenerService:
         """Get the listener service for registering listeners."""
         return self._listener_service
+
+    @property
+    def invocation_service(self):
+        """Get the invocation service."""
+        return self._invocation_service
+
+    @property
+    def serialization_service(self):
+        """Get the serialization service."""
+        return self._serialization_service
+
+    @property
+    def partition_service(self):
+        """Get the partition service."""
+        return self._partition_service
 
     def _transition_state(self, new_state: ClientState) -> bool:
         """Transition to a new state if valid.
@@ -244,7 +304,35 @@ class HazelcastClient:
 
     def _start_internal(self) -> None:
         """Internal startup logic."""
-        pass
+        self._init_services()
+
+    def _init_services(self) -> None:
+        """Initialize all client services."""
+        from hazelcast.serialization.service import SerializationService
+        from hazelcast.service.partition import PartitionService
+        from hazelcast.network.connection_manager import ConnectionManager
+        from hazelcast.invocation import InvocationService
+        from hazelcast.metrics import MetricsRegistry
+
+        self._metrics_registry = MetricsRegistry()
+        self._serialization_service = SerializationService(self._config.serialization)
+        self._partition_service = PartitionService()
+        self._connection_manager = ConnectionManager(
+            self._config,
+            self._auth_service,
+            self._listener_service,
+        )
+        self._invocation_service = InvocationService(
+            self._connection_manager,
+            self._config,
+        )
+
+        self._proxy_context = ProxyContext(
+            invocation_service=self._invocation_service,
+            serialization_service=self._serialization_service,
+            partition_service=self._partition_service,
+            listener_service=self._listener_service,
+        )
 
     def connect(self) -> "HazelcastClient":
         """Alias for start() - connect to the cluster.
@@ -273,7 +361,7 @@ class HazelcastClient:
 
     async def _start_async_internal(self) -> None:
         """Internal async startup logic."""
-        pass
+        self._init_services()
 
     def shutdown(self) -> None:
         """Shutdown the client and disconnect from the cluster."""
@@ -298,7 +386,33 @@ class HazelcastClient:
 
     def _shutdown_internal(self) -> None:
         """Internal shutdown logic."""
-        pass
+        self._destroy_proxies()
+        self._shutdown_services()
+
+    def _destroy_proxies(self) -> None:
+        """Destroy all created proxies."""
+        with self._proxies_lock:
+            for proxy in list(self._proxies.values()):
+                try:
+                    if not proxy.is_destroyed:
+                        proxy._destroyed = True
+                except Exception:
+                    pass
+            self._proxies.clear()
+
+    def _shutdown_services(self) -> None:
+        """Shutdown all client services."""
+        if self._invocation_service:
+            try:
+                self._invocation_service.shutdown()
+            except Exception:
+                pass
+
+        if self._connection_manager:
+            try:
+                self._connection_manager.shutdown()
+            except Exception:
+                pass
 
     async def shutdown_async(self) -> None:
         """Shutdown the client asynchronously."""
@@ -320,7 +434,261 @@ class HazelcastClient:
 
     async def _shutdown_async_internal(self) -> None:
         """Internal async shutdown logic."""
-        pass
+        self._destroy_proxies()
+        self._shutdown_services()
+
+    def _get_or_create_proxy(
+        self,
+        service_name: str,
+        name: str,
+        proxy_class: type,
+    ) -> Proxy:
+        """Get an existing proxy or create a new one.
+
+        Args:
+            service_name: The service name for the distributed object.
+            name: The name of the distributed object.
+            proxy_class: The proxy class to instantiate.
+
+        Returns:
+            The proxy instance.
+        """
+        self._check_running()
+
+        key = (service_name, name)
+        with self._proxies_lock:
+            if key in self._proxies:
+                proxy = self._proxies[key]
+                if not proxy.is_destroyed:
+                    return proxy
+
+            proxy = proxy_class(service_name, name, self._proxy_context)
+            self._proxies[key] = proxy
+
+        event = DistributedObjectEvent(
+            DistributedObjectEventType.CREATED,
+            service_name,
+            name,
+            proxy,
+        )
+        self._listener_service.fire_distributed_object_event(event)
+
+        return proxy
+
+    def _check_running(self) -> None:
+        """Check if the client is running."""
+        if not self.running:
+            raise ClientOfflineException("Client is not connected")
+
+    def get_distributed_objects(self) -> List[DistributedObject]:
+        """Get all distributed objects created by this client.
+
+        Returns:
+            List of all distributed objects.
+        """
+        with self._proxies_lock:
+            return [p for p in self._proxies.values() if not p.is_destroyed]
+
+    def get_map(self, name: str) -> "Map":
+        """Get or create a distributed Map.
+
+        Args:
+            name: Name of the map.
+
+        Returns:
+            The Map proxy.
+        """
+        from hazelcast.proxy.map import Map
+        return self._get_or_create_proxy(SERVICE_NAME_MAP, name, Map)
+
+    def get_queue(self, name: str) -> "Queue":
+        """Get or create a distributed Queue.
+
+        Args:
+            name: Name of the queue.
+
+        Returns:
+            The Queue proxy.
+        """
+        from hazelcast.proxy.queue import Queue
+        return self._get_or_create_proxy(SERVICE_NAME_QUEUE, name, Queue)
+
+    def get_set(self, name: str) -> "Set":
+        """Get or create a distributed Set.
+
+        Args:
+            name: Name of the set.
+
+        Returns:
+            The Set proxy.
+        """
+        from hazelcast.proxy.collections import Set
+        return self._get_or_create_proxy(SERVICE_NAME_SET, name, Set)
+
+    def get_list(self, name: str) -> "HzList":
+        """Get or create a distributed List.
+
+        Args:
+            name: Name of the list.
+
+        Returns:
+            The List proxy.
+        """
+        from hazelcast.proxy.collections import List as HzList
+        return self._get_or_create_proxy(SERVICE_NAME_LIST, name, HzList)
+
+    def get_multi_map(self, name: str) -> "MultiMap":
+        """Get or create a distributed MultiMap.
+
+        Args:
+            name: Name of the multi-map.
+
+        Returns:
+            The MultiMap proxy.
+        """
+        from hazelcast.proxy.multi_map import MultiMap
+        return self._get_or_create_proxy(SERVICE_NAME_MULTI_MAP, name, MultiMap)
+
+    def get_ringbuffer(self, name: str) -> "Ringbuffer":
+        """Get or create a distributed Ringbuffer.
+
+        Args:
+            name: Name of the ringbuffer.
+
+        Returns:
+            The Ringbuffer proxy.
+        """
+        from hazelcast.proxy.ringbuffer import Ringbuffer
+        return self._get_or_create_proxy(SERVICE_NAME_RINGBUFFER, name, Ringbuffer)
+
+    def get_topic(self, name: str) -> "Topic":
+        """Get or create a distributed Topic.
+
+        Args:
+            name: Name of the topic.
+
+        Returns:
+            The Topic proxy.
+        """
+        from hazelcast.proxy.topic import Topic
+        return self._get_or_create_proxy(SERVICE_NAME_TOPIC, name, Topic)
+
+    def get_reliable_topic(self, name: str) -> "ReliableTopic":
+        """Get or create a distributed ReliableTopic.
+
+        Args:
+            name: Name of the reliable topic.
+
+        Returns:
+            The ReliableTopic proxy.
+        """
+        from hazelcast.proxy.reliable_topic import ReliableTopic
+        return self._get_or_create_proxy(SERVICE_NAME_RELIABLE_TOPIC, name, ReliableTopic)
+
+    def get_pn_counter(self, name: str) -> "PNCounter":
+        """Get or create a distributed PNCounter.
+
+        Args:
+            name: Name of the PN counter.
+
+        Returns:
+            The PNCounter proxy.
+        """
+        from hazelcast.proxy.pn_counter import PNCounter
+        return self._get_or_create_proxy(SERVICE_NAME_PN_COUNTER, name, PNCounter)
+
+    def get_atomic_long(self, name: str) -> "AtomicLong":
+        """Get or create a CP AtomicLong.
+
+        Args:
+            name: Name of the atomic long.
+
+        Returns:
+            The AtomicLong proxy.
+        """
+        from hazelcast.cp.atomic import AtomicLong
+        return self._get_or_create_proxy(SERVICE_NAME_ATOMIC_LONG, name, AtomicLong)
+
+    def get_atomic_reference(self, name: str) -> "AtomicReference":
+        """Get or create a CP AtomicReference.
+
+        Args:
+            name: Name of the atomic reference.
+
+        Returns:
+            The AtomicReference proxy.
+        """
+        from hazelcast.cp.atomic import AtomicReference
+        return self._get_or_create_proxy(SERVICE_NAME_ATOMIC_REFERENCE, name, AtomicReference)
+
+    def get_count_down_latch(self, name: str) -> "CountDownLatch":
+        """Get or create a CP CountDownLatch.
+
+        Args:
+            name: Name of the count down latch.
+
+        Returns:
+            The CountDownLatch proxy.
+        """
+        from hazelcast.cp.sync import CountDownLatch
+        return self._get_or_create_proxy(SERVICE_NAME_COUNT_DOWN_LATCH, name, CountDownLatch)
+
+    def get_semaphore(self, name: str) -> "Semaphore":
+        """Get or create a CP Semaphore.
+
+        Args:
+            name: Name of the semaphore.
+
+        Returns:
+            The Semaphore proxy.
+        """
+        from hazelcast.cp.sync import Semaphore
+        return self._get_or_create_proxy(SERVICE_NAME_SEMAPHORE, name, Semaphore)
+
+    def get_fenced_lock(self, name: str) -> "FencedLock":
+        """Get or create a CP FencedLock.
+
+        Args:
+            name: Name of the fenced lock.
+
+        Returns:
+            The FencedLock proxy.
+        """
+        from hazelcast.cp.sync import FencedLock
+        return self._get_or_create_proxy(SERVICE_NAME_FENCED_LOCK, name, FencedLock)
+
+    def get_sql(self) -> "SqlService":
+        """Get the SQL service for executing queries.
+
+        Returns:
+            The SqlService instance.
+        """
+        self._check_running()
+
+        if self._sql_service is None:
+            from hazelcast.sql.service import SqlService
+            self._sql_service = SqlService(
+                self._invocation_service,
+                self._serialization_service,
+                self._connection_manager,
+            )
+        return self._sql_service
+
+    def get_jet(self) -> "JetService":
+        """Get the Jet service for stream processing.
+
+        Returns:
+            The JetService instance.
+        """
+        self._check_running()
+
+        if self._jet_service is None:
+            from hazelcast.jet.service import JetService
+            self._jet_service = JetService(
+                self._invocation_service,
+                self._serialization_service,
+            )
+        return self._jet_service
 
     def __enter__(self) -> "HazelcastClient":
         """Enter context manager - starts the client."""
