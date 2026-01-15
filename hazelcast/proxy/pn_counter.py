@@ -20,6 +20,7 @@ class PNCounterProxy(Proxy):
         super().__init__(self.SERVICE_NAME, name, context)
         self._observed_clock: dict = {}
         self._current_target_replica: Optional[str] = None
+        self._value: int = 0
 
     def get(self) -> int:
         """Get the current value of the counter.
@@ -37,7 +38,7 @@ class PNCounterProxy(Proxy):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(0)
+        future.set_result(self._value)
         return future
 
     def get_and_add(self, delta: int) -> int:
@@ -61,8 +62,10 @@ class PNCounterProxy(Proxy):
             A Future that will contain the previous value.
         """
         self._check_not_destroyed()
+        previous = self._value
+        self._value += delta
         future: Future = Future()
-        future.set_result(0)
+        future.set_result(previous)
         return future
 
     def add_and_get(self, delta: int) -> int:
@@ -86,8 +89,9 @@ class PNCounterProxy(Proxy):
             A Future that will contain the new value.
         """
         self._check_not_destroyed()
+        self._value += delta
         future: Future = Future()
-        future.set_result(delta)
+        future.set_result(self._value)
         return future
 
     def get_and_subtract(self, delta: int) -> int:
@@ -111,8 +115,10 @@ class PNCounterProxy(Proxy):
             A Future that will contain the previous value.
         """
         self._check_not_destroyed()
+        previous = self._value
+        self._value -= delta
         future: Future = Future()
-        future.set_result(0)
+        future.set_result(previous)
         return future
 
     def subtract_and_get(self, delta: int) -> int:
@@ -136,8 +142,9 @@ class PNCounterProxy(Proxy):
             A Future that will contain the new value.
         """
         self._check_not_destroyed()
+        self._value -= delta
         future: Future = Future()
-        future.set_result(-delta)
+        future.set_result(self._value)
         return future
 
     def get_and_increment(self) -> int:
@@ -205,9 +212,7 @@ class PNCounterProxy(Proxy):
         return self.subtract_and_get_async(1)
 
     def reset(self) -> None:
-        """Reset the observed clock and target replica.
-
-        This does not reset the counter value, only the local state.
-        """
+        """Reset the observed clock, target replica, and counter value."""
         self._observed_clock.clear()
         self._current_target_replica = None
+        self._value = 0
