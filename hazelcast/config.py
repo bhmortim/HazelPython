@@ -484,10 +484,47 @@ class SerializationConfig:
 
 
 class ClientConfig:
-    """Configuration for the Hazelcast client."""
+    """Configuration for the Hazelcast client.
+
+    Provides comprehensive configuration options for connecting to a
+    Hazelcast cluster, including network settings, security credentials,
+    serialization, near cache, and connection strategy.
+
+    Attributes:
+        cluster_name: Name of the Hazelcast cluster to connect to.
+        client_name: Optional name for this client instance.
+        network: Network configuration (addresses, timeout, routing).
+        security: Security configuration (credentials, tokens).
+        serialization: Serialization configuration.
+        connection_strategy: Connection and reconnection settings.
+        near_caches: Near cache configurations by map name.
+        labels: Client labels for identification.
+
+    Example:
+        Basic configuration::
+
+            config = ClientConfig()
+            config.cluster_name = "production"
+            config.cluster_members = ["node1:5701", "node2:5701"]
+
+        With security::
+
+            config = ClientConfig()
+            config.cluster_name = "secure-cluster"
+            config.security.username = "admin"
+            config.security.password = "secret"
+
+        From YAML file::
+
+            config = ClientConfig.from_yaml("hazelcast-client.yml")
+    """
 
     def __init__(self):
-        """Initialize client configuration with defaults."""
+        """Initialize client configuration with defaults.
+
+        Creates a configuration with default settings suitable for
+        connecting to a local development cluster at localhost:5701.
+        """
         self._cluster_name: str = "dev"
         self._client_name: Optional[str] = None
         self._network: NetworkConfig = NetworkConfig()

@@ -119,7 +119,35 @@ class MapProxy(Proxy, Generic[K, V]):
     """Proxy for Hazelcast IMap distributed data structure.
 
     Provides a distributed, partitioned, and optionally replicated map
-    implementation.
+    implementation. The map is stored across cluster members and supports
+    concurrent access, entry listeners, predicates, aggregations, and
+    optional near-cache for reduced latency.
+
+    Type Parameters:
+        K: The key type.
+        V: The value type.
+
+    Attributes:
+        name: The name of this distributed map.
+        near_cache: The optional near cache for this map.
+
+    Example:
+        Basic operations::
+
+            my_map = client.get_map("users")
+            my_map.put("user:1", {"name": "Alice"})
+            user = my_map.get("user:1")
+            my_map.remove("user:1")
+
+        With entry listener::
+
+            def on_added(event):
+                print(f"Added: {event.key}")
+
+            my_map.add_entry_listener(
+                listener,
+                include_value=True
+            )
     """
 
     SERVICE_NAME = "hz:impl:mapService"
@@ -146,13 +174,26 @@ class MapProxy(Proxy, Generic[K, V]):
     def put(self, key: K, value: V, ttl: float = -1) -> Optional[V]:
         """Set a key-value pair in the map.
 
+        Associates the specified value with the specified key. If the map
+        previously contained a mapping for the key, the old value is
+        replaced and returned.
+
         Args:
-            key: The key to set.
-            value: The value to associate with the key.
-            ttl: Time to live in seconds. -1 means infinite.
+            key: The key to set. Must be serializable.
+            value: The value to associate with the key. Must be serializable.
+            ttl: Time to live in seconds. The entry will be automatically
+                evicted after this duration. Use -1 for infinite (default).
 
         Returns:
-            The previous value associated with the key, or None.
+            The previous value associated with the key, or None if there
+            was no mapping.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> old_value = my_map.put("key", "new_value")
+            >>> print(f"Previous value: {old_value}")
         """
         return self.put_async(key, value, ttl).result()
 
@@ -179,11 +220,23 @@ class MapProxy(Proxy, Generic[K, V]):
     def get(self, key: K) -> Optional[V]:
         """Get the value associated with a key.
 
+        Returns the value to which the specified key is mapped, or None
+        if the map contains no mapping for the key. If near cache is
+        enabled, the value may be returned from the local cache.
+
         Args:
-            key: The key to look up.
+            key: The key whose associated value is to be returned.
 
         Returns:
             The value associated with the key, or None if not found.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> value = my_map.get("key")
+            >>> if value is not None:
+            ...     print(f"Found: {value}")
         """
         if self._near_cache is not None:
             cached = self._near_cache.get(key)
@@ -222,11 +275,22 @@ class MapProxy(Proxy, Generic[K, V]):
     def remove(self, key: K) -> Optional[V]:
         """Remove a key-value pair from the map.
 
+        Removes the mapping for a key from this map if it is present.
+        Returns the value to which this map previously associated the key.
+
         Args:
-            key: The key to remove.
+            key: The key whose mapping is to be removed.
 
         Returns:
-            The removed value, or None if not found.
+            The previous value associated with the key, or None if there
+            was no mapping.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> removed = my_map.remove("key")
+            >>> print(f"Removed value: {removed}")
         """
         return self.remove_async(key).result()
 
@@ -277,11 +341,21 @@ class MapProxy(Proxy, Generic[K, V]):
     def contains_key(self, key: K) -> bool:
         """Check if the map contains a key.
 
+        Returns True if this map contains a mapping for the specified key.
+        This operation does not affect near cache statistics.
+
         Args:
-            key: The key to check.
+            key: The key whose presence is to be tested.
 
         Returns:
-            True if the key exists, False otherwise.
+            True if the map contains a mapping for the key, False otherwise.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> if my_map.contains_key("user:1"):
+            ...     print("User exists")
         """
         return self.contains_key_async(key).result()
 
@@ -502,8 +576,18 @@ class MapProxy(Proxy, Generic[K, V]):
     def size(self) -> int:
         """Get the number of entries in the map.
 
+        Returns the number of key-value mappings in this map across
+        all cluster members.
+
         Returns:
-            The number of entries.
+            The total number of entries in the distributed map.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> count = my_map.size()
+            >>> print(f"Map has {count} entries")
         """
         return self.size_async().result()
 
@@ -538,7 +622,19 @@ class MapProxy(Proxy, Generic[K, V]):
         return future
 
     def clear(self) -> None:
-        """Remove all entries from the map."""
+        """Remove all entries from the map.
+
+        Removes all key-value mappings from this map across all cluster
+        members. The map will be empty after this call. Also clears
+        the near cache if configured.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> my_map.clear()
+            >>> assert my_map.size() == 0
+        """
         self.clear_async().result()
 
     def clear_async(self) -> Future:

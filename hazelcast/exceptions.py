@@ -85,6 +85,21 @@ class IllegalArgumentException(HazelcastException):
         super().__init__(message)
 
 
+class StaleSequenceException(HazelcastException):
+    """Raised when reading from a stale sequence in ringbuffer/reliable topic.
+
+    This occurs when the requested sequence is older than the head sequence
+    of the ringbuffer backing a reliable topic.
+
+    Attributes:
+        head_sequence: The current head sequence of the ringbuffer.
+    """
+
+    def __init__(self, message: str = "Stale sequence", head_sequence: int = -1):
+        super().__init__(message)
+        self.head_sequence = head_sequence
+
+
 class ConfigurationException(HazelcastException):
     """Raised when there is a configuration error."""
 

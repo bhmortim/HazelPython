@@ -89,15 +89,61 @@ _VALID_TRANSITIONS = {
 class HazelcastClient:
     """Hazelcast Python Client.
 
-    The main entry point for connecting to a Hazelcast cluster.
-    Supports both synchronous and asynchronous operations.
+    The main entry point for connecting to a Hazelcast cluster. Provides access
+    to distributed data structures, SQL queries, CP subsystem, and Jet pipelines.
+
+    The client supports both synchronous and asynchronous operations, with
+    automatic connection management, failover, and reconnection.
+
+    Attributes:
+        config: The client configuration.
+        name: The client instance name.
+        uuid: The unique client identifier.
+        state: The current client state (INITIAL, CONNECTED, etc.).
+        running: Whether the client is connected and operational.
+
+    Example:
+        Basic usage with context manager::
+
+            from hazelcast import HazelcastClient, ClientConfig
+
+            config = ClientConfig()
+            config.cluster_name = "dev"
+            config.cluster_members = ["localhost:5701"]
+
+            with HazelcastClient(config) as client:
+                my_map = client.get_map("my-map")
+                my_map.put("key", "value")
+                value = my_map.get("key")
+
+        Async usage::
+
+            async with HazelcastClient(config) as client:
+                my_map = client.get_map("my-map")
+                await my_map.put_async("key", "value")
+
+    Note:
+        Always call `shutdown()` or use a context manager to properly
+        close connections when done with the client.
     """
 
     def __init__(self, config: ClientConfig = None):
         """Initialize the Hazelcast client.
 
+        Creates a new client instance with the specified configuration.
+        The client is not connected until `start()` is called.
+
         Args:
-            config: Client configuration. If None, default configuration is used.
+            config: Client configuration specifying cluster addresses,
+                credentials, serialization settings, and more.
+                If None, default configuration connecting to
+                localhost:5701 is used.
+
+        Example:
+            >>> config = ClientConfig()
+            >>> config.cluster_name = "production"
+            >>> config.cluster_members = ["node1:5701", "node2:5701"]
+            >>> client = HazelcastClient(config)
         """
         self._config = config or ClientConfig()
         self._state = ClientState.INITIAL
@@ -294,12 +340,23 @@ class HazelcastClient:
     def start(self) -> "HazelcastClient":
         """Start the client and connect to the cluster synchronously.
 
+        Establishes connections to the Hazelcast cluster, authenticates,
+        and initializes all internal services. After successful connection,
+        the client is ready to use distributed data structures.
+
         Returns:
-            This client instance.
+            This client instance for method chaining.
 
         Raises:
             IllegalStateException: If the client is not in INITIAL state.
-            ClientOfflineException: If connection fails.
+            ClientOfflineException: If connection to the cluster fails.
+            AuthenticationException: If authentication with the cluster fails.
+
+        Example:
+            >>> client = HazelcastClient(config)
+            >>> client.start()
+            >>> # Client is now connected
+            >>> client.shutdown()
         """
         _logger.info(
             "Starting Hazelcast client %s (cluster=%s)",
@@ -381,7 +438,19 @@ class HazelcastClient:
         self._init_services()
 
     def shutdown(self) -> None:
-        """Shutdown the client and disconnect from the cluster."""
+        """Shutdown the client and disconnect from the cluster.
+
+        Gracefully closes all connections, destroys proxies, and releases
+        resources. After shutdown, the client cannot be restarted.
+
+        This method is idempotent - calling it multiple times has no effect.
+
+        Example:
+            >>> client = HazelcastClient(config)
+            >>> client.start()
+            >>> # ... use the client ...
+            >>> client.shutdown()
+        """
         current_state = self.state
 
         if current_state == ClientState.SHUTDOWN:
@@ -514,11 +583,24 @@ class HazelcastClient:
     def get_map(self, name: str) -> "Map":
         """Get or create a distributed Map.
 
+        Returns a proxy to a distributed map. The map is created on the
+        cluster if it doesn't exist. Multiple calls with the same name
+        return the same proxy instance.
+
         Args:
-            name: Name of the map.
+            name: Name of the distributed map. Must be unique within
+                the cluster.
 
         Returns:
-            The Map proxy.
+            MapProxy instance for performing map operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> my_map = client.get_map("users")
+            >>> my_map.put("user:1", {"name": "Alice", "age": 30})
+            >>> user = my_map.get("user:1")
         """
         from hazelcast.proxy.map import Map
         return self._get_or_create_proxy(SERVICE_NAME_MAP, name, Map)
@@ -526,11 +608,21 @@ class HazelcastClient:
     def get_queue(self, name: str) -> "Queue":
         """Get or create a distributed Queue.
 
+        Returns a proxy to a distributed blocking queue.
+
         Args:
-            name: Name of the queue.
+            name: Name of the distributed queue.
 
         Returns:
-            The Queue proxy.
+            QueueProxy instance for queue operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> queue = client.get_queue("task-queue")
+            >>> queue.offer("task-1")
+            >>> task = queue.poll(timeout=5.0)
         """
         from hazelcast.proxy.queue import Queue
         return self._get_or_create_proxy(SERVICE_NAME_QUEUE, name, Queue)
@@ -538,11 +630,21 @@ class HazelcastClient:
     def get_set(self, name: str) -> "Set":
         """Get or create a distributed Set.
 
+        Returns a proxy to a distributed set that doesn't allow duplicates.
+
         Args:
-            name: Name of the set.
+            name: Name of the distributed set.
 
         Returns:
-            The Set proxy.
+            SetProxy instance for set operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> my_set = client.get_set("unique-ids")
+            >>> my_set.add("id-1")
+            >>> exists = my_set.contains("id-1")
         """
         from hazelcast.proxy.collections import Set
         return self._get_or_create_proxy(SERVICE_NAME_SET, name, Set)
@@ -550,11 +652,21 @@ class HazelcastClient:
     def get_list(self, name: str) -> "HzList":
         """Get or create a distributed List.
 
+        Returns a proxy to a distributed list that maintains insertion order.
+
         Args:
-            name: Name of the list.
+            name: Name of the distributed list.
 
         Returns:
-            The List proxy.
+            ListProxy instance for list operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> my_list = client.get_list("items")
+            >>> my_list.add("item-1")
+            >>> item = my_list.get(0)
         """
         from hazelcast.proxy.collections import List as HzList
         return self._get_or_create_proxy(SERVICE_NAME_LIST, name, HzList)
@@ -562,11 +674,23 @@ class HazelcastClient:
     def get_multi_map(self, name: str) -> "MultiMap":
         """Get or create a distributed MultiMap.
 
+        Returns a proxy to a distributed map that allows multiple values
+        per key.
+
         Args:
-            name: Name of the multi-map.
+            name: Name of the distributed multi-map.
 
         Returns:
-            The MultiMap proxy.
+            MultiMapProxy instance for multi-map operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> mm = client.get_multi_map("user-roles")
+            >>> mm.put("user:1", "admin")
+            >>> mm.put("user:1", "editor")
+            >>> roles = mm.get("user:1")  # ["admin", "editor"]
         """
         from hazelcast.proxy.multi_map import MultiMap
         return self._get_or_create_proxy(SERVICE_NAME_MULTI_MAP, name, MultiMap)
@@ -574,11 +698,22 @@ class HazelcastClient:
     def get_ringbuffer(self, name: str) -> "Ringbuffer":
         """Get or create a distributed Ringbuffer.
 
+        Returns a proxy to a distributed ringbuffer - a bounded, circular
+        data structure with sequence-based access.
+
         Args:
-            name: Name of the ringbuffer.
+            name: Name of the distributed ringbuffer.
 
         Returns:
-            The Ringbuffer proxy.
+            RingbufferProxy instance for ringbuffer operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> rb = client.get_ringbuffer("events")
+            >>> seq = rb.add("event-data")
+            >>> item = rb.read_one(seq)
         """
         from hazelcast.proxy.ringbuffer import Ringbuffer
         return self._get_or_create_proxy(SERVICE_NAME_RINGBUFFER, name, Ringbuffer)
@@ -586,11 +721,21 @@ class HazelcastClient:
     def get_topic(self, name: str) -> "Topic":
         """Get or create a distributed Topic.
 
+        Returns a proxy to a distributed publish-subscribe topic.
+
         Args:
-            name: Name of the topic.
+            name: Name of the distributed topic.
 
         Returns:
-            The Topic proxy.
+            TopicProxy instance for pub-sub operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> topic = client.get_topic("notifications")
+            >>> topic.add_message_listener(on_message=lambda m: print(m.message))
+            >>> topic.publish("Hello, subscribers!")
         """
         from hazelcast.proxy.topic import Topic
         return self._get_or_create_proxy(SERVICE_NAME_TOPIC, name, Topic)
@@ -610,11 +755,22 @@ class HazelcastClient:
     def get_pn_counter(self, name: str) -> "PNCounter":
         """Get or create a distributed PNCounter.
 
+        Returns a proxy to a CRDT Positive-Negative Counter that supports
+        increment and decrement with eventual consistency.
+
         Args:
-            name: Name of the PN counter.
+            name: Name of the distributed PN counter.
 
         Returns:
-            The PNCounter proxy.
+            PNCounterProxy instance for counter operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> counter = client.get_pn_counter("page-views")
+            >>> counter.increment_and_get()
+            >>> count = counter.get()
         """
         from hazelcast.proxy.pn_counter import PNCounter
         return self._get_or_create_proxy(SERVICE_NAME_PN_COUNTER, name, PNCounter)
@@ -622,11 +778,26 @@ class HazelcastClient:
     def get_atomic_long(self, name: str) -> "AtomicLong":
         """Get or create a CP AtomicLong.
 
+        Returns a proxy to a CP subsystem atomic long counter with
+        strong consistency guarantees.
+
         Args:
-            name: Name of the atomic long.
+            name: Name of the atomic long in the CP subsystem.
 
         Returns:
-            The AtomicLong proxy.
+            AtomicLong instance for atomic counter operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Note:
+            Requires CP subsystem to be enabled on the cluster
+            (minimum 3 members).
+
+        Example:
+            >>> counter = client.get_atomic_long("sequence-generator")
+            >>> counter.set(0)
+            >>> next_id = counter.increment_and_get()
         """
         from hazelcast.cp.atomic import AtomicLong
         return self._get_or_create_proxy(SERVICE_NAME_ATOMIC_LONG, name, AtomicLong)
@@ -670,11 +841,26 @@ class HazelcastClient:
     def get_fenced_lock(self, name: str) -> "FencedLock":
         """Get or create a CP FencedLock.
 
+        Returns a proxy to a CP subsystem distributed mutex with
+        fencing token support for safe lock ownership verification.
+
         Args:
-            name: Name of the fenced lock.
+            name: Name of the fenced lock in the CP subsystem.
 
         Returns:
-            The FencedLock proxy.
+            FencedLock instance for distributed locking.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Note:
+            Requires CP subsystem to be enabled on the cluster.
+
+        Example:
+            >>> lock = client.get_fenced_lock("resource-lock")
+            >>> with lock as fence:
+            ...     # Critical section
+            ...     print(f"Lock acquired with fence: {fence}")
         """
         from hazelcast.cp.sync import FencedLock
         return self._get_or_create_proxy(SERVICE_NAME_FENCED_LOCK, name, FencedLock)
@@ -682,8 +868,20 @@ class HazelcastClient:
     def get_sql(self) -> "SqlService":
         """Get the SQL service for executing queries.
 
+        Returns the SQL service for executing SQL queries against
+        data stored in the Hazelcast cluster.
+
         Returns:
-            The SqlService instance.
+            SqlService instance for query execution.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> sql = client.get_sql()
+            >>> result = sql.execute("SELECT * FROM employees WHERE age > ?", 30)
+            >>> for row in result:
+            ...     print(row.to_dict())
         """
         self._check_running()
 
@@ -699,8 +897,21 @@ class HazelcastClient:
     def get_jet(self) -> "JetService":
         """Get the Jet service for stream processing.
 
+        Returns the Jet service for submitting and managing
+        distributed stream/batch processing pipelines.
+
         Returns:
-            The JetService instance.
+            JetService instance for pipeline submission.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> jet = client.get_jet()
+            >>> pipeline = Pipeline.create()
+            >>> # ... build pipeline ...
+            >>> job = jet.submit(pipeline)
+            >>> print(f"Job status: {job.status}")
         """
         self._check_running()
 

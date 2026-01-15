@@ -8,13 +8,14 @@ A comprehensive Python client for [Hazelcast](https://hazelcast.com/) in-memory 
 ## Features
 
 - **Distributed Data Structures**: Map, Queue, Set, List, Topic, MultiMap, Ringbuffer, PN Counter
-- **SQL Support**: Execute SQL queries against your cluster data
-- **CP Subsystem**: AtomicLong, AtomicReference, FencedLock, CountDownLatch, Semaphore
+- **SQL Support**: Execute SQL queries against cluster data
+- **CP Subsystem**: AtomicLong, AtomicReference, FencedLock, Semaphore, CountDownLatch
 - **Jet Integration**: Submit and manage streaming/batch processing pipelines
-- **Near Cache**: Local caching with configurable eviction and invalidation
+- **Near Cache**: Local caching with configurable eviction (LRU, LFU) and TTL
 - **Failover**: Automatic failover across multiple clusters with CNAME-based discovery
-- **Metrics**: Comprehensive client metrics for monitoring
 - **Async Support**: Both synchronous and asynchronous APIs
+- **Metrics**: Comprehensive client metrics for monitoring
+- **Logging**: Hierarchical logging with configurable levels
 
 ## Installation
 
@@ -35,32 +36,16 @@ pip install -e ".[dev]"
 ```python
 from hazelcast import HazelcastClient, ClientConfig
 
-# Create configuration
 config = ClientConfig()
 config.cluster_name = "dev"
 config.cluster_members = ["localhost:5701"]
 
-# Create and start the client
-client = HazelcastClient(config)
-client.start()
-
-# Use the client...
-
-# Shutdown when done
-client.shutdown()
-```
-
-### Using Context Manager
-
-```python
-from hazelcast import HazelcastClient, ClientConfig
-
-config = ClientConfig()
-config.cluster_name = "dev"
-
+# Using context manager (recommended)
 with HazelcastClient(config) as client:
-    # Client automatically started and will shutdown on exit
-    pass
+    my_map = client.get_map("my-map")
+    my_map.put("key", "value")
+    value = my_map.get("key")
+    print(f"Retrieved: {value}")
 ```
 
 ### Async Usage
@@ -72,328 +57,107 @@ from hazelcast import HazelcastClient, ClientConfig
 async def main():
     config = ClientConfig()
     config.cluster_name = "dev"
-    
+
     async with HazelcastClient(config) as client:
-        # Use async operations
-        pass
+        my_map = client.get_map("my-map")
+        await my_map.put_async("key", "value")
+        value = await my_map.get_async("key")
+        print(f"Retrieved: {value.result()}")
 
 asyncio.run(main())
 ```
 
-## Distributed Data Structures
+## Configuration Reference
 
-### Map
+### ClientConfig
 
-```python
-from hazelcast.proxy import MapProxy
+The main configuration class with the following properties:
 
-# Get a distributed map
-my_map = MapProxy("my-map")
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `cluster_name` | `str` | `"dev"` | Name of the Hazelcast cluster |
+| `client_name` | `str` | Auto-generated | Identifier for this client instance |
+| `cluster_members` | `List[str]` | `["localhost:5701"]` | List of cluster member addresses |
+| `connection_timeout` | `float` | `5.0` | Connection timeout in seconds |
+| `smart_routing` | `bool` | `True` | Enable smart routing to partition owners |
+| `labels` | `List[str]` | `[]` | Client labels for identification |
 
-# Basic operations
-my_map.put("key1", "value1")
-value = my_map.get("key1")
-my_map.remove("key1")
+### NetworkConfig
 
-# Conditional operations
-my_map.put_if_absent("key2", "value2")
-my_map.replace("key2", "new_value")
-
-# Bulk operations
-my_map.put_all({"a": 1, "b": 2, "c": 3})
-values = my_map.get_all({"a", "b"})
-
-# Entry listeners
-from hazelcast.proxy import EntryListener
-
-class MyListener(EntryListener):
-    def entry_added(self, event):
-        print(f"Added: {event.key}")
-
-listener = MyListener()
-registration_id = my_map.add_entry_listener(listener)
-```
-
-### Queue, Set, List
+Network-related settings:
 
 ```python
-from hazelcast.proxy import QueueProxy, SetProxy, ListProxy
+from hazelcast.config import NetworkConfig
 
-# Queue operations
-queue = QueueProxy("my-queue")
-queue.offer("item1")
-item = queue.poll()
-
-# Set operations
-my_set = SetProxy("my-set")
-my_set.add("item1")
-contains = my_set.contains("item1")
-
-# List operations
-my_list = ListProxy("my-list")
-my_list.add("item1")
-item = my_list.get(0)
-```
-
-## SQL Queries
-
-```python
-from hazelcast.sql import SqlService, SqlStatement
-
-sql_service = SqlService()
-sql_service.start()
-
-# Simple query
-result = sql_service.execute("SELECT * FROM employees")
-for row in result:
-    print(row.to_dict())
-
-# Parameterized query
-result = sql_service.execute(
-    "SELECT * FROM employees WHERE department = ? AND salary > ?",
-    "Engineering",
-    50000
-)
-
-# Using SqlStatement for more control
-stmt = SqlStatement("SELECT * FROM employees WHERE active = ?")
-stmt.add_parameter(True)
-stmt.timeout = 30.0
-stmt.cursor_buffer_size = 1000
-
-result = sql_service.execute_statement(stmt)
-```
-
-## CP Subsystem
-
-### AtomicLong
-
-```python
-from hazelcast.cp import AtomicLong
-
-counter = AtomicLong("my-counter")
-
-counter.set(0)
-counter.increment_and_get()
-old_value = counter.get_and_add(10)
-
-# Compare and set
-success = counter.compare_and_set(11, 20)
-
-# Alter with function
-counter.alter(lambda x: x * 2)
-```
-
-### FencedLock
-
-```python
-from hazelcast.cp import FencedLock
-
-lock = FencedLock("my-lock")
-
-# Manual locking
-fence = lock.lock()
-try:
-    # Critical section
-    pass
-finally:
-    lock.unlock()
-
-# Context manager
-with lock as fence:
-    # Critical section with fence token
-    print(f"Fence: {fence}")
-```
-
-### Semaphore
-
-```python
-from hazelcast.cp import Semaphore
-
-sem = Semaphore("my-semaphore", initial_permits=5)
-
-sem.acquire(2)
-try:
-    # Use resources
-    pass
-finally:
-    sem.release(2)
-```
-
-## Jet Pipelines
-
-```python
-from hazelcast.jet import JetService, Pipeline, JobConfig
-
-jet_service = JetService()
-jet_service.start()
-
-# Create a pipeline
-pipeline = Pipeline.create()
-
-# Build pipeline stages
-source = Pipeline.from_list("source", [1, 2, 3, 4, 5])
-sink = Pipeline.to_list("sink")
-
-pipeline.read_from(source).map(lambda x: x * 2).write_to(sink)
-
-# Submit job
-config = JobConfig()
-config.name = "my-job"
-
-job = jet_service.submit(pipeline, config)
-print(f"Job status: {job.status}")
-
-# Manage job
-job.suspend()
-job.resume()
-job.cancel()
-```
-
-## Failover Configuration
-
-```python
-from hazelcast.failover import FailoverConfig
-
-failover = FailoverConfig(try_count=3)
-
-# Add clusters in priority order
-failover.add_cluster(
-    cluster_name="primary",
-    addresses=["primary-node:5701"],
-    priority=0
-)
-failover.add_cluster(
-    cluster_name="secondary",
-    addresses=["secondary-node:5701"],
-    priority=1
-)
-
-# Use CNAME-based discovery
-failover.add_cname_cluster(
-    cluster_name="dynamic",
-    dns_name="hazelcast.example.com",
-    port=5701,
-    refresh_interval=60.0
-)
-
-# Create client config from failover
-config = failover.to_client_config()
-```
-
-## Metrics
-
-```python
-from hazelcast.metrics import MetricsRegistry
-
-metrics = MetricsRegistry()
-
-# Connection metrics
-metrics.record_connection_opened()
-metrics.record_connection_closed()
-
-# Invocation metrics
-metrics.record_invocation_start()
-metrics.record_invocation_end(response_time=15.5, success=True)
-
-# Near cache metrics
-metrics.record_near_cache_hit("my-map")
-metrics.record_near_cache_miss("my-map")
-
-# Export all metrics
-all_metrics = metrics.to_dict()
-print(f"Active connections: {all_metrics['connections']['active']}")
-print(f"Invocation avg response: {all_metrics['invocations']['average_response_time_ms']}ms")
-```
-
-## Logging
-
-The client uses Python's standard `logging` module with a hierarchical logger structure under the `hazelcast` namespace.
-
-### Basic Configuration
-
-```python
-import logging
-from hazelcast.logging import configure_logging
-
-# Configure with INFO level (default)
-configure_logging(level=logging.INFO)
-
-# Configure with DEBUG level for detailed output
-configure_logging(level=logging.DEBUG)
-
-# Custom format
-configure_logging(
-    level=logging.DEBUG,
-    format_string="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+config.network = NetworkConfig(
+    addresses=["node1:5701", "node2:5701"],
+    connection_timeout=10.0,
+    smart_routing=True,
 )
 ```
 
-### Using Standard Logging
+### SecurityConfig
 
-You can also configure Hazelcast logging using Python's standard logging configuration:
-
-```python
-import logging
-
-# Configure the hazelcast logger directly
-logging.basicConfig(level=logging.DEBUG)
-logging.getLogger("hazelcast").setLevel(logging.INFO)
-
-# Or configure specific components
-logging.getLogger("hazelcast.client").setLevel(logging.DEBUG)
-logging.getLogger("hazelcast.connection").setLevel(logging.WARNING)
-```
-
-### Logger Hierarchy
-
-| Logger Name | Description |
-|-------------|-------------|
-| `hazelcast` | Root logger for all Hazelcast components |
-| `hazelcast.client` | Client lifecycle and state transitions |
-| `hazelcast.connection` | Individual connection handling |
-| `hazelcast.connection.manager` | Connection management and routing |
-| `hazelcast.invocation` | Request/response invocation handling |
-| `hazelcast.proxy` | Distributed object proxy operations |
-
-### Log Levels
-
-| Level | Description |
-|-------|-------------|
-| `DEBUG` | Detailed diagnostic information (connections, messages, proxy operations) |
-| `INFO` | General operational information (startup, shutdown, connections established) |
-| `WARNING` | Potentially harmful situations (timeouts, reconnection attempts) |
-| `ERROR` | Error events that might still allow the client to continue running |
-
-### File Logging Example
+Authentication credentials:
 
 ```python
-import logging
-from hazelcast.logging import configure_logging
+from hazelcast.config import SecurityConfig
 
-# Create a file handler
-file_handler = logging.FileHandler("hazelcast.log")
-file_handler.setLevel(logging.DEBUG)
+config.security = SecurityConfig(
+    username="admin",
+    password="secret",
+)
 
-configure_logging(
-    level=logging.DEBUG,
-    handler=file_handler
+# Or token-based
+config.security = SecurityConfig(
+    token="your-auth-token",
 )
 ```
 
-### Disabling Logging
+### NearCacheConfig
+
+Local caching configuration:
 
 ```python
-from hazelcast.logging import HazelcastLoggerFactory
+from hazelcast.config import NearCacheConfig, EvictionPolicy
 
-# Disable all Hazelcast logging
-HazelcastLoggerFactory.disable()
-
-# Re-enable logging
-HazelcastLoggerFactory.enable()
+config.add_near_cache(NearCacheConfig(
+    name="my-map",
+    max_size=10000,
+    time_to_live_seconds=300,
+    max_idle_seconds=60,
+    eviction_policy=EvictionPolicy.LRU,
+    invalidate_on_change=True,
+))
 ```
 
-## Configuration
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `name` | `str` | Required | Map name to cache |
+| `max_size` | `int` | `10000` | Maximum entries |
+| `time_to_live_seconds` | `int` | `0` | Entry TTL (0 = infinite) |
+| `max_idle_seconds` | `int` | `0` | Max idle time (0 = infinite) |
+| `eviction_policy` | `EvictionPolicy` | `LRU` | `LRU`, `LFU`, `RANDOM`, `NONE` |
+| `invalidate_on_change` | `bool` | `True` | Invalidate on server changes |
+
+### ConnectionStrategyConfig
+
+Reconnection behavior:
+
+```python
+from hazelcast.config import ConnectionStrategyConfig, ReconnectMode, RetryConfig
+
+config.connection_strategy = ConnectionStrategyConfig(
+    async_start=False,
+    reconnect_mode=ReconnectMode.ON,
+    retry=RetryConfig(
+        initial_backoff=1.0,
+        max_backoff=30.0,
+        multiplier=2.0,
+        jitter=0.1,
+    ),
+)
+```
 
 ### YAML Configuration
 
@@ -401,14 +165,18 @@ HazelcastLoggerFactory.enable()
 # hazelcast-client.yml
 hazelcast_client:
   cluster_name: production
-  
+
   network:
     addresses:
       - node1.example.com:5701
       - node2.example.com:5701
     connection_timeout: 10.0
     smart_routing: true
-  
+
+  security:
+    username: admin
+    password: secret
+
   connection_strategy:
     async_start: false
     reconnect_mode: ON
@@ -416,14 +184,9 @@ hazelcast_client:
       initial_backoff: 1.0
       max_backoff: 30.0
       multiplier: 2.0
-      jitter: 0.1
-  
-  security:
-    username: admin
-    password: secret
-  
+
   near_caches:
-    my-map:
+    users:
       max_size: 10000
       time_to_live_seconds: 300
       eviction_policy: LRU
@@ -435,79 +198,204 @@ Load from YAML:
 config = ClientConfig.from_yaml("hazelcast-client.yml")
 ```
 
-### Programmatic Configuration
+## API Overview
+
+### Distributed Data Structures
+
+#### Map
 
 ```python
-from hazelcast.config import (
-    ClientConfig,
-    NetworkConfig,
-    ConnectionStrategyConfig,
-    RetryConfig,
-    SecurityConfig,
-    NearCacheConfig,
-    ReconnectMode,
-    EvictionPolicy,
-)
-
-config = ClientConfig()
-config.cluster_name = "production"
-
-# Network settings
-config.network = NetworkConfig(
-    addresses=["node1:5701", "node2:5701"],
-    connection_timeout=10.0,
-    smart_routing=True
-)
-
-# Connection strategy
-config.connection_strategy = ConnectionStrategyConfig(
-    async_start=False,
-    reconnect_mode=ReconnectMode.ON,
-    retry=RetryConfig(
-        initial_backoff=1.0,
-        max_backoff=30.0,
-        multiplier=2.0,
-        jitter=0.1
-    )
-)
-
-# Security
-config.security = SecurityConfig(
-    username="admin",
-    password="secret"
-)
-
-# Near cache
-config.add_near_cache(NearCacheConfig(
-    name="my-map",
-    max_size=10000,
-    time_to_live_seconds=300,
-    eviction_policy=EvictionPolicy.LRU
-))
+my_map = client.get_map("my-map")
+my_map.put("key", "value", ttl=300)
+value = my_map.get("key")
+my_map.remove("key")
+my_map.put_if_absent("key", "default")
+entries = my_map.get_all({"key1", "key2"})
 ```
 
-## Event Listeners
-
-### Lifecycle Listener
+#### Queue
 
 ```python
-from hazelcast.listener import LifecycleEvent
-
-def on_lifecycle(event: LifecycleEvent):
-    print(f"State changed: {event.previous_state} -> {event.state}")
-
-client.add_lifecycle_listener(on_state_changed=on_lifecycle)
+queue = client.get_queue("my-queue")
+queue.offer("item")
+item = queue.poll(timeout=5.0)
+queue.put("blocking-item")
+item = queue.take()
 ```
 
-### Membership Listener
+#### Set and List
 
 ```python
-from hazelcast.listener import MembershipEvent
+my_set = client.get_set("my-set")
+my_set.add("item")
+exists = my_set.contains("item")
 
-client.add_membership_listener(
-    on_member_added=lambda e: print(f"Member joined: {e.member}"),
-    on_member_removed=lambda e: print(f"Member left: {e.member}")
+my_list = client.get_list("my-list")
+my_list.add("item")
+item = my_list.get(0)
+```
+
+#### MultiMap
+
+```python
+mm = client.get_multi_map("my-multimap")
+mm.put("key", "value1")
+mm.put("key", "value2")
+values = mm.get("key")  # ["value1", "value2"]
+```
+
+#### Ringbuffer
+
+```python
+rb = client.get_ringbuffer("my-ringbuffer")
+sequence = rb.add("item")
+item = rb.read_one(sequence)
+items = rb.read_many(start_sequence=0, min_count=1, max_count=100)
+```
+
+#### Topic
+
+```python
+topic = client.get_topic("my-topic")
+
+def on_message(message):
+    print(f"Received: {message.message}")
+
+topic.add_message_listener(on_message=on_message)
+topic.publish("Hello!")
+```
+
+#### PN Counter
+
+```python
+counter = client.get_pn_counter("my-counter")
+counter.increment_and_get()
+counter.add_and_get(10)
+value = counter.get()
+```
+
+### CP Subsystem
+
+Requires a cluster with 3+ members for CP subsystem:
+
+#### AtomicLong
+
+```python
+counter = client.get_atomic_long("my-counter")
+counter.set(0)
+counter.increment_and_get()
+counter.compare_and_set(1, 100)
+```
+
+#### FencedLock
+
+```python
+lock = client.get_fenced_lock("my-lock")
+
+with lock as fence:
+    # Critical section
+    print(f"Fence token: {fence}")
+```
+
+#### Semaphore
+
+```python
+sem = client.get_semaphore("my-semaphore")
+sem.acquire(2)
+try:
+    # Use resources
+    pass
+finally:
+    sem.release(2)
+```
+
+#### CountDownLatch
+
+```python
+latch = client.get_count_down_latch("my-latch")
+latch.try_set_count(3)
+latch.count_down()
+latch.await_latch(timeout=10.0)
+```
+
+### SQL Service
+
+```python
+sql = client.get_sql()
+
+# Simple query
+result = sql.execute("SELECT * FROM employees")
+for row in result:
+    print(row.to_dict())
+
+# Parameterized query
+result = sql.execute(
+    "SELECT * FROM employees WHERE department = ? AND salary > ?",
+    "Engineering", 50000
 )
+```
+
+### Jet Service
+
+```python
+from hazelcast.jet import Pipeline, JobConfig
+
+jet = client.get_jet()
+
+# Build pipeline
+pipeline = Pipeline.create()
+source = Pipeline.from_list("numbers", [1, 2, 3, 4, 5])
+sink = Pipeline.to_list("results")
+
+pipeline.read_from(source).map(lambda x: x * 2).write_to(sink)
+
+# Submit job
+config = JobConfig()
+config.name = "double-numbers"
+job = jet.submit(pipeline, config)
+
+print(f"Job status: {job.status}")
+```
+
+## Logging
+
+Configure logging using Python's standard logging module:
+
+```python
+import logging
+from hazelcast.logging import configure_logging
+
+# Basic configuration
+configure_logging(level=logging.INFO)
+
+# Debug level for detailed output
+configure_logging(level=logging.DEBUG)
+
+# Custom format
+configure_logging(
+    level=logging.DEBUG,
+    format_string="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+```
+
+### Logger Hierarchy
+
+| Logger Name | Description |
+|-------------|-------------|
+| `hazelcast` | Root logger |
+| `hazelcast.client` | Client lifecycle |
+| `hazelcast.connection` | Connection handling |
+| `hazelcast.connection.manager` | Connection management |
+| `hazelcast.invocation` | Request/response |
+| `hazelcast.proxy` | Proxy operations |
+
+### Per-Component Configuration
+
+```python
+import logging
+
+logging.getLogger("hazelcast").setLevel(logging.INFO)
+logging.getLogger("hazelcast.connection").setLevel(logging.DEBUG)
 ```
 
 ## Project Structure
@@ -515,29 +403,30 @@ client.add_membership_listener(
 ```
 HazelPython/
 ├── hazelcast/
-│   ├── __init__.py          # Package entry point
+│   ├── __init__.py           # Package exports
 │   ├── client.py             # HazelcastClient
 │   ├── config.py             # Configuration classes
 │   ├── exceptions.py         # Exception hierarchy
 │   ├── auth.py               # Authentication
 │   ├── listener.py           # Event listeners
-│   ├── invocation.py         # Request/response handling
-│   ├── failover.py           # Failover configuration
+│   ├── invocation.py         # Request/response
+│   ├── failover.py           # Multi-cluster failover
 │   ├── metrics.py            # Client metrics
-│   ├── protocol/             # Wire protocol
+│   ├── logging.py            # Logging configuration
+│   ├── near_cache.py         # Near cache implementation
+│   ├── predicate.py          # Query predicates
+│   ├── aggregator.py         # Aggregation functions
+│   ├── projection.py         # Query projections
 │   ├── network/              # Connection management
 │   ├── serialization/        # Serialization service
-│   ├── proxy/                # Distributed data structures
+│   ├── proxy/                # Data structure proxies
 │   ├── sql/                  # SQL support
 │   ├── cp/                   # CP subsystem
 │   ├── jet/                  # Jet integration
 │   └── service/              # Internal services
-├── tests/
-│   ├── unit/                 # Unit tests
-│   └── integration/          # Integration tests
-├── examples/                 # Code examples
-├── docs/                     # Documentation
-├── setup.py                  # Package configuration
+├── examples/                 # Example scripts
+├── tests/                    # Test suite
+├── setup.py
 ├── LICENSE
 └── README.md
 ```
@@ -552,51 +441,26 @@ pytest tests/ -v
 
 ### Integration Tests
 
-Integration tests require a running Hazelcast cluster:
+Requires a running Hazelcast cluster:
 
 ```bash
-# Start test cluster with Docker
-docker-compose -f tests/integration/docker-compose.yml up -d
+# Start test cluster
+docker run -d -p 5701:5701 hazelcast/hazelcast
 
 # Run integration tests
 pytest tests/integration/ -v --integration
-
-# Stop test cluster
-docker-compose -f tests/integration/docker-compose.yml down
 ```
 
-## API Reference
+## Examples
 
-### Core Classes
+See the `examples/` directory for complete working examples:
 
-| Class | Description |
-|-------|-------------|
-| `HazelcastClient` | Main client class for connecting to clusters |
-| `ClientConfig` | Client configuration |
-| `MapProxy` | Distributed Map implementation |
-| `SqlService` | SQL query execution |
-| `JetService` | Jet pipeline submission |
-| `AtomicLong` | CP AtomicLong |
-| `FencedLock` | CP FencedLock |
-| `FailoverConfig` | Multi-cluster failover |
-| `MetricsRegistry` | Client metrics |
-
-### Services
-
-| Service | Description |
-|---------|-------------|
-| `ExecutorService` | Distributed task execution |
-| `PartitionService` | Partition information |
-| `ClientService` | Connection monitoring |
-| `SerializationService` | Object serialization |
-| `InvocationService` | Request/response handling |
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Write tests for your changes
-4. Submit a pull request
+- `basic_map.py` - Map operations and entry listeners
+- `sql_queries.py` - SQL query execution
+- `near_cache.py` - Near cache configuration and usage
+- `cp_structures.py` - CP subsystem data structures
+- `jet_pipeline.py` - Jet pipeline building and job management
+- `failover.py` - Multi-cluster failover configuration
 
 ## License
 
