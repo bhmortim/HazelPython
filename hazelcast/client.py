@@ -1,6 +1,7 @@
 """Hazelcast client implementation."""
 
 import asyncio
+import logging
 import threading
 import uuid
 from enum import Enum
@@ -12,6 +13,9 @@ from hazelcast.exceptions import (
     IllegalStateException,
     HazelcastException,
 )
+from hazelcast.logging import get_logger
+
+_logger = get_logger("client")
 from hazelcast.listener import (
     LifecycleState,
     LifecycleEvent,
@@ -189,11 +193,17 @@ class HazelcastClient:
             valid_targets = _VALID_TRANSITIONS.get(current, set())
 
             if new_state not in valid_targets:
+                _logger.error(
+                    "Invalid state transition attempted: %s -> %s",
+                    current.value,
+                    new_state.value,
+                )
                 raise IllegalStateException(
                     f"Invalid state transition: {current.value} -> {new_state.value}"
                 )
 
             self._state = new_state
+            _logger.debug("Client state changed: %s -> %s", current.value, new_state.value)
 
         lifecycle_state = self._map_to_lifecycle_state(new_state)
         if lifecycle_state:
@@ -291,12 +301,19 @@ class HazelcastClient:
             IllegalStateException: If the client is not in INITIAL state.
             ClientOfflineException: If connection fails.
         """
+        _logger.info(
+            "Starting Hazelcast client %s (cluster=%s)",
+            self._client_name,
+            self._config.cluster_name,
+        )
         self._transition_state(ClientState.STARTING)
 
         try:
             self._start_internal()
             self._transition_state(ClientState.CONNECTED)
+            _logger.info("Hazelcast client %s connected successfully", self._client_name)
         except Exception as e:
+            _logger.error("Failed to connect: %s", e)
             self._transition_state(ClientState.DISCONNECTED)
             raise ClientOfflineException(f"Failed to connect: {e}")
 
@@ -373,6 +390,8 @@ class HazelcastClient:
         if current_state == ClientState.SHUTTING_DOWN:
             return
 
+        _logger.info("Shutting down Hazelcast client %s", self._client_name)
+
         try:
             self._transition_state(ClientState.SHUTTING_DOWN)
         except IllegalStateException:
@@ -383,6 +402,7 @@ class HazelcastClient:
         finally:
             self._transition_state(ClientState.SHUTDOWN)
             self._listener_service.clear()
+            _logger.info("Hazelcast client %s shutdown complete", self._client_name)
 
     def _shutdown_internal(self) -> None:
         """Internal shutdown logic."""
@@ -460,8 +480,10 @@ class HazelcastClient:
             if key in self._proxies:
                 proxy = self._proxies[key]
                 if not proxy.is_destroyed:
+                    _logger.debug("Returning existing proxy: %s/%s", service_name, name)
                     return proxy
 
+            _logger.debug("Creating new proxy: %s/%s", service_name, name)
             proxy = proxy_class(service_name, name, self._proxy_context)
             self._proxies[key] = proxy
 

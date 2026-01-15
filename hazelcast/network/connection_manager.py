@@ -1,6 +1,7 @@
 """Connection management with routing modes and reconnect logic."""
 
 import asyncio
+import logging
 import random
 import threading
 import time
@@ -18,6 +19,9 @@ from hazelcast.exceptions import (
     HazelcastException,
     IllegalStateException,
 )
+from hazelcast.logging import get_logger
+
+_logger = get_logger("connection.manager")
 
 if TYPE_CHECKING:
     from hazelcast.config import RetryConfig, ReconnectMode
@@ -178,6 +182,7 @@ class ConnectionManager:
         if self._running:
             return
 
+        _logger.info("Starting connection manager with routing_mode=%s", self._routing_mode.value)
         self._running = True
 
         self._heartbeat_manager = HeartbeatManager(
@@ -190,15 +195,19 @@ class ConnectionManager:
 
         if self.connection_count == 0:
             self._running = False
+            _logger.error("Failed to connect to any cluster member")
             raise ClientOfflineException("Could not connect to any cluster member")
 
+        _logger.info("Connected to cluster with %d connection(s)", self.connection_count)
         self._heartbeat_manager.start()
 
         if self._reconnect_mode and self._reconnect_mode.value != "OFF":
+            _logger.debug("Starting reconnection background task")
             self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
     async def shutdown(self) -> None:
         """Shutdown the connection manager."""
+        _logger.info("Shutting down connection manager")
         self._running = False
 
         if self._reconnect_task:
@@ -215,12 +224,15 @@ class ConnectionManager:
         with self._lock:
             connections = list(self._connections.values())
 
+        _logger.debug("Closing %d connection(s)", len(connections))
         for connection in connections:
             await connection.close("Client shutdown")
 
         with self._lock:
             self._connections.clear()
             self._address_connections.clear()
+
+        _logger.info("Connection manager shutdown complete")
 
     async def _connect_to_cluster(self) -> None:
         """Attempt to connect to cluster members."""
@@ -247,10 +259,13 @@ class ConnectionManager:
             if address in self._address_connections:
                 existing = self._address_connections[address]
                 if existing.is_alive:
+                    _logger.debug("Reusing existing connection to %s", address)
                     return existing
 
             self._connection_id_counter += 1
             connection_id = self._connection_id_counter
+
+        _logger.debug("Connecting to %s (connection_id=%d)", address, connection_id)
 
         connection = Connection(
             address=address,
@@ -273,6 +288,8 @@ class ConnectionManager:
             self._heartbeat_manager.add_connection(connection)
 
         self._load_balancer.init(list(self._connections.values()))
+
+        _logger.info("Connection established to %s (connection_id=%d)", address, connection_id)
 
         if self._on_connection_opened:
             self._on_connection_opened(connection)
@@ -390,6 +407,13 @@ class ConnectionManager:
 
     async def _close_connection(self, connection: Connection, reason: str) -> None:
         """Close a connection and notify listeners."""
+        _logger.info(
+            "Closing connection %d to %s: %s",
+            connection.connection_id,
+            connection.address,
+            reason,
+        )
+
         if self._heartbeat_manager:
             self._heartbeat_manager.remove_connection(connection)
 

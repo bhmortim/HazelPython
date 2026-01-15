@@ -1,5 +1,6 @@
 """Request/response invocation handling."""
 
+import logging
 import threading
 import time
 from typing import Dict, Optional
@@ -7,6 +8,9 @@ from concurrent.futures import Future
 
 from hazelcast.protocol.client_message import ClientMessage
 from hazelcast.exceptions import HazelcastException, OperationTimeoutException
+from hazelcast.logging import get_logger
+
+_logger = get_logger("invocation")
 
 
 class Invocation:
@@ -82,15 +86,18 @@ class InvocationService:
 
     def start(self) -> None:
         self._running = True
+        _logger.info("Invocation service started")
 
     def shutdown(self) -> None:
         self._running = False
         with self._lock:
+            pending_count = len(self._pending)
             for invocation in self._pending.values():
                 invocation.set_exception(
                     HazelcastException("Client is shutting down")
                 )
             self._pending.clear()
+        _logger.info("Invocation service shutdown, cancelled %d pending invocations", pending_count)
 
     @property
     def is_running(self) -> bool:
@@ -103,6 +110,11 @@ class InvocationService:
             invocation.correlation_id = correlation_id
             self._pending[correlation_id] = invocation
 
+        _logger.debug(
+            "Invocation started: correlation_id=%d, partition_id=%d",
+            correlation_id,
+            invocation.partition_id,
+        )
         return invocation.future
 
     def handle_response(self, response: ClientMessage) -> bool:
@@ -112,8 +124,10 @@ class InvocationService:
             invocation = self._pending.pop(correlation_id, None)
 
         if invocation is None:
+            _logger.warning("Received response for unknown correlation_id=%d", correlation_id)
             return False
 
+        _logger.debug("Invocation completed: correlation_id=%d", correlation_id)
         invocation.set_response(response)
         return True
 
@@ -132,7 +146,12 @@ class InvocationService:
             for cid, _ in timed_out:
                 del self._pending[cid]
 
-        for _, invocation in timed_out:
+        for cid, invocation in timed_out:
+            _logger.warning(
+                "Invocation timed out: correlation_id=%d, timeout=%.1fs",
+                cid,
+                invocation.timeout,
+            )
             invocation.set_exception(
                 OperationTimeoutException(
                     f"Operation timed out after {invocation.timeout}s"

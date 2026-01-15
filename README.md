@@ -306,6 +306,93 @@ print(f"Active connections: {all_metrics['connections']['active']}")
 print(f"Invocation avg response: {all_metrics['invocations']['average_response_time_ms']}ms")
 ```
 
+## Logging
+
+The client uses Python's standard `logging` module with a hierarchical logger structure under the `hazelcast` namespace.
+
+### Basic Configuration
+
+```python
+import logging
+from hazelcast.logging import configure_logging
+
+# Configure with INFO level (default)
+configure_logging(level=logging.INFO)
+
+# Configure with DEBUG level for detailed output
+configure_logging(level=logging.DEBUG)
+
+# Custom format
+configure_logging(
+    level=logging.DEBUG,
+    format_string="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+```
+
+### Using Standard Logging
+
+You can also configure Hazelcast logging using Python's standard logging configuration:
+
+```python
+import logging
+
+# Configure the hazelcast logger directly
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("hazelcast").setLevel(logging.INFO)
+
+# Or configure specific components
+logging.getLogger("hazelcast.client").setLevel(logging.DEBUG)
+logging.getLogger("hazelcast.connection").setLevel(logging.WARNING)
+```
+
+### Logger Hierarchy
+
+| Logger Name | Description |
+|-------------|-------------|
+| `hazelcast` | Root logger for all Hazelcast components |
+| `hazelcast.client` | Client lifecycle and state transitions |
+| `hazelcast.connection` | Individual connection handling |
+| `hazelcast.connection.manager` | Connection management and routing |
+| `hazelcast.invocation` | Request/response invocation handling |
+| `hazelcast.proxy` | Distributed object proxy operations |
+
+### Log Levels
+
+| Level | Description |
+|-------|-------------|
+| `DEBUG` | Detailed diagnostic information (connections, messages, proxy operations) |
+| `INFO` | General operational information (startup, shutdown, connections established) |
+| `WARNING` | Potentially harmful situations (timeouts, reconnection attempts) |
+| `ERROR` | Error events that might still allow the client to continue running |
+
+### File Logging Example
+
+```python
+import logging
+from hazelcast.logging import configure_logging
+
+# Create a file handler
+file_handler = logging.FileHandler("hazelcast.log")
+file_handler.setLevel(logging.DEBUG)
+
+configure_logging(
+    level=logging.DEBUG,
+    handler=file_handler
+)
+```
+
+### Disabling Logging
+
+```python
+from hazelcast.logging import HazelcastLoggerFactory
+
+# Disable all Hazelcast logging
+HazelcastLoggerFactory.disable()
+
+# Re-enable logging
+HazelcastLoggerFactory.enable()
+```
+
 ## Configuration
 
 ### YAML Configuration

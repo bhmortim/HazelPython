@@ -1,12 +1,17 @@
 """Base proxy classes for distributed data structures."""
 
+import logging
 from abc import ABC, abstractmethod
 from concurrent.futures import Future
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
+from hazelcast.logging import get_logger
+
 if TYPE_CHECKING:
     from hazelcast.invocation import InvocationService
     from hazelcast.protocol.client_message import ClientMessage
+
+_logger = get_logger("proxy")
 
 
 class DistributedObject(ABC):
@@ -80,6 +85,7 @@ class Proxy(DistributedObject):
         self._name = name
         self._context = context
         self._destroyed = False
+        _logger.debug("Proxy created: service=%s, name=%s", service_name, name)
 
     @property
     def name(self) -> str:
@@ -105,12 +111,14 @@ class Proxy(DistributedObject):
         """Destroy this distributed object."""
         self._check_not_destroyed()
         self._destroyed = True
+        _logger.debug("Proxy destroyed: service=%s, name=%s", self._service_name, self._name)
         self._on_destroy()
 
     async def destroy_async(self) -> None:
         """Destroy this distributed object asynchronously."""
         self._check_not_destroyed()
         self._destroyed = True
+        _logger.debug("Proxy destroyed: service=%s, name=%s", self._service_name, self._name)
         await self._on_destroy_async()
 
     def _on_destroy(self) -> None:

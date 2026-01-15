@@ -1,6 +1,7 @@
 """Async socket connection handling."""
 
 import asyncio
+import logging
 import socket
 import ssl
 import struct
@@ -13,6 +14,9 @@ from hazelcast.exceptions import (
     HazelcastException,
     TargetDisconnectedException,
 )
+from hazelcast.logging import get_logger
+
+_logger = get_logger("connection")
 
 if TYPE_CHECKING:
     from hazelcast.network.address import Address
@@ -118,10 +122,12 @@ class Connection:
             )
 
         self._state = ConnectionState.CONNECTING
+        _logger.debug("Connection %d: connecting to %s", self._connection_id, self._address)
 
         try:
             resolved = self._address.resolve()
             if not resolved:
+                _logger.error("Connection %d: could not resolve address %s", self._connection_id, self._address)
                 raise HazelcastException(
                     f"Could not resolve address: {self._address}"
                 )
@@ -130,6 +136,7 @@ class Connection:
             ssl_context = None
 
             if self._ssl_config and self._ssl_config.enabled:
+                _logger.debug("Connection %d: using SSL/TLS", self._connection_id)
                 ssl_context = self._ssl_config.create_ssl_context()
 
             self._reader, self._writer = await asyncio.wait_for(
@@ -153,13 +160,27 @@ class Connection:
             self._last_read_time = time.time()
             self._last_write_time = time.time()
 
+            _logger.debug(
+                "Connection %d: established to %s (local=%s)",
+                self._connection_id,
+                self._remote_address,
+                self._local_address,
+            )
+
         except asyncio.TimeoutError:
             self._state = ConnectionState.CLOSED
+            _logger.warning(
+                "Connection %d: timeout after %.1fs to %s",
+                self._connection_id,
+                self._connection_timeout,
+                self._address,
+            )
             raise HazelcastException(
                 f"Connection timeout to {self._address}"
             )
         except Exception as e:
             self._state = ConnectionState.CLOSED
+            _logger.error("Connection %d: failed to connect to %s: %s", self._connection_id, self._address, e)
             raise HazelcastException(
                 f"Failed to connect to {self._address}: {e}"
             )
@@ -171,10 +192,12 @@ class Connection:
 
     async def _read_loop(self) -> None:
         """Background task for reading messages."""
+        _logger.debug("Connection %d: read loop started", self._connection_id)
         try:
             while self.is_alive and self._reader:
                 data = await self._reader.read(self.READ_BUFFER_SIZE)
                 if not data:
+                    _logger.debug("Connection %d: remote closed connection", self._connection_id)
                     await self.close("Connection closed by remote")
                     break
 
@@ -183,8 +206,9 @@ class Connection:
                 await self._process_buffer()
 
         except asyncio.CancelledError:
-            pass
+            _logger.debug("Connection %d: read loop cancelled", self._connection_id)
         except Exception as e:
+            _logger.error("Connection %d: read error: %s", self._connection_id, e)
             await self.close(f"Read error: {e}", e)
 
     async def _process_buffer(self) -> None:
@@ -246,7 +270,14 @@ class Connection:
             self._writer.write(data)
             await self._writer.drain()
             self._last_write_time = time.time()
+            _logger.debug(
+                "Connection %d: sent message (correlation_id=%d, size=%d)",
+                self._connection_id,
+                message.get_correlation_id(),
+                len(data),
+            )
         except Exception as e:
+            _logger.error("Connection %d: write error: %s", self._connection_id, e)
             await self.close(f"Write error: {e}", e)
             raise TargetDisconnectedException(f"Failed to send: {e}")
 
@@ -269,6 +300,7 @@ class Connection:
         if self._state in (ConnectionState.CLOSING, ConnectionState.CLOSED):
             return
 
+        _logger.debug("Connection %d: closing (%s)", self._connection_id, reason)
         self._state = ConnectionState.CLOSING
         self._close_reason = reason
         self._close_cause = cause
