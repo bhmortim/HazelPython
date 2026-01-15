@@ -10,6 +10,19 @@ from hazelcast.proxy.topic import TopicMessage, MessageListener
 E = TypeVar("E")
 
 
+class StaleSequenceException(Exception):
+    """Raised when the sequence is behind the head of the ringbuffer."""
+
+    def __init__(self, message: str, head_sequence: int = -1):
+        super().__init__(message)
+        self._head_sequence = head_sequence
+
+    @property
+    def head_sequence(self) -> int:
+        """Get the current head sequence of the ringbuffer."""
+        return self._head_sequence
+
+
 class TopicOverloadPolicy(Enum):
     """Policy for handling topic overload."""
 
@@ -91,6 +104,17 @@ class ReliableMessageListener(MessageListener[E], Generic[E]):
             True if the listener should be terminated.
         """
         return True
+
+    def on_stale_sequence(self, head_sequence: int) -> int:
+        """Called when a stale sequence is detected.
+
+        Args:
+            head_sequence: The current head sequence of the ringbuffer.
+
+        Returns:
+            The new sequence to continue from.
+        """
+        return head_sequence
 
 
 class ReliableTopicProxy(Proxy, Generic[E]):
@@ -186,13 +210,63 @@ class ReliableTopicProxy(Proxy, Generic[E]):
 
     def _start_listener_runner(self, registration_id: str, listener: MessageListener[E]) -> None:
         """Start a background runner for a listener."""
-        pass
+        initial_sequence = -1
+        if isinstance(listener, ReliableMessageListener):
+            initial_sequence = listener.retrieve_initial_sequence()
+
+        runner = _MessageRunner(
+            registration_id=registration_id,
+            listener=listener,
+            initial_sequence=initial_sequence,
+            config=self._config,
+        )
+        self._listener_runners[registration_id] = runner
 
     def _stop_listener_runner(self, registration_id: str) -> None:
         """Stop the background runner for a listener."""
         runner = self._listener_runners.pop(registration_id, None)
         if runner:
-            pass
+            runner.cancel()
+
+    def _handle_stale_sequence(
+        self,
+        registration_id: str,
+        stale_sequence: int,
+        head_sequence: int,
+    ) -> int:
+        """Handle a stale sequence error.
+
+        Args:
+            registration_id: The listener registration ID.
+            stale_sequence: The stale sequence that was requested.
+            head_sequence: The current head sequence.
+
+        Returns:
+            The new sequence to continue from.
+
+        Raises:
+            StaleSequenceException: If the listener cannot recover.
+        """
+        listener = self._message_listeners.get(registration_id)
+        if listener is None:
+            raise StaleSequenceException(
+                f"Sequence {stale_sequence} is stale, head is {head_sequence}",
+                head_sequence,
+            )
+
+        if isinstance(listener, ReliableMessageListener):
+            if listener.is_loss_tolerant():
+                return listener.on_stale_sequence(head_sequence)
+            raise StaleSequenceException(
+                f"Sequence {stale_sequence} is stale, head is {head_sequence}. "
+                "Listener is not loss tolerant.",
+                head_sequence,
+            )
+
+        raise StaleSequenceException(
+            f"Sequence {stale_sequence} is stale, head is {head_sequence}",
+            head_sequence,
+        )
 
     def _on_destroy(self) -> None:
         for reg_id in list(self._listener_runners.keys()):
@@ -203,3 +277,56 @@ class ReliableTopicProxy(Proxy, Generic[E]):
         for reg_id in list(self._listener_runners.keys()):
             self._stop_listener_runner(reg_id)
         self._message_listeners.clear()
+
+
+class _MessageRunner:
+    """Internal runner for processing reliable topic messages."""
+
+    def __init__(
+        self,
+        registration_id: str,
+        listener: MessageListener[E],
+        initial_sequence: int,
+        config: ReliableTopicConfig,
+    ):
+        self._registration_id = registration_id
+        self._listener = listener
+        self._sequence = initial_sequence
+        self._config = config
+        self._cancelled = False
+
+    @property
+    def sequence(self) -> int:
+        return self._sequence
+
+    @sequence.setter
+    def sequence(self, value: int) -> None:
+        self._sequence = value
+        if isinstance(self._listener, ReliableMessageListener):
+            self._listener.store_sequence(value)
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._cancelled
+
+    def cancel(self) -> None:
+        """Cancel this runner."""
+        self._cancelled = True
+
+    def process_message(self, message: TopicMessage[E]) -> None:
+        """Process a received message."""
+        if self._cancelled:
+            return
+        try:
+            self._listener.on_message(message)
+            self._sequence += 1
+            if isinstance(self._listener, ReliableMessageListener):
+                self._listener.store_sequence(self._sequence)
+        except Exception as e:
+            if isinstance(self._listener, ReliableMessageListener):
+                if self._listener.is_terminal(e):
+                    self.cancel()
+                    raise
+            else:
+                self.cancel()
+                raise
