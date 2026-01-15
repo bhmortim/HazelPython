@@ -3,6 +3,53 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+from hazelcast.projection import (
+    Projection,
+    SingleAttributeProjection,
+    MultiAttributeProjection,
+    IdentityProjection,
+    single_attribute,
+    multi_attribute,
+    identity,
+)
+
+__all__ = [
+    "Aggregator",
+    "CountAggregator",
+    "DistinctValuesAggregator",
+    "SumAggregator",
+    "AverageAggregator",
+    "MinAggregator",
+    "MaxAggregator",
+    "IntegerSumAggregator",
+    "IntegerAverageAggregator",
+    "LongSumAggregator",
+    "LongAverageAggregator",
+    "DoubleSumAggregator",
+    "DoubleAverageAggregator",
+    "FixedPointSumAggregator",
+    "FloatingPointSumAggregator",
+    "Projection",
+    "SingleAttributeProjection",
+    "MultiAttributeProjection",
+    "IdentityProjection",
+    "count",
+    "distinct",
+    "sum_",
+    "average",
+    "min_",
+    "max_",
+    "integer_sum",
+    "integer_average",
+    "long_sum",
+    "long_average",
+    "double_sum",
+    "double_average",
+    "single_attribute",
+    "multi_attribute",
+    "identity",
+]
+
 
 class Aggregator(ABC):
     """Base class for all aggregators."""
@@ -256,59 +303,6 @@ class FloatingPointSumAggregator(Aggregator):
         return f"FloatingPointSumAggregator({self._attribute!r})"
 
 
-class Projection(ABC):
-    """Base class for projections."""
-
-    @abstractmethod
-    def to_dict(self) -> dict:
-        """Convert the projection to a dictionary for serialization."""
-        pass
-
-
-class SingleAttributeProjection(Projection):
-    """Projection that extracts a single attribute."""
-
-    def __init__(self, attribute: str):
-        self._attribute = attribute
-
-    @property
-    def attribute(self) -> str:
-        return self._attribute
-
-    def to_dict(self) -> dict:
-        return {"type": "single_attribute", "attribute": self._attribute}
-
-    def __repr__(self) -> str:
-        return f"SingleAttributeProjection({self._attribute!r})"
-
-
-class MultiAttributeProjection(Projection):
-    """Projection that extracts multiple attributes."""
-
-    def __init__(self, *attributes: str):
-        self._attributes = list(attributes)
-
-    @property
-    def attributes(self) -> list:
-        return self._attributes
-
-    def to_dict(self) -> dict:
-        return {"type": "multi_attribute", "attributes": self._attributes}
-
-    def __repr__(self) -> str:
-        return f"MultiAttributeProjection({self._attributes!r})"
-
-
-class IdentityProjection(Projection):
-    """Projection that returns the entry as-is."""
-
-    def to_dict(self) -> dict:
-        return {"type": "identity"}
-
-    def __repr__(self) -> str:
-        return "IdentityProjection()"
-
-
 def count(attribute: Optional[str] = None) -> CountAggregator:
     """Create a count aggregator."""
     return CountAggregator(attribute)
@@ -367,18 +361,3 @@ def double_sum(attribute: str) -> DoubleSumAggregator:
 def double_average(attribute: str) -> DoubleAverageAggregator:
     """Create a double average aggregator."""
     return DoubleAverageAggregator(attribute)
-
-
-def single_attribute(attribute: str) -> SingleAttributeProjection:
-    """Create a single attribute projection."""
-    return SingleAttributeProjection(attribute)
-
-
-def multi_attribute(*attributes: str) -> MultiAttributeProjection:
-    """Create a multi-attribute projection."""
-    return MultiAttributeProjection(*attributes)
-
-
-def identity() -> IdentityProjection:
-    """Create an identity projection."""
-    return IdentityProjection()

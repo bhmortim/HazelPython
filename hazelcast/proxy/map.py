@@ -16,10 +16,13 @@ from typing import (
 )
 
 from hazelcast.proxy.base import Proxy, ProxyContext
+from hazelcast.projection import Projection
 
 if TYPE_CHECKING:
     from hazelcast.near_cache import NearCache
     from hazelcast.config import NearCacheConfig
+    from hazelcast.predicate import Predicate
+    from hazelcast.aggregator import Aggregator
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -689,7 +692,9 @@ class MapProxy(Proxy, Generic[K, V]):
         future.set_result(None)
         return future
 
-    def project(self, projection: Any, predicate: Any = None) -> List[Any]:
+    def project(
+        self, projection: Projection, predicate: Optional[Any] = None
+    ) -> List[Any]:
         """Project map entries.
 
         Args:
@@ -701,7 +706,9 @@ class MapProxy(Proxy, Generic[K, V]):
         """
         return self.project_async(projection, predicate).result()
 
-    def project_async(self, projection: Any, predicate: Any = None) -> Future:
+    def project_async(
+        self, projection: Projection, predicate: Optional[Any] = None
+    ) -> Future:
         """Project map entries asynchronously.
 
         Args:
