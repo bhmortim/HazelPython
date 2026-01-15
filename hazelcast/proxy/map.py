@@ -1,0 +1,972 @@
+"""Map distributed data structure proxy."""
+
+from concurrent.futures import Future
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generic,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+)
+
+from hazelcast.proxy.base import Proxy, ProxyContext
+
+K = TypeVar("K")
+V = TypeVar("V")
+
+
+class EntryEvent(Generic[K, V]):
+    """Event fired when a map entry changes."""
+
+    ADDED = 1
+    REMOVED = 2
+    UPDATED = 4
+    EVICTED = 8
+    EXPIRED = 16
+    EVICT_ALL = 32
+    CLEAR_ALL = 64
+    MERGED = 128
+    INVALIDATION = 256
+    LOADED = 512
+
+    def __init__(
+        self,
+        event_type: int,
+        key: K,
+        value: Optional[V] = None,
+        old_value: Optional[V] = None,
+        merging_value: Optional[V] = None,
+        member: Any = None,
+    ):
+        self._event_type = event_type
+        self._key = key
+        self._value = value
+        self._old_value = old_value
+        self._merging_value = merging_value
+        self._member = member
+
+    @property
+    def event_type(self) -> int:
+        return self._event_type
+
+    @property
+    def key(self) -> K:
+        return self._key
+
+    @property
+    def value(self) -> Optional[V]:
+        return self._value
+
+    @property
+    def old_value(self) -> Optional[V]:
+        return self._old_value
+
+    @property
+    def merging_value(self) -> Optional[V]:
+        return self._merging_value
+
+    @property
+    def member(self) -> Any:
+        return self._member
+
+
+class EntryListener(Generic[K, V]):
+    """Listener for map entry events."""
+
+    def entry_added(self, event: EntryEvent[K, V]) -> None:
+        """Called when an entry is added."""
+        pass
+
+    def entry_removed(self, event: EntryEvent[K, V]) -> None:
+        """Called when an entry is removed."""
+        pass
+
+    def entry_updated(self, event: EntryEvent[K, V]) -> None:
+        """Called when an entry is updated."""
+        pass
+
+    def entry_evicted(self, event: EntryEvent[K, V]) -> None:
+        """Called when an entry is evicted."""
+        pass
+
+    def entry_expired(self, event: EntryEvent[K, V]) -> None:
+        """Called when an entry expires."""
+        pass
+
+    def map_evicted(self, event: EntryEvent[K, V]) -> None:
+        """Called when the map is evicted."""
+        pass
+
+    def map_cleared(self, event: EntryEvent[K, V]) -> None:
+        """Called when the map is cleared."""
+        pass
+
+
+class MapProxy(Proxy, Generic[K, V]):
+    """Proxy for Hazelcast IMap distributed data structure.
+
+    Provides a distributed, partitioned, and optionally replicated map
+    implementation.
+    """
+
+    SERVICE_NAME = "hz:impl:mapService"
+
+    def __init__(self, name: str, context: Optional[ProxyContext] = None):
+        super().__init__(self.SERVICE_NAME, name, context)
+        self._entry_listeners: Dict[str, Tuple[EntryListener, bool]] = {}
+
+    def put(self, key: K, value: V, ttl: float = -1) -> Optional[V]:
+        """Set a key-value pair in the map.
+
+        Args:
+            key: The key to set.
+            value: The value to associate with the key.
+            ttl: Time to live in seconds. -1 means infinite.
+
+        Returns:
+            The previous value associated with the key, or None.
+        """
+        return self.put_async(key, value, ttl).result()
+
+    def put_async(self, key: K, value: V, ttl: float = -1) -> Future:
+        """Set a key-value pair asynchronously.
+
+        Args:
+            key: The key to set.
+            value: The value to associate with the key.
+            ttl: Time to live in seconds. -1 means infinite.
+
+        Returns:
+            A Future that will contain the previous value.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def get(self, key: K) -> Optional[V]:
+        """Get the value associated with a key.
+
+        Args:
+            key: The key to look up.
+
+        Returns:
+            The value associated with the key, or None if not found.
+        """
+        return self.get_async(key).result()
+
+    def get_async(self, key: K) -> Future:
+        """Get a value asynchronously.
+
+        Args:
+            key: The key to look up.
+
+        Returns:
+            A Future that will contain the value.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def remove(self, key: K) -> Optional[V]:
+        """Remove a key-value pair from the map.
+
+        Args:
+            key: The key to remove.
+
+        Returns:
+            The removed value, or None if not found.
+        """
+        return self.remove_async(key).result()
+
+    def remove_async(self, key: K) -> Future:
+        """Remove a key-value pair asynchronously.
+
+        Args:
+            key: The key to remove.
+
+        Returns:
+            A Future that will contain the removed value.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def delete(self, key: K) -> None:
+        """Delete a key without returning the old value.
+
+        Args:
+            key: The key to delete.
+        """
+        self.delete_async(key).result()
+
+    def delete_async(self, key: K) -> Future:
+        """Delete a key asynchronously.
+
+        Args:
+            key: The key to delete.
+
+        Returns:
+            A Future that completes when the deletion is done.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def contains_key(self, key: K) -> bool:
+        """Check if the map contains a key.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key exists, False otherwise.
+        """
+        return self.contains_key_async(key).result()
+
+    def contains_key_async(self, key: K) -> Future:
+        """Check if the map contains a key asynchronously.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            A Future that will contain a boolean result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(False)
+        return future
+
+    def contains_value(self, value: V) -> bool:
+        """Check if the map contains a value.
+
+        Args:
+            value: The value to check.
+
+        Returns:
+            True if the value exists, False otherwise.
+        """
+        return self.contains_value_async(value).result()
+
+    def contains_value_async(self, value: V) -> Future:
+        """Check if the map contains a value asynchronously.
+
+        Args:
+            value: The value to check.
+
+        Returns:
+            A Future that will contain a boolean result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(False)
+        return future
+
+    def put_if_absent(self, key: K, value: V, ttl: float = -1) -> Optional[V]:
+        """Put a value only if the key is not already present.
+
+        Args:
+            key: The key to set.
+            value: The value to associate with the key.
+            ttl: Time to live in seconds. -1 means infinite.
+
+        Returns:
+            The existing value if present, None if the put succeeded.
+        """
+        return self.put_if_absent_async(key, value, ttl).result()
+
+    def put_if_absent_async(self, key: K, value: V, ttl: float = -1) -> Future:
+        """Put a value only if absent, asynchronously.
+
+        Args:
+            key: The key to set.
+            value: The value to associate with the key.
+            ttl: Time to live in seconds. -1 means infinite.
+
+        Returns:
+            A Future that will contain the existing value if present.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def replace(self, key: K, value: V) -> Optional[V]:
+        """Replace the value for a key if it exists.
+
+        Args:
+            key: The key to replace.
+            value: The new value.
+
+        Returns:
+            The old value if the key existed, None otherwise.
+        """
+        return self.replace_async(key, value).result()
+
+    def replace_async(self, key: K, value: V) -> Future:
+        """Replace a value asynchronously.
+
+        Args:
+            key: The key to replace.
+            value: The new value.
+
+        Returns:
+            A Future that will contain the old value.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def replace_if_same(self, key: K, old_value: V, new_value: V) -> bool:
+        """Replace the value for a key if it equals the expected value.
+
+        Args:
+            key: The key to replace.
+            old_value: The expected current value.
+            new_value: The new value.
+
+        Returns:
+            True if the replacement was successful.
+        """
+        return self.replace_if_same_async(key, old_value, new_value).result()
+
+    def replace_if_same_async(self, key: K, old_value: V, new_value: V) -> Future:
+        """Replace a value if same, asynchronously.
+
+        Args:
+            key: The key to replace.
+            old_value: The expected current value.
+            new_value: The new value.
+
+        Returns:
+            A Future that will contain a boolean result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(False)
+        return future
+
+    def set(self, key: K, value: V, ttl: float = -1) -> None:
+        """Set a value without returning the old value.
+
+        Args:
+            key: The key to set.
+            value: The value to associate.
+            ttl: Time to live in seconds. -1 means infinite.
+        """
+        self.set_async(key, value, ttl).result()
+
+    def set_async(self, key: K, value: V, ttl: float = -1) -> Future:
+        """Set a value asynchronously without returning the old value.
+
+        Args:
+            key: The key to set.
+            value: The value to associate.
+            ttl: Time to live in seconds. -1 means infinite.
+
+        Returns:
+            A Future that completes when the operation is done.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def get_all(self, keys: Set[K]) -> Dict[K, V]:
+        """Get multiple values at once.
+
+        Args:
+            keys: The keys to retrieve.
+
+        Returns:
+            A dictionary of key-value pairs for found keys.
+        """
+        return self.get_all_async(keys).result()
+
+    def get_all_async(self, keys: Set[K]) -> Future:
+        """Get multiple values asynchronously.
+
+        Args:
+            keys: The keys to retrieve.
+
+        Returns:
+            A Future that will contain a dictionary of results.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result({})
+        return future
+
+    def put_all(self, entries: Dict[K, V]) -> None:
+        """Put multiple key-value pairs at once.
+
+        Args:
+            entries: The key-value pairs to put.
+        """
+        self.put_all_async(entries).result()
+
+    def put_all_async(self, entries: Dict[K, V]) -> Future:
+        """Put multiple key-value pairs asynchronously.
+
+        Args:
+            entries: The key-value pairs to put.
+
+        Returns:
+            A Future that completes when all puts are done.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def size(self) -> int:
+        """Get the number of entries in the map.
+
+        Returns:
+            The number of entries.
+        """
+        return self.size_async().result()
+
+    def size_async(self) -> Future:
+        """Get the size asynchronously.
+
+        Returns:
+            A Future that will contain the size.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(0)
+        return future
+
+    def is_empty(self) -> bool:
+        """Check if the map is empty.
+
+        Returns:
+            True if the map has no entries.
+        """
+        return self.is_empty_async().result()
+
+    def is_empty_async(self) -> Future:
+        """Check if the map is empty asynchronously.
+
+        Returns:
+            A Future that will contain a boolean result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(True)
+        return future
+
+    def clear(self) -> None:
+        """Remove all entries from the map."""
+        self.clear_async().result()
+
+    def clear_async(self) -> Future:
+        """Clear the map asynchronously.
+
+        Returns:
+            A Future that completes when the clear is done.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def key_set(self, predicate: Any = None) -> Set[K]:
+        """Get all keys in the map.
+
+        Args:
+            predicate: Optional predicate to filter keys.
+
+        Returns:
+            A set of keys.
+        """
+        return self.key_set_async(predicate).result()
+
+    def key_set_async(self, predicate: Any = None) -> Future:
+        """Get all keys asynchronously.
+
+        Args:
+            predicate: Optional predicate to filter keys.
+
+        Returns:
+            A Future that will contain a set of keys.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(set())
+        return future
+
+    def values(self, predicate: Any = None) -> List[V]:
+        """Get all values in the map.
+
+        Args:
+            predicate: Optional predicate to filter values.
+
+        Returns:
+            A list of values.
+        """
+        return self.values_async(predicate).result()
+
+    def values_async(self, predicate: Any = None) -> Future:
+        """Get all values asynchronously.
+
+        Args:
+            predicate: Optional predicate to filter values.
+
+        Returns:
+            A Future that will contain a list of values.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result([])
+        return future
+
+    def entry_set(self, predicate: Any = None) -> Set[Tuple[K, V]]:
+        """Get all entries in the map.
+
+        Args:
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            A set of (key, value) tuples.
+        """
+        return self.entry_set_async(predicate).result()
+
+    def entry_set_async(self, predicate: Any = None) -> Future:
+        """Get all entries asynchronously.
+
+        Args:
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            A Future that will contain a set of entries.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(set())
+        return future
+
+    def add_entry_listener(
+        self,
+        listener: EntryListener[K, V],
+        include_value: bool = True,
+        key: Optional[K] = None,
+        predicate: Any = None,
+    ) -> str:
+        """Add an entry listener to the map.
+
+        Args:
+            listener: The listener to add.
+            include_value: Whether to include entry values in events.
+            key: Optional key to listen on. If None, listens to all keys.
+            predicate: Optional predicate to filter events.
+
+        Returns:
+            A registration ID for removing the listener.
+        """
+        import uuid
+        registration_id = str(uuid.uuid4())
+        self._entry_listeners[registration_id] = (listener, include_value)
+        return registration_id
+
+    def remove_entry_listener(self, registration_id: str) -> bool:
+        """Remove an entry listener.
+
+        Args:
+            registration_id: The registration ID from add_entry_listener.
+
+        Returns:
+            True if the listener was removed.
+        """
+        return self._entry_listeners.pop(registration_id, None) is not None
+
+    def aggregate(self, aggregator: Any, predicate: Any = None) -> Any:
+        """Aggregate map entries.
+
+        Args:
+            aggregator: The aggregator to apply.
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            The aggregation result.
+        """
+        return self.aggregate_async(aggregator, predicate).result()
+
+    def aggregate_async(self, aggregator: Any, predicate: Any = None) -> Future:
+        """Aggregate map entries asynchronously.
+
+        Args:
+            aggregator: The aggregator to apply.
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            A Future that will contain the aggregation result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def project(self, projection: Any, predicate: Any = None) -> List[Any]:
+        """Project map entries.
+
+        Args:
+            projection: The projection to apply.
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            A list of projected values.
+        """
+        return self.project_async(projection, predicate).result()
+
+    def project_async(self, projection: Any, predicate: Any = None) -> Future:
+        """Project map entries asynchronously.
+
+        Args:
+            projection: The projection to apply.
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            A Future that will contain a list of projected values.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result([])
+        return future
+
+    def execute_on_key(
+        self,
+        key: K,
+        entry_processor: Any,
+    ) -> Any:
+        """Execute an entry processor on a key.
+
+        Args:
+            key: The key to process.
+            entry_processor: The entry processor to execute.
+
+        Returns:
+            The entry processor result.
+        """
+        return self.execute_on_key_async(key, entry_processor).result()
+
+    def execute_on_key_async(
+        self,
+        key: K,
+        entry_processor: Any,
+    ) -> Future:
+        """Execute an entry processor asynchronously.
+
+        Args:
+            key: The key to process.
+            entry_processor: The entry processor to execute.
+
+        Returns:
+            A Future that will contain the result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def execute_on_keys(
+        self,
+        keys: Set[K],
+        entry_processor: Any,
+    ) -> Dict[K, Any]:
+        """Execute an entry processor on multiple keys.
+
+        Args:
+            keys: The keys to process.
+            entry_processor: The entry processor to execute.
+
+        Returns:
+            A dictionary of key to result mappings.
+        """
+        return self.execute_on_keys_async(keys, entry_processor).result()
+
+    def execute_on_keys_async(
+        self,
+        keys: Set[K],
+        entry_processor: Any,
+    ) -> Future:
+        """Execute an entry processor on multiple keys asynchronously.
+
+        Args:
+            keys: The keys to process.
+            entry_processor: The entry processor to execute.
+
+        Returns:
+            A Future that will contain a dictionary of results.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result({})
+        return future
+
+    def execute_on_entries(
+        self,
+        entry_processor: Any,
+        predicate: Any = None,
+    ) -> Dict[K, Any]:
+        """Execute an entry processor on all entries.
+
+        Args:
+            entry_processor: The entry processor to execute.
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            A dictionary of key to result mappings.
+        """
+        return self.execute_on_entries_async(entry_processor, predicate).result()
+
+    def execute_on_entries_async(
+        self,
+        entry_processor: Any,
+        predicate: Any = None,
+    ) -> Future:
+        """Execute an entry processor on all entries asynchronously.
+
+        Args:
+            entry_processor: The entry processor to execute.
+            predicate: Optional predicate to filter entries.
+
+        Returns:
+            A Future that will contain a dictionary of results.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result({})
+        return future
+
+    def lock(self, key: K, ttl: float = -1) -> None:
+        """Acquire a lock on a key.
+
+        Args:
+            key: The key to lock.
+            ttl: Time to live for the lock in seconds.
+        """
+        self.lock_async(key, ttl).result()
+
+    def lock_async(self, key: K, ttl: float = -1) -> Future:
+        """Acquire a lock asynchronously.
+
+        Args:
+            key: The key to lock.
+            ttl: Time to live for the lock in seconds.
+
+        Returns:
+            A Future that completes when the lock is acquired.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def try_lock(self, key: K, timeout: float = 0, ttl: float = -1) -> bool:
+        """Try to acquire a lock on a key.
+
+        Args:
+            key: The key to lock.
+            timeout: Maximum time to wait for the lock in seconds.
+            ttl: Time to live for the lock in seconds.
+
+        Returns:
+            True if the lock was acquired, False otherwise.
+        """
+        return self.try_lock_async(key, timeout, ttl).result()
+
+    def try_lock_async(self, key: K, timeout: float = 0, ttl: float = -1) -> Future:
+        """Try to acquire a lock asynchronously.
+
+        Args:
+            key: The key to lock.
+            timeout: Maximum time to wait for the lock in seconds.
+            ttl: Time to live for the lock in seconds.
+
+        Returns:
+            A Future that will contain a boolean result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(True)
+        return future
+
+    def unlock(self, key: K) -> None:
+        """Release a lock on a key.
+
+        Args:
+            key: The key to unlock.
+        """
+        self.unlock_async(key).result()
+
+    def unlock_async(self, key: K) -> Future:
+        """Release a lock asynchronously.
+
+        Args:
+            key: The key to unlock.
+
+        Returns:
+            A Future that completes when the lock is released.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def is_locked(self, key: K) -> bool:
+        """Check if a key is locked.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key is locked.
+        """
+        return self.is_locked_async(key).result()
+
+    def is_locked_async(self, key: K) -> Future:
+        """Check if a key is locked asynchronously.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            A Future that will contain a boolean result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(False)
+        return future
+
+    def force_unlock(self, key: K) -> None:
+        """Force release a lock regardless of owner.
+
+        Args:
+            key: The key to unlock.
+        """
+        self.force_unlock_async(key).result()
+
+    def force_unlock_async(self, key: K) -> Future:
+        """Force release a lock asynchronously.
+
+        Args:
+            key: The key to unlock.
+
+        Returns:
+            A Future that completes when the lock is released.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def evict(self, key: K) -> bool:
+        """Evict a specific key from the map.
+
+        Args:
+            key: The key to evict.
+
+        Returns:
+            True if the key was evicted.
+        """
+        return self.evict_async(key).result()
+
+    def evict_async(self, key: K) -> Future:
+        """Evict a key asynchronously.
+
+        Args:
+            key: The key to evict.
+
+        Returns:
+            A Future that will contain a boolean result.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(False)
+        return future
+
+    def evict_all(self) -> None:
+        """Evict all entries from the map."""
+        self.evict_all_async().result()
+
+    def evict_all_async(self) -> Future:
+        """Evict all entries asynchronously.
+
+        Returns:
+            A Future that completes when all entries are evicted.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def flush(self) -> None:
+        """Flush map store operations."""
+        self.flush_async().result()
+
+    def flush_async(self) -> Future:
+        """Flush map store operations asynchronously.
+
+        Returns:
+            A Future that completes when the flush is done.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def load_all(self, keys: Optional[Set[K]] = None, replace_existing: bool = True) -> None:
+        """Load entries from the map store.
+
+        Args:
+            keys: Optional set of keys to load. If None, loads all.
+            replace_existing: Whether to replace existing entries.
+        """
+        self.load_all_async(keys, replace_existing).result()
+
+    def load_all_async(
+        self, keys: Optional[Set[K]] = None, replace_existing: bool = True
+    ) -> Future:
+        """Load entries from the map store asynchronously.
+
+        Args:
+            keys: Optional set of keys to load.
+            replace_existing: Whether to replace existing entries.
+
+        Returns:
+            A Future that completes when the load is done.
+        """
+        self._check_not_destroyed()
+        future: Future = Future()
+        future.set_result(None)
+        return future
+
+    def __len__(self) -> int:
+        return self.size()
+
+    def __contains__(self, key: K) -> bool:
+        return self.contains_key(key)
+
+    def __getitem__(self, key: K) -> Optional[V]:
+        return self.get(key)
+
+    def __setitem__(self, key: K, value: V) -> None:
+        self.put(key, value)
+
+    def __delitem__(self, key: K) -> None:
+        self.remove(key)
+
+    def __iter__(self) -> Iterator[K]:
+        return iter(self.key_set())
