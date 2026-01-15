@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  hazelcast:
+    image: hazelcast/hazelcast:5.3
+    container_name: hazelcast-test
+    ports:
+      - "5701:5701"
+    environment:
+      - HZ_CLUSTERNAME=dev
+      - HZ_NETWORK_JOIN_MULTICAST_ENABLED=false
+      - HZ_NETWORK_JOIN_TCP_IP_ENABLED=true
+      - JAVA_OPTS=-Dhazelcast.phone.home.enabled=false
+
+  hazelcast-2:
+    image: hazelcast/hazelcast:5.3
+    container_name: hazelcast-test-2
+    ports:
+      - "5702:5701"
+    environment:
+      - HZ_CLUSTERNAME=dev
+      - HZ_NETWORK_JOIN_MULTICAST_ENABLED=false
+      - HZ_NETWORK_JOIN_TCP_IP_ENABLED=true
+      - HZ_NETWORK_JOIN_TCP_IP_MEMBER_LIST=hazelcast:5701
+      - JAVA_OPTS=-Dhazelcast.phone.home.enabled=false
+    depends_on:
+      - hazelcast
+
+  management-center:
+    image: hazelcast/management-center:5.3
+    container_name: hazelcast-mc
+    ports:
+      - "8080:8080"
+    environment:
+      - MC_DEFAULT_CLUSTER=dev
+      - MC_DEFAULT_CLUSTER_MEMBERS=hazelcast:5701
+    depends_on:
+      - hazelcast
