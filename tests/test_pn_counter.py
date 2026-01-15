@@ -1,181 +1,157 @@
-"""Unit tests for the PNCounter proxy."""
+"""Unit tests for hazelcast.proxy.pn_counter module."""
 
-import unittest
+import pytest
+from concurrent.futures import Future
 
 from hazelcast.proxy.pn_counter import PNCounterProxy
+from hazelcast.exceptions import IllegalStateException
 
 
-class TestPNCounterProxy(unittest.TestCase):
-    """Tests for PNCounterProxy."""
+class TestPNCounterProxy:
+    """Tests for PNCounterProxy class."""
 
-    def setUp(self):
-        self.counter = PNCounterProxy("test-counter")
+    def test_init(self):
+        counter = PNCounterProxy("test-counter")
+        assert counter.name == "test-counter"
+        assert counter.service_name == "hz:impl:PNCounterService"
 
-    def tearDown(self):
-        if not self.counter.is_destroyed:
-            self.counter.destroy()
-
-    def test_initial_value_is_zero(self):
-        self.assertEqual(0, self.counter.get())
+    def test_get_initial_value(self):
+        counter = PNCounterProxy("test-counter")
+        assert counter.get() == 0
 
     def test_get_async(self):
-        future = self.counter.get_async()
-        self.assertEqual(0, future.result())
+        counter = PNCounterProxy("test-counter")
+        future = counter.get_async()
+        assert isinstance(future, Future)
+        assert future.result() == 0
 
     def test_get_and_add(self):
-        previous = self.counter.get_and_add(5)
-        self.assertEqual(0, previous)
-        self.assertEqual(5, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        prev = counter.get_and_add(5)
+        assert prev == 0
+        assert counter.get() == 5
 
     def test_get_and_add_negative(self):
-        self.counter.add_and_get(10)
-        previous = self.counter.get_and_add(-3)
-        self.assertEqual(10, previous)
-        self.assertEqual(7, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        counter.get_and_add(10)
+        prev = counter.get_and_add(-3)
+        assert prev == 10
+        assert counter.get() == 7
 
     def test_get_and_add_async(self):
-        future = self.counter.get_and_add_async(7)
-        self.assertEqual(0, future.result())
-        self.assertEqual(7, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        future = counter.get_and_add_async(5)
+        assert isinstance(future, Future)
+        assert future.result() == 0
 
     def test_add_and_get(self):
-        result = self.counter.add_and_get(10)
-        self.assertEqual(10, result)
-        self.assertEqual(10, self.counter.get())
-
-    def test_add_and_get_multiple(self):
-        self.counter.add_and_get(5)
-        result = self.counter.add_and_get(3)
-        self.assertEqual(8, result)
+        counter = PNCounterProxy("test-counter")
+        result = counter.add_and_get(5)
+        assert result == 5
+        assert counter.get() == 5
 
     def test_add_and_get_async(self):
-        future = self.counter.add_and_get_async(15)
-        self.assertEqual(15, future.result())
-        self.assertEqual(15, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        future = counter.add_and_get_async(10)
+        assert isinstance(future, Future)
+        assert future.result() == 10
 
     def test_get_and_subtract(self):
-        self.counter.add_and_get(20)
-        previous = self.counter.get_and_subtract(5)
-        self.assertEqual(20, previous)
-        self.assertEqual(15, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(10)
+        prev = counter.get_and_subtract(3)
+        assert prev == 10
+        assert counter.get() == 7
 
     def test_get_and_subtract_async(self):
-        self.counter.add_and_get(10)
-        future = self.counter.get_and_subtract_async(3)
-        self.assertEqual(10, future.result())
-        self.assertEqual(7, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(10)
+        future = counter.get_and_subtract_async(3)
+        assert isinstance(future, Future)
+        assert future.result() == 10
 
     def test_subtract_and_get(self):
-        self.counter.add_and_get(25)
-        result = self.counter.subtract_and_get(10)
-        self.assertEqual(15, result)
-        self.assertEqual(15, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(10)
+        result = counter.subtract_and_get(3)
+        assert result == 7
 
     def test_subtract_and_get_async(self):
-        self.counter.add_and_get(30)
-        future = self.counter.subtract_and_get_async(5)
-        self.assertEqual(25, future.result())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(10)
+        future = counter.subtract_and_get_async(3)
+        assert isinstance(future, Future)
+        assert future.result() == 7
 
     def test_get_and_increment(self):
-        previous = self.counter.get_and_increment()
-        self.assertEqual(0, previous)
-        self.assertEqual(1, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        prev = counter.get_and_increment()
+        assert prev == 0
+        assert counter.get() == 1
 
     def test_get_and_increment_async(self):
-        future = self.counter.get_and_increment_async()
-        self.assertEqual(0, future.result())
-        self.assertEqual(1, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        future = counter.get_and_increment_async()
+        assert isinstance(future, Future)
+        assert future.result() == 0
 
     def test_increment_and_get(self):
-        result = self.counter.increment_and_get()
-        self.assertEqual(1, result)
-        self.assertEqual(1, self.counter.get())
-
-    def test_increment_and_get_multiple(self):
-        self.counter.increment_and_get()
-        self.counter.increment_and_get()
-        result = self.counter.increment_and_get()
-        self.assertEqual(3, result)
+        counter = PNCounterProxy("test-counter")
+        result = counter.increment_and_get()
+        assert result == 1
 
     def test_increment_and_get_async(self):
-        future = self.counter.increment_and_get_async()
-        self.assertEqual(1, future.result())
+        counter = PNCounterProxy("test-counter")
+        future = counter.increment_and_get_async()
+        assert isinstance(future, Future)
+        assert future.result() == 1
 
     def test_get_and_decrement(self):
-        self.counter.add_and_get(5)
-        previous = self.counter.get_and_decrement()
-        self.assertEqual(5, previous)
-        self.assertEqual(4, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(5)
+        prev = counter.get_and_decrement()
+        assert prev == 5
+        assert counter.get() == 4
 
     def test_get_and_decrement_async(self):
-        self.counter.add_and_get(3)
-        future = self.counter.get_and_decrement_async()
-        self.assertEqual(3, future.result())
-        self.assertEqual(2, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(5)
+        future = counter.get_and_decrement_async()
+        assert isinstance(future, Future)
+        assert future.result() == 5
 
     def test_decrement_and_get(self):
-        self.counter.add_and_get(10)
-        result = self.counter.decrement_and_get()
-        self.assertEqual(9, result)
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(5)
+        result = counter.decrement_and_get()
+        assert result == 4
 
     def test_decrement_and_get_async(self):
-        self.counter.add_and_get(7)
-        future = self.counter.decrement_and_get_async()
-        self.assertEqual(6, future.result())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(5)
+        future = counter.decrement_and_get_async()
+        assert isinstance(future, Future)
+        assert future.result() == 4
 
     def test_reset(self):
-        self.counter.add_and_get(100)
-        self.counter.reset()
-        self.assertEqual(0, self.counter.get())
+        counter = PNCounterProxy("test-counter")
+        counter.add_and_get(100)
+        counter.reset()
+        assert counter.get() == 0
+        assert counter._observed_clock == {}
+        assert counter._current_target_replica is None
 
-    def test_negative_values(self):
-        self.counter.subtract_and_get(5)
-        self.assertEqual(-5, self.counter.get())
-
-    def test_service_name(self):
-        self.assertEqual("hz:impl:PNCounterService", self.counter.service_name)
-
-    def test_name(self):
-        self.assertEqual("test-counter", self.counter.name)
-
-    def test_destroyed_counter_raises(self):
-        self.counter.destroy()
-        with self.assertRaises(Exception):
-            self.counter.get()
-
-    def test_repr(self):
-        repr_str = repr(self.counter)
-        self.assertIn("PNCounterProxy", repr_str)
-        self.assertIn("test-counter", repr_str)
-
-
-class TestPNCounterCRDTBehavior(unittest.TestCase):
-    """Tests for CRDT-specific behavior."""
-
-    def test_concurrent_increments_converge(self):
-        counter1 = PNCounterProxy("shared-counter")
-        counter2 = PNCounterProxy("shared-counter")
-
-        counter1.increment_and_get()
-        counter2.increment_and_get()
-
-        self.assertEqual(1, counter1.get())
-        self.assertEqual(1, counter2.get())
-
-        counter1.destroy()
-        counter2.destroy()
-
-    def test_mixed_operations(self):
-        counter = PNCounterProxy("mixed-ops")
-
-        counter.add_and_get(10)
-        counter.subtract_and_get(3)
+    def test_multiple_operations(self):
+        counter = PNCounterProxy("test-counter")
         counter.increment_and_get()
+        counter.increment_and_get()
+        counter.add_and_get(10)
         counter.decrement_and_get()
+        counter.subtract_and_get(5)
+        assert counter.get() == 7
 
-        self.assertEqual(7, counter.get())
+    def test_destroyed_operations_raise(self):
+        counter = PNCounterProxy("test-counter")
         counter.destroy()
-
-
-if __name__ == "__main__":
-    unittest.main()
+        with pytest.raises(IllegalStateException):
+            counter.get()

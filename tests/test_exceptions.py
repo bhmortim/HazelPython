@@ -1,4 +1,4 @@
-"""Unit tests for Hazelcast exceptions."""
+"""Unit tests for hazelcast.exceptions module."""
 
 import pytest
 
@@ -11,6 +11,7 @@ from hazelcast.exceptions import (
     TargetDisconnectedException,
     HazelcastInstanceNotActiveException,
     OperationTimeoutException,
+    InvocationMightContainCompactDataException,
     IllegalStateException,
     IllegalArgumentException,
     ConfigurationException,
@@ -18,29 +19,35 @@ from hazelcast.exceptions import (
 
 
 class TestHazelcastException:
-    def test_default_message(self):
-        exc = HazelcastException()
-        assert exc.message == ""
+    """Tests for HazelcastException base class."""
+
+    def test_init_with_message(self):
+        exc = HazelcastException("test message")
+        assert exc.message == "test message"
         assert exc.cause is None
+        assert str(exc) == "test message"
 
-    def test_custom_message(self):
-        exc = HazelcastException("Something went wrong")
-        assert exc.message == "Something went wrong"
-        assert str(exc) == "Something went wrong"
-
-    def test_with_cause(self):
-        cause = ValueError("Original error")
-        exc = HazelcastException("Wrapped error", cause=cause)
+    def test_init_with_cause(self):
+        cause = ValueError("original error")
+        exc = HazelcastException("wrapped error", cause=cause)
+        assert exc.message == "wrapped error"
         assert exc.cause is cause
         assert "caused by" in str(exc)
-        assert "Original error" in str(exc)
+        assert "original error" in str(exc)
 
-    def test_is_exception(self):
-        exc = HazelcastException("Test")
+    def test_init_default_message(self):
+        exc = HazelcastException()
+        assert exc.message == ""
+        assert str(exc) == ""
+
+    def test_is_exception_subclass(self):
+        exc = HazelcastException("test")
         assert isinstance(exc, Exception)
 
 
 class TestClientOfflineException:
+    """Tests for ClientOfflineException."""
+
     def test_default_message(self):
         exc = ClientOfflineException()
         assert "offline" in exc.message.lower()
@@ -49,12 +56,10 @@ class TestClientOfflineException:
         exc = ClientOfflineException("Custom offline message")
         assert exc.message == "Custom offline message"
 
-    def test_inherits_from_hazelcast_exception(self):
-        exc = ClientOfflineException()
-        assert isinstance(exc, HazelcastException)
-
 
 class TestAuthenticationException:
+    """Tests for AuthenticationException."""
+
     def test_default_message(self):
         exc = AuthenticationException()
         assert "authentication" in exc.message.lower()
@@ -63,29 +68,22 @@ class TestAuthenticationException:
         exc = AuthenticationException("Invalid credentials")
         assert exc.message == "Invalid credentials"
 
-    def test_inherits_from_hazelcast_exception(self):
-        exc = AuthenticationException()
-        assert isinstance(exc, HazelcastException)
-
 
 class TestTimeoutException:
+    """Tests for TimeoutException."""
+
     def test_default_message(self):
         exc = TimeoutException()
         assert "timeout" in exc.message.lower()
 
-    def test_inherits_from_hazelcast_exception(self):
-        exc = TimeoutException()
-        assert isinstance(exc, HazelcastException)
-
-
-class TestOperationTimeoutException:
-    def test_inherits_from_timeout_exception(self):
-        exc = OperationTimeoutException()
-        assert isinstance(exc, TimeoutException)
-        assert isinstance(exc, HazelcastException)
+    def test_custom_message(self):
+        exc = TimeoutException("Connection timeout")
+        assert exc.message == "Connection timeout"
 
 
 class TestSerializationException:
+    """Tests for SerializationException."""
+
     def test_default_message(self):
         exc = SerializationException()
         assert "serialization" in exc.message.lower()
@@ -94,71 +92,112 @@ class TestSerializationException:
         cause = TypeError("Cannot serialize object")
         exc = SerializationException("Failed to serialize", cause=cause)
         assert exc.cause is cause
-
-    def test_inherits_from_hazelcast_exception(self):
-        exc = SerializationException()
-        assert isinstance(exc, HazelcastException)
+        assert "caused by" in str(exc)
 
 
 class TestTargetDisconnectedException:
+    """Tests for TargetDisconnectedException."""
+
     def test_default_message(self):
         exc = TargetDisconnectedException()
-        assert "disconnect" in exc.message.lower()
-
-    def test_inherits_from_hazelcast_exception(self):
-        exc = TargetDisconnectedException()
-        assert isinstance(exc, HazelcastException)
+        assert "disconnected" in exc.message.lower()
 
 
 class TestHazelcastInstanceNotActiveException:
+    """Tests for HazelcastInstanceNotActiveException."""
+
     def test_default_message(self):
         exc = HazelcastInstanceNotActiveException()
         assert "not active" in exc.message.lower()
 
-    def test_inherits_from_hazelcast_exception(self):
-        exc = HazelcastInstanceNotActiveException()
-        assert isinstance(exc, HazelcastException)
+
+class TestOperationTimeoutException:
+    """Tests for OperationTimeoutException."""
+
+    def test_is_timeout_exception_subclass(self):
+        exc = OperationTimeoutException()
+        assert isinstance(exc, TimeoutException)
+
+    def test_default_message(self):
+        exc = OperationTimeoutException()
+        assert "timeout" in exc.message.lower()
+
+
+class TestInvocationMightContainCompactDataException:
+    """Tests for InvocationMightContainCompactDataException."""
+
+    def test_default_message(self):
+        exc = InvocationMightContainCompactDataException()
+        assert "compact" in exc.message.lower()
 
 
 class TestIllegalStateException:
+    """Tests for IllegalStateException."""
+
     def test_default_message(self):
         exc = IllegalStateException()
         assert "illegal state" in exc.message.lower()
 
-    def test_inherits_from_hazelcast_exception(self):
-        exc = IllegalStateException()
-        assert isinstance(exc, HazelcastException)
+    def test_custom_message(self):
+        exc = IllegalStateException("Client is shutting down")
+        assert exc.message == "Client is shutting down"
 
 
 class TestIllegalArgumentException:
+    """Tests for IllegalArgumentException."""
+
     def test_default_message(self):
         exc = IllegalArgumentException()
         assert "illegal argument" in exc.message.lower()
 
-    def test_inherits_from_hazelcast_exception(self):
-        exc = IllegalArgumentException()
-        assert isinstance(exc, HazelcastException)
+    def test_custom_message(self):
+        exc = IllegalArgumentException("Value must be positive")
+        assert exc.message == "Value must be positive"
 
 
 class TestConfigurationException:
+    """Tests for ConfigurationException."""
+
     def test_default_message(self):
         exc = ConfigurationException()
         assert "configuration" in exc.message.lower()
 
-    def test_inherits_from_hazelcast_exception(self):
-        exc = ConfigurationException()
+    def test_custom_message(self):
+        exc = ConfigurationException("Invalid cluster name")
+        assert exc.message == "Invalid cluster name"
+
+
+class TestExceptionHierarchy:
+    """Tests for exception hierarchy and inheritance."""
+
+    def test_all_exceptions_inherit_from_hazelcast(self):
+        exceptions = [
+            ClientOfflineException(),
+            AuthenticationException(),
+            TimeoutException(),
+            SerializationException(),
+            TargetDisconnectedException(),
+            HazelcastInstanceNotActiveException(),
+            OperationTimeoutException(),
+            InvocationMightContainCompactDataException(),
+            IllegalStateException(),
+            IllegalArgumentException(),
+            ConfigurationException(),
+        ]
+        for exc in exceptions:
+            assert isinstance(exc, HazelcastException)
+
+    def test_operation_timeout_inherits_from_timeout(self):
+        exc = OperationTimeoutException()
+        assert isinstance(exc, TimeoutException)
         assert isinstance(exc, HazelcastException)
 
-
-class TestExceptionRaising:
-    def test_raise_and_catch_base(self):
-        with pytest.raises(HazelcastException):
-            raise HazelcastException("Test error")
-
-    def test_catch_specific_as_base(self):
+    def test_can_catch_all_with_hazelcast_exception(self):
         with pytest.raises(HazelcastException):
             raise ClientOfflineException()
 
-    def test_catch_timeout_hierarchy(self):
-        with pytest.raises(TimeoutException):
-            raise OperationTimeoutException()
+        with pytest.raises(HazelcastException):
+            raise SerializationException()
+
+        with pytest.raises(HazelcastException):
+            raise ConfigurationException()

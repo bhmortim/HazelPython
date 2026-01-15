@@ -1,1 +1,1 @@
-"""Hazelcast Python Client tests."""
+"""Hazelcast Python Client Test Suite."""

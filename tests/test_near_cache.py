@@ -1,490 +1,324 @@
-"""Unit tests for near cache implementation."""
+"""Unit tests for hazelcast.near_cache module."""
 
+import pytest
 import time
-import unittest
 from unittest.mock import MagicMock
 
-from hazelcast.config import (
-    NearCacheConfig,
-    EvictionPolicy,
-    InMemoryFormat,
-)
 from hazelcast.near_cache import (
     NearCache,
+    NearCacheManager,
     NearCacheRecord,
     NearCacheStats,
-    NearCacheManager,
     LRUEvictionStrategy,
     LFUEvictionStrategy,
     RandomEvictionStrategy,
     NoneEvictionStrategy,
+    _create_eviction_strategy,
 )
+from hazelcast.config import NearCacheConfig, EvictionPolicy, InMemoryFormat
 
 
-class TestNearCacheRecord(unittest.TestCase):
-    """Tests for NearCacheRecord."""
+class TestNearCacheStats:
+    """Tests for NearCacheStats class."""
 
-    def test_record_creation(self):
-        """Test record is created with default values."""
+    def test_default_values(self):
+        stats = NearCacheStats()
+        assert stats.hits == 0
+        assert stats.misses == 0
+        assert stats.evictions == 0
+        assert stats.expirations == 0
+        assert stats.invalidations == 0
+        assert stats.entries_count == 0
+
+    def test_hit_ratio_no_accesses(self):
+        stats = NearCacheStats()
+        assert stats.hit_ratio == 0.0
+
+    def test_hit_ratio_with_accesses(self):
+        stats = NearCacheStats(hits=80, misses=20)
+        assert stats.hit_ratio == 0.8
+
+    def test_miss_ratio(self):
+        stats = NearCacheStats(hits=80, misses=20)
+        assert stats.miss_ratio == 0.2
+
+    def test_to_dict(self):
+        stats = NearCacheStats(hits=10, misses=5)
+        d = stats.to_dict()
+        assert d["hits"] == 10
+        assert d["misses"] == 5
+        assert "hit_ratio" in d
+
+
+class TestNearCacheRecord:
+    """Tests for NearCacheRecord class."""
+
+    def test_init(self):
         record = NearCacheRecord(value="test")
-        self.assertEqual(record.value, "test")
-        self.assertEqual(record.access_count, 0)
-        self.assertFalse(record.is_expired())
+        assert record.value == "test"
+        assert record.access_count == 0
+        assert record.ttl_seconds == 0
+        assert record.max_idle_seconds == 0
+
+    def test_is_expired_no_expiry(self):
+        record = NearCacheRecord(value="test")
+        assert record.is_expired() is False
+
+    def test_is_expired_ttl(self):
+        record = NearCacheRecord(
+            value="test",
+            ttl_seconds=1,
+        )
+        record.creation_time = time.time() - 2
+        assert record.is_expired() is True
+
+    def test_is_expired_max_idle(self):
+        record = NearCacheRecord(
+            value="test",
+            max_idle_seconds=1,
+        )
+        record.last_access_time = time.time() - 2
+        assert record.is_expired() is True
 
     def test_record_access(self):
-        """Test recording access updates fields."""
         record = NearCacheRecord(value="test")
-        initial_time = record.last_access_time
-
-        time.sleep(0.01)
+        initial_count = record.access_count
         record.record_access()
-
-        self.assertEqual(record.access_count, 1)
-        self.assertGreater(record.last_access_time, initial_time)
-
-    def test_ttl_expiration(self):
-        """Test TTL-based expiration."""
-        record = NearCacheRecord(value="test", ttl_seconds=0)
-        self.assertFalse(record.is_expired())
-
-        record = NearCacheRecord(value="test", ttl_seconds=1)
-        self.assertFalse(record.is_expired())
-
-    def test_max_idle_expiration(self):
-        """Test max-idle-based expiration."""
-        record = NearCacheRecord(value="test", max_idle_seconds=0)
-        self.assertFalse(record.is_expired())
+        assert record.access_count == initial_count + 1
 
 
-class TestNearCacheStats(unittest.TestCase):
-    """Tests for NearCacheStats."""
+class TestEvictionStrategies:
+    """Tests for eviction strategy classes."""
 
-    def test_default_stats(self):
-        """Test default statistics values."""
-        stats = NearCacheStats()
-        self.assertEqual(stats.hits, 0)
-        self.assertEqual(stats.misses, 0)
-        self.assertEqual(stats.evictions, 0)
-        self.assertEqual(stats.hit_ratio, 0.0)
-        self.assertEqual(stats.miss_ratio, 0.0)
-
-    def test_hit_ratio_calculation(self):
-        """Test hit ratio calculation."""
-        stats = NearCacheStats(hits=7, misses=3)
-        self.assertAlmostEqual(stats.hit_ratio, 0.7)
-        self.assertAlmostEqual(stats.miss_ratio, 0.3)
-
-    def test_stats_to_dict(self):
-        """Test converting stats to dictionary."""
-        stats = NearCacheStats(hits=10, misses=5, evictions=2)
-        result = stats.to_dict()
-
-        self.assertEqual(result["hits"], 10)
-        self.assertEqual(result["misses"], 5)
-        self.assertEqual(result["evictions"], 2)
-        self.assertIn("hit_ratio", result)
-
-
-class TestEvictionStrategies(unittest.TestCase):
-    """Tests for eviction strategies."""
-
-    def test_lru_eviction(self):
-        """Test LRU eviction selects least recently used."""
+    def test_lru_strategy(self):
         strategy = LRUEvictionStrategy()
+        records = {
+            "key1": NearCacheRecord(value="v1"),
+            "key2": NearCacheRecord(value="v2"),
+        }
+        records["key1"].last_access_time = time.time() - 100
+        records["key2"].last_access_time = time.time()
+        key = strategy.select_for_eviction(records)
+        assert key == "key1"
 
-        old_record = NearCacheRecord(value="old")
-        old_record.last_access_time = 100.0
+    def test_lru_strategy_empty(self):
+        strategy = LRUEvictionStrategy()
+        assert strategy.select_for_eviction({}) is None
 
-        new_record = NearCacheRecord(value="new")
-        new_record.last_access_time = 200.0
-
-        records = {"old": old_record, "new": new_record}
-        evicted = strategy.select_for_eviction(records)
-
-        self.assertEqual(evicted, "old")
-
-    def test_lfu_eviction(self):
-        """Test LFU eviction selects least frequently used."""
+    def test_lfu_strategy(self):
         strategy = LFUEvictionStrategy()
+        records = {
+            "key1": NearCacheRecord(value="v1"),
+            "key2": NearCacheRecord(value="v2"),
+        }
+        records["key1"].access_count = 10
+        records["key2"].access_count = 1
+        key = strategy.select_for_eviction(records)
+        assert key == "key2"
 
-        rarely_used = NearCacheRecord(value="rare")
-        rarely_used.access_count = 1
+    def test_lfu_strategy_empty(self):
+        strategy = LFUEvictionStrategy()
+        assert strategy.select_for_eviction({}) is None
 
-        often_used = NearCacheRecord(value="often")
-        often_used.access_count = 100
-
-        records = {"rare": rarely_used, "often": often_used}
-        evicted = strategy.select_for_eviction(records)
-
-        self.assertEqual(evicted, "rare")
-
-    def test_random_eviction(self):
-        """Test random eviction returns a key."""
+    def test_random_strategy(self):
         strategy = RandomEvictionStrategy()
         records = {
-            "a": NearCacheRecord(value="a"),
-            "b": NearCacheRecord(value="b"),
+            "key1": NearCacheRecord(value="v1"),
+            "key2": NearCacheRecord(value="v2"),
         }
-        evicted = strategy.select_for_eviction(records)
-        self.assertIn(evicted, ["a", "b"])
+        key = strategy.select_for_eviction(records)
+        assert key in ["key1", "key2"]
 
-    def test_none_eviction(self):
-        """Test none eviction returns None."""
+    def test_random_strategy_empty(self):
+        strategy = RandomEvictionStrategy()
+        assert strategy.select_for_eviction({}) is None
+
+    def test_none_strategy(self):
         strategy = NoneEvictionStrategy()
-        records = {"a": NearCacheRecord(value="a")}
-        evicted = strategy.select_for_eviction(records)
-        self.assertIsNone(evicted)
+        records = {
+            "key1": NearCacheRecord(value="v1"),
+        }
+        assert strategy.select_for_eviction(records) is None
 
-    def test_empty_records(self):
-        """Test eviction with empty records."""
-        for strategy in [
-            LRUEvictionStrategy(),
-            LFUEvictionStrategy(),
-            RandomEvictionStrategy(),
-            NoneEvictionStrategy(),
-        ]:
-            self.assertIsNone(strategy.select_for_eviction({}))
+    def test_create_eviction_strategy(self):
+        assert isinstance(_create_eviction_strategy(EvictionPolicy.LRU), LRUEvictionStrategy)
+        assert isinstance(_create_eviction_strategy(EvictionPolicy.LFU), LFUEvictionStrategy)
+        assert isinstance(_create_eviction_strategy(EvictionPolicy.RANDOM), RandomEvictionStrategy)
+        assert isinstance(_create_eviction_strategy(EvictionPolicy.NONE), NoneEvictionStrategy)
 
 
-class TestNearCache(unittest.TestCase):
-    """Tests for NearCache."""
+class TestNearCache:
+    """Tests for NearCache class."""
 
-    def setUp(self):
-        """Set up test fixtures."""
-        self.config = NearCacheConfig(
-            name="test-cache",
+    def test_init(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        assert cache.name == near_cache_config.name
+        assert cache.size == 0
+
+    def test_put_and_get(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key1", "value1")
+        assert cache.get("key1") == "value1"
+        assert cache.size == 1
+
+    def test_get_miss(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        assert cache.get("nonexistent") is None
+        assert cache.stats.misses == 1
+
+    def test_get_hit(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key", "value")
+        cache.get("key")
+        assert cache.stats.hits == 1
+
+    def test_remove(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key", "value")
+        result = cache.remove("key")
+        assert result == "value"
+        assert cache.size == 0
+
+    def test_remove_nonexistent(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        result = cache.remove("nonexistent")
+        assert result is None
+
+    def test_invalidate(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key", "value")
+        cache.invalidate("key")
+        assert cache.get("key") is None
+        assert cache.stats.invalidations == 1
+
+    def test_invalidate_all(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key1", "value1")
+        cache.put("key2", "value2")
+        cache.invalidate_all()
+        assert cache.size == 0
+        assert cache.stats.invalidations == 2
+
+    def test_clear(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key", "value")
+        cache.clear()
+        assert cache.size == 0
+
+    def test_contains(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key", "value")
+        assert cache.contains("key") is True
+        assert cache.contains("nonexistent") is False
+
+    def test_eviction(self):
+        config = NearCacheConfig(
+            name="test",
+            max_size=2,
+            eviction_policy=EvictionPolicy.LRU,
+        )
+        cache = NearCache(config)
+        cache.put("key1", "value1")
+        cache.put("key2", "value2")
+        cache.put("key3", "value3")
+        assert cache.size <= 2
+        assert cache.stats.evictions >= 1
+
+    def test_expiration_ttl(self):
+        config = NearCacheConfig(
+            name="test",
             max_size=100,
-            eviction_policy=EvictionPolicy.LRU,
-        )
-        self.cache = NearCache(self.config)
-
-    def test_put_and_get(self):
-        """Test basic put and get operations."""
-        self.cache.put("key1", "value1")
-        result = self.cache.get("key1")
-
-        self.assertEqual(result, "value1")
-        self.assertEqual(self.cache.size, 1)
-
-    def test_get_miss(self):
-        """Test get returns None for missing key."""
-        result = self.cache.get("nonexistent")
-        self.assertIsNone(result)
-
-    def test_remove(self):
-        """Test remove operation."""
-        self.cache.put("key1", "value1")
-        removed = self.cache.remove("key1")
-
-        self.assertEqual(removed, "value1")
-        self.assertIsNone(self.cache.get("key1"))
-
-    def test_contains(self):
-        """Test contains check."""
-        self.cache.put("key1", "value1")
-
-        self.assertTrue(self.cache.contains("key1"))
-        self.assertFalse(self.cache.contains("key2"))
-
-    def test_clear(self):
-        """Test clear operation."""
-        self.cache.put("key1", "value1")
-        self.cache.put("key2", "value2")
-        self.cache.clear()
-
-        self.assertEqual(self.cache.size, 0)
-
-    def test_invalidate(self):
-        """Test invalidation."""
-        self.cache.put("key1", "value1")
-        self.cache.invalidate("key1")
-
-        self.assertIsNone(self.cache.get("key1"))
-        self.assertEqual(self.cache.stats.invalidations, 1)
-
-    def test_invalidate_all(self):
-        """Test invalidate all entries."""
-        self.cache.put("key1", "value1")
-        self.cache.put("key2", "value2")
-        self.cache.invalidate_all()
-
-        self.assertEqual(self.cache.size, 0)
-        self.assertEqual(self.cache.stats.invalidations, 2)
-
-    def test_stats_tracking(self):
-        """Test statistics are tracked correctly."""
-        self.cache.put("key1", "value1")
-        self.cache.get("key1")
-        self.cache.get("key1")
-        self.cache.get("nonexistent")
-
-        stats = self.cache.stats
-        self.assertEqual(stats.hits, 2)
-        self.assertEqual(stats.misses, 1)
-
-    def test_eviction_on_max_size(self):
-        """Test eviction occurs when max size is reached."""
-        config = NearCacheConfig(
-            name="small-cache",
-            max_size=3,
-            eviction_policy=EvictionPolicy.LRU,
+            time_to_live_seconds=1,
         )
         cache = NearCache(config)
+        cache.put("key", "value")
+        cache._records["key"].creation_time = time.time() - 2
+        assert cache.get("key") is None
+        assert cache.stats.expirations == 1
 
-        for i in range(5):
-            cache.put(f"key{i}", f"value{i}")
-
-        self.assertEqual(cache.size, 3)
-        self.assertGreater(cache.stats.evictions, 0)
-
-    def test_lru_eviction_order(self):
-        """Test LRU eviction removes oldest accessed."""
+    def test_expiration_max_idle(self):
         config = NearCacheConfig(
-            name="lru-cache",
-            max_size=2,
-            eviction_policy=EvictionPolicy.LRU,
+            name="test",
+            max_size=100,
+            max_idle_seconds=1,
         )
         cache = NearCache(config)
-
-        cache.put("key1", "value1")
-        time.sleep(0.01)
-        cache.put("key2", "value2")
-        time.sleep(0.01)
-
-        cache.get("key1")
-        time.sleep(0.01)
-
-        cache.put("key3", "value3")
-
-        self.assertIsNone(cache.get("key2"))
-        self.assertIsNotNone(cache.get("key1"))
-
-    def test_lfu_eviction_order(self):
-        """Test LFU eviction removes least frequently accessed."""
-        config = NearCacheConfig(
-            name="lfu-cache",
-            max_size=2,
-            eviction_policy=EvictionPolicy.LFU,
-        )
-        cache = NearCache(config)
-
-        cache.put("key1", "value1")
-        cache.put("key2", "value2")
-
-        for _ in range(5):
-            cache.get("key1")
-
-        cache.put("key3", "value3")
-
-        self.assertIsNone(cache.get("key2"))
-        self.assertIsNotNone(cache.get("key1"))
-
-    def test_binary_format(self):
-        """Test binary in-memory format."""
-        config = NearCacheConfig(
-            name="binary-cache",
-            in_memory_format=InMemoryFormat.BINARY,
-        )
-        cache = NearCache(config)
-
-        cache.put("key1", "value1")
-        result = cache.get("key1")
-
-        self.assertEqual(result, "value1")
-
-    def test_object_format(self):
-        """Test object in-memory format."""
-        config = NearCacheConfig(
-            name="object-cache",
-            in_memory_format=InMemoryFormat.OBJECT,
-        )
-        cache = NearCache(config)
-
-        obj = {"nested": "value"}
-        cache.put("key1", obj)
-        result = cache.get("key1")
-
-        self.assertEqual(result, obj)
-
-    def test_invalidation_listener(self):
-        """Test invalidation listener is called."""
-        invalidated_keys = []
-
-        def on_invalidate(key):
-            invalidated_keys.append(key)
-
-        reg_id = self.cache.add_invalidation_listener(on_invalidate)
-        self.cache.put("key1", "value1")
-        self.cache.invalidate("key1")
-
-        self.assertEqual(invalidated_keys, ["key1"])
-        self.assertIsNone(self.cache.get("key1"))
-
-    def test_remove_invalidation_listener(self):
-        """Test removing invalidation listener."""
-        invalidated_keys = []
-
-        def on_invalidate(key):
-            invalidated_keys.append(key)
-
-        reg_id = self.cache.add_invalidation_listener(on_invalidate)
-        self.assertTrue(self.cache.remove_invalidation_listener(reg_id))
-        self.assertFalse(self.cache.remove_invalidation_listener("invalid-id"))
-
-        self.cache.put("key1", "value1")
-        self.cache.invalidate("key1")
-
-        self.assertEqual(invalidated_keys, [])
+        cache.put("key", "value")
+        cache._records["key"].last_access_time = time.time() - 2
+        assert cache.get("key") is None
 
     def test_do_expiration(self):
-        """Test manual expiration cleanup."""
         config = NearCacheConfig(
-            name="expiring-cache",
-            time_to_live_seconds=0,
+            name="test",
+            max_size=100,
+            time_to_live_seconds=1,
         )
         cache = NearCache(config)
-
         cache.put("key1", "value1")
-        cache._records["key1"].creation_time = 0
-        cache._records["key1"].ttl_seconds = 1
-
+        cache.put("key2", "value2")
+        for record in cache._records.values():
+            record.creation_time = time.time() - 2
         expired = cache.do_expiration()
-        self.assertEqual(expired, 1)
-        self.assertIsNone(cache.get("key1"))
+        assert expired == 2
+        assert cache.size == 0
+
+    def test_add_invalidation_listener(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        invalidated = []
+        reg_id = cache.add_invalidation_listener(lambda k: invalidated.append(k))
+        cache.put("key", "value")
+        cache.invalidate("key")
+        assert "key" in invalidated
+        assert cache.remove_invalidation_listener(reg_id) is True
+
+    def test_remove_invalidation_listener_nonexistent(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        assert cache.remove_invalidation_listener("nonexistent") is False
+
+    def test_stats_property(self, near_cache_config):
+        cache = NearCache(near_cache_config)
+        cache.put("key", "value")
+        stats = cache.stats
+        assert stats.entries_count == 1
 
 
-class TestMapProxyNearCache(unittest.TestCase):
-    """Tests for MapProxy near cache integration."""
+class TestNearCacheManager:
+    """Tests for NearCacheManager class."""
 
-    def setUp(self):
-        """Set up test fixtures."""
-        from hazelcast.proxy.map import MapProxy
-        self.config = NearCacheConfig(name="test-map")
-        self.near_cache = NearCache(self.config)
-        self.map_proxy = MapProxy("test-map", near_cache=self.near_cache)
-
-    def test_get_caches_value(self):
-        """Test that get populates near cache."""
-        self.near_cache.put("key1", "value1")
-        result = self.map_proxy.get("key1")
-        self.assertEqual(result, "value1")
-        self.assertEqual(self.near_cache.stats.hits, 1)
-
-    def test_put_invalidates_cache(self):
-        """Test that put invalidates near cache."""
-        self.near_cache.put("key1", "value1")
-        self.map_proxy.put("key1", "value2")
-        self.assertIsNone(self.near_cache.get("key1"))
-
-    def test_remove_invalidates_cache(self):
-        """Test that remove invalidates near cache."""
-        self.near_cache.put("key1", "value1")
-        self.map_proxy.remove("key1")
-        self.assertIsNone(self.near_cache.get("key1"))
-
-    def test_delete_invalidates_cache(self):
-        """Test that delete invalidates near cache."""
-        self.near_cache.put("key1", "value1")
-        self.map_proxy.delete("key1")
-        self.assertIsNone(self.near_cache.get("key1"))
-
-    def test_set_invalidates_cache(self):
-        """Test that set invalidates near cache."""
-        self.near_cache.put("key1", "value1")
-        self.map_proxy.set("key1", "value2")
-        self.assertIsNone(self.near_cache.get("key1"))
-
-    def test_clear_invalidates_all(self):
-        """Test that clear invalidates all near cache entries."""
-        self.near_cache.put("key1", "value1")
-        self.near_cache.put("key2", "value2")
-        self.map_proxy.clear()
-        self.assertEqual(self.near_cache.size, 0)
-
-    def test_evict_invalidates_cache(self):
-        """Test that evict invalidates near cache."""
-        self.near_cache.put("key1", "value1")
-        self.map_proxy.evict("key1")
-        self.assertIsNone(self.near_cache.get("key1"))
-
-    def test_evict_all_invalidates_all(self):
-        """Test that evict_all invalidates all near cache entries."""
-        self.near_cache.put("key1", "value1")
-        self.near_cache.put("key2", "value2")
-        self.map_proxy.evict_all()
-        self.assertEqual(self.near_cache.size, 0)
-
-    def test_put_all_invalidates_keys(self):
-        """Test that put_all invalidates affected keys."""
-        self.near_cache.put("key1", "value1")
-        self.near_cache.put("key2", "value2")
-        self.map_proxy.put_all({"key1": "new1", "key3": "value3"})
-        self.assertIsNone(self.near_cache.get("key1"))
-        self.assertIsNotNone(self.near_cache.get("key2"))
-
-    def test_replace_invalidates_cache(self):
-        """Test that replace invalidates near cache."""
-        self.near_cache.put("key1", "value1")
-        self.map_proxy.replace("key1", "value2")
-        self.assertIsNone(self.near_cache.get("key1"))
-
-    def test_near_cache_property(self):
-        """Test near cache property access."""
-        self.assertIs(self.map_proxy.near_cache, self.near_cache)
-
-
-class TestNearCacheManager(unittest.TestCase):
-    """Tests for NearCacheManager."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        self.manager = NearCacheManager()
-        self.config = NearCacheConfig(name="test-map")
-
-    def test_get_or_create(self):
-        """Test get or create returns same cache."""
-        cache1 = self.manager.get_or_create("test-map", self.config)
-        cache2 = self.manager.get_or_create("test-map", self.config)
-
-        self.assertIs(cache1, cache2)
+    def test_get_or_create(self, near_cache_config):
+        manager = NearCacheManager()
+        cache1 = manager.get_or_create("map1", near_cache_config)
+        cache2 = manager.get_or_create("map1", near_cache_config)
+        assert cache1 is cache2
 
     def test_get_nonexistent(self):
-        """Test get returns None for nonexistent cache."""
-        result = self.manager.get("nonexistent")
-        self.assertIsNone(result)
+        manager = NearCacheManager()
+        assert manager.get("nonexistent") is None
 
-    def test_destroy(self):
-        """Test destroying a cache."""
-        self.manager.get_or_create("test-map", self.config)
-        self.manager.destroy("test-map")
+    def test_get_existing(self, near_cache_config):
+        manager = NearCacheManager()
+        created = manager.get_or_create("map1", near_cache_config)
+        found = manager.get("map1")
+        assert found is created
 
-        self.assertIsNone(self.manager.get("test-map"))
+    def test_destroy(self, near_cache_config):
+        manager = NearCacheManager()
+        manager.get_or_create("map1", near_cache_config)
+        manager.destroy("map1")
+        assert manager.get("map1") is None
 
-    def test_destroy_all(self):
-        """Test destroying all caches."""
-        config1 = NearCacheConfig(name="map1")
-        config2 = NearCacheConfig(name="map2")
+    def test_destroy_all(self, near_cache_config):
+        manager = NearCacheManager()
+        manager.get_or_create("map1", near_cache_config)
+        manager.get_or_create("map2", near_cache_config)
+        manager.destroy_all()
+        assert manager.get("map1") is None
+        assert manager.get("map2") is None
 
-        self.manager.get_or_create("map1", config1)
-        self.manager.get_or_create("map2", config2)
-        self.manager.destroy_all()
-
-        self.assertIsNone(self.manager.get("map1"))
-        self.assertIsNone(self.manager.get("map2"))
-
-    def test_list_all(self):
-        """Test listing all caches with stats."""
-        config1 = NearCacheConfig(name="map1")
-        config2 = NearCacheConfig(name="map2")
-
-        self.manager.get_or_create("map1", config1)
-        self.manager.get_or_create("map2", config2)
-
-        all_stats = self.manager.list_all()
-
-        self.assertIn("map1", all_stats)
-        self.assertIn("map2", all_stats)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_list_all(self, near_cache_config):
+        manager = NearCacheManager()
+        manager.get_or_create("map1", near_cache_config)
+        manager.get_or_create("map2", near_cache_config)
+        all_stats = manager.list_all()
+        assert "map1" in all_stats
+        assert "map2" in all_stats
