@@ -685,3 +685,513 @@ class TestUUIDSerialization:
         data = self.service.to_data(original)
         result = self.service.to_object(data)
         assert result == original
+
+
+class TestCompactSchema:
+    """Tests for compact serialization Schema."""
+
+    def test_schema_creation(self):
+        from hazelcast.serialization.compact import Schema
+        schema = Schema(type_name="Person")
+        assert schema.type_name == "Person"
+        assert schema.schema_id != 0
+
+    def test_schema_with_fields(self):
+        from hazelcast.serialization.compact import Schema, FieldDescriptor
+        fields = [
+            FieldDescriptor(name="name", field_type="string", index=0),
+            FieldDescriptor(name="age", field_type="int32", index=1),
+        ]
+        schema = Schema(type_name="Person", fields=fields)
+        assert len(schema.fields) == 2
+        assert schema.fields[0].name == "name"
+
+    def test_schema_id_computation(self):
+        from hazelcast.serialization.compact import Schema
+        schema1 = Schema(type_name="Person")
+        schema2 = Schema(type_name="Person")
+        assert schema1.schema_id == schema2.schema_id
+
+    def test_different_type_names_different_ids(self):
+        from hazelcast.serialization.compact import Schema
+        schema1 = Schema(type_name="Person")
+        schema2 = Schema(type_name="Address")
+        assert schema1.schema_id != schema2.schema_id
+
+    def test_get_field(self):
+        from hazelcast.serialization.compact import Schema, FieldDescriptor
+        fields = [FieldDescriptor(name="name", field_type="string", index=0)]
+        schema = Schema(type_name="Person", fields=fields)
+        field = schema.get_field("name")
+        assert field is not None
+        assert field.name == "name"
+
+    def test_get_field_not_found(self):
+        from hazelcast.serialization.compact import Schema
+        schema = Schema(type_name="Person")
+        field = schema.get_field("nonexistent")
+        assert field is None
+
+    def test_add_field(self):
+        from hazelcast.serialization.compact import Schema
+        schema = Schema(type_name="Person")
+        field = schema.add_field("name", "string")
+        assert field.name == "name"
+        assert field.field_type == "string"
+        assert field.index == 0
+
+
+class TestFieldDescriptor:
+    """Tests for FieldDescriptor."""
+
+    def test_field_descriptor_creation(self):
+        from hazelcast.serialization.compact import FieldDescriptor
+        field = FieldDescriptor(name="age", field_type="int32", index=0)
+        assert field.name == "age"
+        assert field.field_type == "int32"
+        assert field.index == 0
+
+    def test_field_kind_property(self):
+        from hazelcast.serialization.compact import FieldDescriptor, FieldKind
+        field = FieldDescriptor(name="age", field_type="int32", index=0)
+        assert field.kind == FieldKind.INT32
+
+    def test_field_kind_string(self):
+        from hazelcast.serialization.compact import FieldDescriptor, FieldKind
+        field = FieldDescriptor(name="name", field_type="string", index=0)
+        assert field.kind == FieldKind.STRING
+
+
+class TestSchemaService:
+    """Tests for SchemaService."""
+
+    def test_register_and_get_by_id(self):
+        from hazelcast.serialization.compact import SchemaService, Schema
+        service = SchemaService()
+        schema = Schema(type_name="Person")
+        service.register(schema)
+        result = service.get_by_id(schema.schema_id)
+        assert result is schema
+
+    def test_get_by_type_name(self):
+        from hazelcast.serialization.compact import SchemaService, Schema
+        service = SchemaService()
+        schema = Schema(type_name="Person")
+        service.register(schema)
+        result = service.get_by_type_name("Person")
+        assert result is schema
+
+    def test_has_schema(self):
+        from hazelcast.serialization.compact import SchemaService, Schema
+        service = SchemaService()
+        schema = Schema(type_name="Person")
+        assert not service.has_schema(schema.schema_id)
+        service.register(schema)
+        assert service.has_schema(schema.schema_id)
+
+    def test_all_schemas(self):
+        from hazelcast.serialization.compact import SchemaService, Schema
+        service = SchemaService()
+        schema1 = Schema(type_name="Person")
+        schema2 = Schema(type_name="Address")
+        service.register(schema1)
+        service.register(schema2)
+        schemas = service.all_schemas()
+        assert len(schemas) == 2
+
+
+class TestCompactWriter:
+    """Tests for DefaultCompactWriter."""
+
+    def test_write_boolean(self):
+        from hazelcast.serialization.compact import DefaultCompactWriter, Schema
+        schema = Schema(type_name="Test")
+        writer = DefaultCompactWriter(schema)
+        writer.write_boolean("flag", True)
+        assert writer.fields["flag"] is True
+        assert writer.field_types["flag"] == "boolean"
+
+    def test_write_int32(self):
+        from hazelcast.serialization.compact import DefaultCompactWriter, Schema
+        schema = Schema(type_name="Test")
+        writer = DefaultCompactWriter(schema)
+        writer.write_int32("count", 42)
+        assert writer.fields["count"] == 42
+        assert writer.field_types["count"] == "int32"
+
+    def test_write_string(self):
+        from hazelcast.serialization.compact import DefaultCompactWriter, Schema
+        schema = Schema(type_name="Test")
+        writer = DefaultCompactWriter(schema)
+        writer.write_string("name", "hello")
+        assert writer.fields["name"] == "hello"
+        assert writer.field_types["name"] == "string"
+
+    def test_write_float64(self):
+        from hazelcast.serialization.compact import DefaultCompactWriter, Schema
+        schema = Schema(type_name="Test")
+        writer = DefaultCompactWriter(schema)
+        writer.write_float64("value", 3.14)
+        assert writer.fields["value"] == 3.14
+        assert writer.field_types["value"] == "float64"
+
+    def test_write_array_of_int32(self):
+        from hazelcast.serialization.compact import DefaultCompactWriter, Schema
+        schema = Schema(type_name="Test")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int32("numbers", [1, 2, 3])
+        assert writer.fields["numbers"] == [1, 2, 3]
+        assert writer.field_types["numbers"] == "array_int32"
+
+    def test_write_nullable_int32(self):
+        from hazelcast.serialization.compact import DefaultCompactWriter, Schema
+        schema = Schema(type_name="Test")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int32("value", None)
+        assert writer.fields["value"] is None
+        assert writer.field_types["value"] == "nullable_int32"
+
+
+class TestCompactReader:
+    """Tests for DefaultCompactReader."""
+
+    def test_read_boolean(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {"flag": True})
+        assert reader.read_boolean("flag") is True
+
+    def test_read_boolean_default(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {})
+        assert reader.read_boolean("flag") is False
+
+    def test_read_int32(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {"count": 42})
+        assert reader.read_int32("count") == 42
+
+    def test_read_string(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {"name": "hello"})
+        assert reader.read_string("name") == "hello"
+
+    def test_read_float64(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {"value": 3.14})
+        assert reader.read_float64("value") == 3.14
+
+    def test_read_array_of_int32(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {"numbers": [1, 2, 3]})
+        assert reader.read_array_of_int32("numbers") == [1, 2, 3]
+
+    def test_read_nullable_int32_present(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {"value": 42})
+        assert reader.read_nullable_int32("value") == 42
+
+    def test_read_nullable_int32_absent(self):
+        from hazelcast.serialization.compact import DefaultCompactReader, Schema
+        schema = Schema(type_name="Test")
+        reader = DefaultCompactReader(schema, {"value": None})
+        assert reader.read_nullable_int32("value") is None
+
+
+class TestCompactSerializationService:
+    """Tests for CompactSerializationService."""
+
+    def test_register_serializer(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import (
+            CompactSerializationService,
+            ReflectiveCompactSerializer,
+        )
+
+        @dataclass
+        class Person:
+            name: str
+            age: int
+
+        service = CompactSerializationService()
+        serializer = ReflectiveCompactSerializer(Person, "Person")
+        service.register_serializer(serializer)
+
+        assert service.get_serializer("Person") is serializer
+        assert service.get_serializer_for_class(Person) is serializer
+
+    def test_serialize_deserialize_dataclass(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import (
+            CompactSerializationService,
+            ReflectiveCompactSerializer,
+        )
+
+        @dataclass
+        class Person:
+            name: str
+            age: int
+
+        service = CompactSerializationService()
+        serializer = ReflectiveCompactSerializer(Person, "Person")
+        service.register_serializer(serializer)
+
+        original = Person(name="Alice", age=30)
+        data = service.serialize(original)
+        result = service.deserialize(data, "Person")
+
+        assert result.name == "Alice"
+        assert result.age == 30
+
+    def test_serialize_no_serializer_error(self):
+        from hazelcast.serialization.compact import CompactSerializationService
+
+        service = CompactSerializationService()
+
+        with pytest.raises(ValueError) as exc_info:
+            service.serialize(object())
+
+        assert "No compact serializer registered" in str(exc_info.value)
+
+    def test_deserialize_no_serializer_error(self):
+        from hazelcast.serialization.compact import CompactSerializationService
+
+        service = CompactSerializationService()
+
+        with pytest.raises(ValueError) as exc_info:
+            service.deserialize(b"", "Unknown")
+
+        assert "No compact serializer registered" in str(exc_info.value)
+
+    def test_schema_service_property(self):
+        from hazelcast.serialization.compact import CompactSerializationService, SchemaService
+
+        service = CompactSerializationService()
+        assert isinstance(service.schema_service, SchemaService)
+
+    def test_serialize_registers_schema(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import (
+            CompactSerializationService,
+            ReflectiveCompactSerializer,
+        )
+
+        @dataclass
+        class Person:
+            name: str
+            age: int
+
+        service = CompactSerializationService()
+        serializer = ReflectiveCompactSerializer(Person, "Person")
+        service.register_serializer(serializer)
+
+        original = Person(name="Bob", age=25)
+        service.serialize(original)
+
+        assert service.schema_service.get_by_type_name("Person") is not None
+
+
+class TestReflectiveCompactSerializer:
+    """Tests for ReflectiveCompactSerializer."""
+
+    def test_type_name(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import ReflectiveCompactSerializer
+
+        @dataclass
+        class Person:
+            name: str
+
+        serializer = ReflectiveCompactSerializer(Person, "CustomPerson")
+        assert serializer.type_name == "CustomPerson"
+
+    def test_type_name_default(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import ReflectiveCompactSerializer
+
+        @dataclass
+        class Person:
+            name: str
+
+        serializer = ReflectiveCompactSerializer(Person)
+        assert serializer.type_name == "Person"
+
+    def test_clazz_property(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import ReflectiveCompactSerializer
+
+        @dataclass
+        class Person:
+            name: str
+
+        serializer = ReflectiveCompactSerializer(Person)
+        assert serializer.clazz is Person
+
+    def test_write_bool_field(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import (
+            ReflectiveCompactSerializer,
+            DefaultCompactWriter,
+            Schema,
+        )
+
+        @dataclass
+        class Flags:
+            active: bool
+
+        serializer = ReflectiveCompactSerializer(Flags)
+        writer = DefaultCompactWriter(Schema(type_name="Flags"))
+
+        serializer.write(writer, Flags(active=True))
+        assert writer.fields["active"] is True
+
+    def test_write_int_field(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import (
+            ReflectiveCompactSerializer,
+            DefaultCompactWriter,
+            Schema,
+        )
+
+        @dataclass
+        class Counter:
+            count: int
+
+        serializer = ReflectiveCompactSerializer(Counter)
+        writer = DefaultCompactWriter(Schema(type_name="Counter"))
+
+        serializer.write(writer, Counter(count=42))
+        assert writer.fields["count"] == 42
+
+    def test_read_dataclass(self):
+        from dataclasses import dataclass
+        from hazelcast.serialization.compact import (
+            ReflectiveCompactSerializer,
+            DefaultCompactReader,
+            Schema,
+        )
+
+        @dataclass
+        class Person:
+            name: str
+            age: int
+
+        serializer = ReflectiveCompactSerializer(Person)
+        reader = DefaultCompactReader(
+            Schema(type_name="Person"),
+            {"name": "Charlie", "age": 35}
+        )
+
+        result = serializer.read(reader)
+        assert result.name == "Charlie"
+        assert result.age == 35
+
+
+class TestCompactStreamWriter:
+    """Tests for CompactStreamWriter."""
+
+    def test_write_boolean_true(self):
+        from hazelcast.serialization.compact import CompactStreamWriter
+        writer = CompactStreamWriter()
+        writer.write_boolean(True)
+        assert writer.to_bytes() == b"\x01"
+
+    def test_write_boolean_false(self):
+        from hazelcast.serialization.compact import CompactStreamWriter
+        writer = CompactStreamWriter()
+        writer.write_boolean(False)
+        assert writer.to_bytes() == b"\x00"
+
+    def test_write_int32(self):
+        from hazelcast.serialization.compact import CompactStreamWriter
+        writer = CompactStreamWriter()
+        writer.write_int32(42)
+        assert writer.to_bytes() == struct.pack("<i", 42)
+
+    def test_write_int64(self):
+        from hazelcast.serialization.compact import CompactStreamWriter
+        writer = CompactStreamWriter()
+        writer.write_int64(10000000000)
+        assert writer.to_bytes() == struct.pack("<q", 10000000000)
+
+    def test_write_float32(self):
+        from hazelcast.serialization.compact import CompactStreamWriter
+        writer = CompactStreamWriter()
+        writer.write_float32(3.14)
+        result = writer.to_bytes()
+        assert len(result) == 4
+
+    def test_write_string(self):
+        from hazelcast.serialization.compact import CompactStreamWriter
+        writer = CompactStreamWriter()
+        writer.write_string("hello")
+        result = writer.to_bytes()
+        assert result[:4] == struct.pack("<i", 5)
+        assert result[4:] == b"hello"
+
+    def test_write_string_none(self):
+        from hazelcast.serialization.compact import CompactStreamWriter
+        writer = CompactStreamWriter()
+        writer.write_string(None)
+        assert writer.to_bytes() == struct.pack("<i", -1)
+
+
+class TestCompactStreamReader:
+    """Tests for CompactStreamReader."""
+
+    def test_read_boolean_true(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        reader = CompactStreamReader(b"\x01")
+        assert reader.read_boolean() is True
+
+    def test_read_boolean_false(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        reader = CompactStreamReader(b"\x00")
+        assert reader.read_boolean() is False
+
+    def test_read_int32(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        data = struct.pack("<i", -12345)
+        reader = CompactStreamReader(data)
+        assert reader.read_int32() == -12345
+
+    def test_read_int64(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        data = struct.pack("<q", 10000000000)
+        reader = CompactStreamReader(data)
+        assert reader.read_int64() == 10000000000
+
+    def test_read_float64(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        data = struct.pack("<d", 3.14159)
+        reader = CompactStreamReader(data)
+        result = reader.read_float64()
+        assert abs(result - 3.14159) < 0.00001
+
+    def test_read_string(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        data = struct.pack("<i", 5) + b"hello"
+        reader = CompactStreamReader(data)
+        assert reader.read_string() == "hello"
+
+    def test_read_string_null(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        data = struct.pack("<i", -1)
+        reader = CompactStreamReader(data)
+        assert reader.read_string() is None
+
+    def test_position_tracking(self):
+        from hazelcast.serialization.compact import CompactStreamReader
+        data = struct.pack("<ii", 1, 2)
+        reader = CompactStreamReader(data)
+        assert reader.position == 0
+        reader.read_int32()
+        assert reader.position == 4
+        reader.read_int32()
+        assert reader.position == 8

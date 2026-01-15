@@ -2,6 +2,7 @@
 
 import struct
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import Any, Callable, Dict, List, Optional, Type
 
 from hazelcast.serialization.api import (
@@ -11,6 +12,43 @@ from hazelcast.serialization.api import (
 )
 
 
+class FieldKind(IntEnum):
+    """Field type identifiers for compact serialization."""
+
+    BOOLEAN = 0
+    INT8 = 1
+    INT16 = 2
+    INT32 = 3
+    INT64 = 4
+    FLOAT32 = 5
+    FLOAT64 = 6
+    STRING = 7
+    COMPACT = 8
+    ARRAY_BOOLEAN = 9
+    ARRAY_INT32 = 10
+    ARRAY_STRING = 11
+    NULLABLE_BOOLEAN = 12
+    NULLABLE_INT32 = 13
+
+
+FIELD_KIND_MAP = {
+    "boolean": FieldKind.BOOLEAN,
+    "int8": FieldKind.INT8,
+    "int16": FieldKind.INT16,
+    "int32": FieldKind.INT32,
+    "int64": FieldKind.INT64,
+    "float32": FieldKind.FLOAT32,
+    "float64": FieldKind.FLOAT64,
+    "string": FieldKind.STRING,
+    "compact": FieldKind.COMPACT,
+    "array_boolean": FieldKind.ARRAY_BOOLEAN,
+    "array_int32": FieldKind.ARRAY_INT32,
+    "array_string": FieldKind.ARRAY_STRING,
+    "nullable_boolean": FieldKind.NULLABLE_BOOLEAN,
+    "nullable_int32": FieldKind.NULLABLE_INT32,
+}
+
+
 @dataclass
 class FieldDescriptor:
     """Describes a field in a compact schema."""
@@ -18,6 +56,11 @@ class FieldDescriptor:
     name: str
     field_type: str
     index: int
+
+    @property
+    def kind(self) -> FieldKind:
+        """Get the field kind enum value."""
+        return FIELD_KIND_MAP.get(self.field_type, FieldKind.COMPACT)
 
 
 @dataclass
@@ -29,7 +72,7 @@ class Schema:
     schema_id: int = 0
 
     def __post_init__(self):
-        if self.schema_id == 0:
+        if self.schema_id == 0 and self.type_name:
             self.schema_id = self._compute_schema_id()
 
     def _compute_schema_id(self) -> int:
@@ -38,6 +81,48 @@ class Schema:
         for f in self.fields:
             h = h * 31 + hash(f.name) + hash(f.field_type)
         return h & 0x7FFFFFFF
+
+    def get_field(self, name: str) -> Optional[FieldDescriptor]:
+        """Get a field descriptor by name."""
+        for f in self.fields:
+            if f.name == name:
+                return f
+        return None
+
+    def add_field(self, name: str, field_type: str) -> FieldDescriptor:
+        """Add a field to the schema."""
+        descriptor = FieldDescriptor(name=name, field_type=field_type, index=len(self.fields))
+        self.fields.append(descriptor)
+        return descriptor
+
+
+class SchemaService:
+    """Service for managing compact serialization schemas."""
+
+    def __init__(self):
+        self._schemas_by_id: Dict[int, Schema] = {}
+        self._schemas_by_type: Dict[str, Schema] = {}
+
+    def register(self, schema: Schema) -> None:
+        """Register a schema."""
+        self._schemas_by_id[schema.schema_id] = schema
+        self._schemas_by_type[schema.type_name] = schema
+
+    def get_by_id(self, schema_id: int) -> Optional[Schema]:
+        """Get a schema by its ID."""
+        return self._schemas_by_id.get(schema_id)
+
+    def get_by_type_name(self, type_name: str) -> Optional[Schema]:
+        """Get a schema by type name."""
+        return self._schemas_by_type.get(type_name)
+
+    def has_schema(self, schema_id: int) -> bool:
+        """Check if a schema is registered."""
+        return schema_id in self._schemas_by_id
+
+    def all_schemas(self) -> List[Schema]:
+        """Get all registered schemas."""
+        return list(self._schemas_by_id.values())
 
 
 class DefaultCompactWriter(CompactWriter):
@@ -163,6 +248,108 @@ class DefaultCompactReader(CompactReader):
         return self._fields.get(field_name)
 
 
+class CompactStreamWriter:
+    """Binary stream writer for compact serialization."""
+
+    def __init__(self):
+        self._buffer = bytearray()
+
+    def write_boolean(self, value: bool) -> None:
+        self._buffer.append(1 if value else 0)
+
+    def write_int8(self, value: int) -> None:
+        self._buffer.extend(struct.pack("<b", value))
+
+    def write_int16(self, value: int) -> None:
+        self._buffer.extend(struct.pack("<h", value))
+
+    def write_int32(self, value: int) -> None:
+        self._buffer.extend(struct.pack("<i", value))
+
+    def write_int64(self, value: int) -> None:
+        self._buffer.extend(struct.pack("<q", value))
+
+    def write_float32(self, value: float) -> None:
+        self._buffer.extend(struct.pack("<f", value))
+
+    def write_float64(self, value: float) -> None:
+        self._buffer.extend(struct.pack("<d", value))
+
+    def write_string(self, value: str) -> None:
+        if value is None:
+            self.write_int32(-1)
+        else:
+            encoded = value.encode("utf-8")
+            self.write_int32(len(encoded))
+            self._buffer.extend(encoded)
+
+    def write_bytes(self, value: bytes) -> None:
+        self._buffer.extend(value)
+
+    def to_bytes(self) -> bytes:
+        return bytes(self._buffer)
+
+
+class CompactStreamReader:
+    """Binary stream reader for compact serialization."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+        self._pos = 0
+
+    def read_boolean(self) -> bool:
+        value = self._data[self._pos]
+        self._pos += 1
+        return value != 0
+
+    def read_int8(self) -> int:
+        value = struct.unpack_from("<b", self._data, self._pos)[0]
+        self._pos += 1
+        return value
+
+    def read_int16(self) -> int:
+        value = struct.unpack_from("<h", self._data, self._pos)[0]
+        self._pos += 2
+        return value
+
+    def read_int32(self) -> int:
+        value = struct.unpack_from("<i", self._data, self._pos)[0]
+        self._pos += 4
+        return value
+
+    def read_int64(self) -> int:
+        value = struct.unpack_from("<q", self._data, self._pos)[0]
+        self._pos += 8
+        return value
+
+    def read_float32(self) -> float:
+        value = struct.unpack_from("<f", self._data, self._pos)[0]
+        self._pos += 4
+        return value
+
+    def read_float64(self) -> float:
+        value = struct.unpack_from("<d", self._data, self._pos)[0]
+        self._pos += 8
+        return value
+
+    def read_string(self) -> Optional[str]:
+        length = self.read_int32()
+        if length < 0:
+            return None
+        data = self._data[self._pos:self._pos + length]
+        self._pos += length
+        return data.decode("utf-8")
+
+    def read_bytes(self, length: int) -> bytes:
+        data = self._data[self._pos:self._pos + length]
+        self._pos += length
+        return data
+
+    @property
+    def position(self) -> int:
+        return self._pos
+
+
 class CompactSerializationService:
     """Service for compact serialization."""
 
@@ -171,7 +358,12 @@ class CompactSerializationService:
     def __init__(self):
         self._serializers: Dict[str, CompactSerializer] = {}
         self._class_to_type_name: Dict[type, str] = {}
-        self._schemas: Dict[int, Schema] = {}
+        self._schema_service = SchemaService()
+
+    @property
+    def schema_service(self) -> SchemaService:
+        """Get the schema service."""
+        return self._schema_service
 
     def register_serializer(self, serializer: CompactSerializer) -> None:
         """Register a compact serializer."""
@@ -191,11 +383,11 @@ class CompactSerializationService:
 
     def register_schema(self, schema: Schema) -> None:
         """Register a schema."""
-        self._schemas[schema.schema_id] = schema
+        self._schema_service.register(schema)
 
     def get_schema(self, schema_id: int) -> Optional[Schema]:
         """Get a schema by ID."""
-        return self._schemas.get(schema_id)
+        return self._schema_service.get_by_id(schema_id)
 
     def serialize(self, obj: Any) -> bytes:
         """Serialize an object using compact format."""
@@ -210,16 +402,17 @@ class CompactSerializationService:
 
         fields_with_types = []
         for name, value in writer.fields.items():
-            field_type = writer.field_types.get(name, "object")
+            field_type = writer.field_types.get(name, "compact")
             fields_with_types.append((name, field_type, value))
 
         schema.fields = [
             FieldDescriptor(name=name, field_type=ft, index=i)
             for i, (name, ft, _) in enumerate(fields_with_types)
         ]
+        schema.schema_id = schema._compute_schema_id()
         self.register_schema(schema)
 
-        return self._encode(schema, writer.fields)
+        return self._encode(schema, writer.fields, writer.field_types)
 
     def deserialize(self, data: bytes, type_name: str) -> Any:
         """Deserialize bytes to an object."""
@@ -235,21 +428,121 @@ class CompactSerializationService:
         reader = DefaultCompactReader(schema, fields)
         return serializer.read(reader)
 
-    def _encode(self, schema: Schema, fields: Dict[str, Any]) -> bytes:
+    def _encode(self, schema: Schema, fields: Dict[str, Any], field_types: Dict[str, str]) -> bytes:
         """Encode schema and fields to bytes."""
-        import json
-        payload = {
-            "schema_id": schema.schema_id,
-            "type_name": schema.type_name,
-            "fields": fields,
-        }
-        return json.dumps(payload).encode("utf-8")
+        writer = CompactStreamWriter()
+        writer.write_int32(schema.schema_id)
+        writer.write_int32(len(fields))
+
+        for name, value in fields.items():
+            field_type = field_types.get(name, "compact")
+            writer.write_string(name)
+            writer.write_int8(FIELD_KIND_MAP.get(field_type, FieldKind.COMPACT))
+            self._write_field_value(writer, value, field_type)
+
+        return writer.to_bytes()
 
     def _decode(self, data: bytes) -> tuple:
         """Decode bytes to schema ID and fields."""
-        import json
-        payload = json.loads(data.decode("utf-8"))
-        return payload.get("schema_id", 0), payload.get("fields", {})
+        reader = CompactStreamReader(data)
+        schema_id = reader.read_int32()
+        field_count = reader.read_int32()
+
+        fields = {}
+        for _ in range(field_count):
+            name = reader.read_string()
+            field_kind = reader.read_int8()
+            value = self._read_field_value(reader, field_kind)
+            fields[name] = value
+
+        return schema_id, fields
+
+    def _write_field_value(self, writer: CompactStreamWriter, value: Any, field_type: str) -> None:
+        """Write a field value based on its type."""
+        if field_type == "boolean":
+            writer.write_boolean(value)
+        elif field_type == "int8":
+            writer.write_int8(value)
+        elif field_type == "int16":
+            writer.write_int16(value)
+        elif field_type == "int32":
+            writer.write_int32(value)
+        elif field_type == "int64":
+            writer.write_int64(value)
+        elif field_type == "float32":
+            writer.write_float32(value)
+        elif field_type == "float64":
+            writer.write_float64(value)
+        elif field_type == "string":
+            writer.write_string(value)
+        elif field_type == "nullable_boolean":
+            writer.write_boolean(value is not None)
+            if value is not None:
+                writer.write_boolean(value)
+        elif field_type == "nullable_int32":
+            writer.write_boolean(value is not None)
+            if value is not None:
+                writer.write_int32(value)
+        elif field_type == "array_boolean":
+            self._write_array(writer, value, writer.write_boolean)
+        elif field_type == "array_int32":
+            self._write_array(writer, value, writer.write_int32)
+        elif field_type == "array_string":
+            self._write_array(writer, value, writer.write_string)
+        else:
+            writer.write_boolean(value is not None)
+
+    def _read_field_value(self, reader: CompactStreamReader, field_kind: int) -> Any:
+        """Read a field value based on its kind."""
+        if field_kind == FieldKind.BOOLEAN:
+            return reader.read_boolean()
+        elif field_kind == FieldKind.INT8:
+            return reader.read_int8()
+        elif field_kind == FieldKind.INT16:
+            return reader.read_int16()
+        elif field_kind == FieldKind.INT32:
+            return reader.read_int32()
+        elif field_kind == FieldKind.INT64:
+            return reader.read_int64()
+        elif field_kind == FieldKind.FLOAT32:
+            return reader.read_float32()
+        elif field_kind == FieldKind.FLOAT64:
+            return reader.read_float64()
+        elif field_kind == FieldKind.STRING:
+            return reader.read_string()
+        elif field_kind == FieldKind.NULLABLE_BOOLEAN:
+            if reader.read_boolean():
+                return reader.read_boolean()
+            return None
+        elif field_kind == FieldKind.NULLABLE_INT32:
+            if reader.read_boolean():
+                return reader.read_int32()
+            return None
+        elif field_kind == FieldKind.ARRAY_BOOLEAN:
+            return self._read_array(reader, reader.read_boolean)
+        elif field_kind == FieldKind.ARRAY_INT32:
+            return self._read_array(reader, reader.read_int32)
+        elif field_kind == FieldKind.ARRAY_STRING:
+            return self._read_array(reader, reader.read_string)
+        else:
+            has_value = reader.read_boolean()
+            return None
+
+    def _write_array(self, writer: CompactStreamWriter, items: list, write_fn: Callable) -> None:
+        """Write an array of items."""
+        if items is None:
+            writer.write_int32(-1)
+        else:
+            writer.write_int32(len(items))
+            for item in items:
+                write_fn(item)
+
+    def _read_array(self, reader: CompactStreamReader, read_fn: Callable) -> Optional[list]:
+        """Read an array of items."""
+        length = reader.read_int32()
+        if length < 0:
+            return None
+        return [read_fn() for _ in range(length)]
 
 
 class ReflectiveCompactSerializer(CompactSerializer):
