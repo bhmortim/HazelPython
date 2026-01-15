@@ -313,10 +313,124 @@ class TestNearCache(unittest.TestCase):
         def on_invalidate(key):
             invalidated_keys.append(key)
 
-        self.cache.add_invalidation_listener(on_invalidate)
+        reg_id = self.cache.add_invalidation_listener(on_invalidate)
         self.cache.put("key1", "value1")
+        self.cache.invalidate("key1")
 
-        self.assertIsNotNone(self.cache.get("key1"))
+        self.assertEqual(invalidated_keys, ["key1"])
+        self.assertIsNone(self.cache.get("key1"))
+
+    def test_remove_invalidation_listener(self):
+        """Test removing invalidation listener."""
+        invalidated_keys = []
+
+        def on_invalidate(key):
+            invalidated_keys.append(key)
+
+        reg_id = self.cache.add_invalidation_listener(on_invalidate)
+        self.assertTrue(self.cache.remove_invalidation_listener(reg_id))
+        self.assertFalse(self.cache.remove_invalidation_listener("invalid-id"))
+
+        self.cache.put("key1", "value1")
+        self.cache.invalidate("key1")
+
+        self.assertEqual(invalidated_keys, [])
+
+    def test_do_expiration(self):
+        """Test manual expiration cleanup."""
+        config = NearCacheConfig(
+            name="expiring-cache",
+            time_to_live_seconds=0,
+        )
+        cache = NearCache(config)
+
+        cache.put("key1", "value1")
+        cache._records["key1"].creation_time = 0
+        cache._records["key1"].ttl_seconds = 1
+
+        expired = cache.do_expiration()
+        self.assertEqual(expired, 1)
+        self.assertIsNone(cache.get("key1"))
+
+
+class TestMapProxyNearCache(unittest.TestCase):
+    """Tests for MapProxy near cache integration."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        from hazelcast.proxy.map import MapProxy
+        self.config = NearCacheConfig(name="test-map")
+        self.near_cache = NearCache(self.config)
+        self.map_proxy = MapProxy("test-map", near_cache=self.near_cache)
+
+    def test_get_caches_value(self):
+        """Test that get populates near cache."""
+        self.near_cache.put("key1", "value1")
+        result = self.map_proxy.get("key1")
+        self.assertEqual(result, "value1")
+        self.assertEqual(self.near_cache.stats.hits, 1)
+
+    def test_put_invalidates_cache(self):
+        """Test that put invalidates near cache."""
+        self.near_cache.put("key1", "value1")
+        self.map_proxy.put("key1", "value2")
+        self.assertIsNone(self.near_cache.get("key1"))
+
+    def test_remove_invalidates_cache(self):
+        """Test that remove invalidates near cache."""
+        self.near_cache.put("key1", "value1")
+        self.map_proxy.remove("key1")
+        self.assertIsNone(self.near_cache.get("key1"))
+
+    def test_delete_invalidates_cache(self):
+        """Test that delete invalidates near cache."""
+        self.near_cache.put("key1", "value1")
+        self.map_proxy.delete("key1")
+        self.assertIsNone(self.near_cache.get("key1"))
+
+    def test_set_invalidates_cache(self):
+        """Test that set invalidates near cache."""
+        self.near_cache.put("key1", "value1")
+        self.map_proxy.set("key1", "value2")
+        self.assertIsNone(self.near_cache.get("key1"))
+
+    def test_clear_invalidates_all(self):
+        """Test that clear invalidates all near cache entries."""
+        self.near_cache.put("key1", "value1")
+        self.near_cache.put("key2", "value2")
+        self.map_proxy.clear()
+        self.assertEqual(self.near_cache.size, 0)
+
+    def test_evict_invalidates_cache(self):
+        """Test that evict invalidates near cache."""
+        self.near_cache.put("key1", "value1")
+        self.map_proxy.evict("key1")
+        self.assertIsNone(self.near_cache.get("key1"))
+
+    def test_evict_all_invalidates_all(self):
+        """Test that evict_all invalidates all near cache entries."""
+        self.near_cache.put("key1", "value1")
+        self.near_cache.put("key2", "value2")
+        self.map_proxy.evict_all()
+        self.assertEqual(self.near_cache.size, 0)
+
+    def test_put_all_invalidates_keys(self):
+        """Test that put_all invalidates affected keys."""
+        self.near_cache.put("key1", "value1")
+        self.near_cache.put("key2", "value2")
+        self.map_proxy.put_all({"key1": "new1", "key3": "value3"})
+        self.assertIsNone(self.near_cache.get("key1"))
+        self.assertIsNotNone(self.near_cache.get("key2"))
+
+    def test_replace_invalidates_cache(self):
+        """Test that replace invalidates near cache."""
+        self.near_cache.put("key1", "value1")
+        self.map_proxy.replace("key1", "value2")
+        self.assertIsNone(self.near_cache.get("key1"))
+
+    def test_near_cache_property(self):
+        """Test near cache property access."""
+        self.assertIs(self.map_proxy.near_cache, self.near_cache)
 
 
 class TestNearCacheManager(unittest.TestCase):

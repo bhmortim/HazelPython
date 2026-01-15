@@ -275,6 +275,15 @@ class NearCache(Generic[K, V]):
             if key in self._records:
                 del self._records[key]
                 self._stats.invalidations += 1
+                self._notify_invalidation(key)
+
+    def _notify_invalidation(self, key: K) -> None:
+        """Notify listeners of an invalidation."""
+        for _, listener in self._invalidation_listeners:
+            try:
+                listener(key)
+            except Exception:
+                pass
 
     def invalidate_all(self) -> None:
         """Invalidate all entries in the cache."""

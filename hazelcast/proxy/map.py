@@ -263,6 +263,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the deletion is done.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -369,6 +373,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain the old value.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -398,6 +406,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(False)
         return future
@@ -424,6 +436,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the operation is done.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -471,6 +487,11 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when all puts are done.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            for key in entries:
+                self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -943,6 +964,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(False)
         return future
@@ -958,6 +983,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when all entries are evicted.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate_all()
+
         future: Future = Future()
         future.set_result(None)
         return future
