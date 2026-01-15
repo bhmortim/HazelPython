@@ -2,9 +2,24 @@
 
 from concurrent.futures import Future
 from enum import Enum
-from typing import Any, Generic, List, Optional, TypeVar
+from threading import RLock
+from typing import Any, Dict, Generic, List, Optional, TypeVar
 
 from hazelcast.proxy.base import Proxy, ProxyContext
+
+try:
+    from hazelcast.exceptions import (
+        IllegalArgumentException,
+        StaleSequenceException,
+    )
+except ImportError:
+    class IllegalArgumentException(Exception):
+        """Raised when an illegal argument is passed."""
+        pass
+
+    class StaleSequenceException(Exception):
+        """Raised when a sequence is older than the head sequence."""
+        pass
 
 E = TypeVar("E")
 
@@ -20,14 +35,27 @@ class RingbufferProxy(Proxy, Generic[E]):
     """Proxy for Hazelcast Ringbuffer distributed data structure.
 
     A ringbuffer is a bounded data structure with a fixed capacity.
+    Items are stored with sequence numbers that increase monotonically.
+    When the buffer is full, the overflow policy determines behavior.
     """
 
     SERVICE_NAME = "hz:impl:ringbufferService"
 
     SEQUENCE_UNAVAILABLE = -1
+    DEFAULT_CAPACITY = 10000
 
-    def __init__(self, name: str, context: Optional[ProxyContext] = None):
+    def __init__(
+        self,
+        name: str,
+        context: Optional[ProxyContext] = None,
+        capacity: int = DEFAULT_CAPACITY,
+    ):
         super().__init__(self.SERVICE_NAME, name, context)
+        self._ring_capacity = max(1, capacity)
+        self._items: Dict[int, E] = {}
+        self._head_seq = 0
+        self._tail_seq = -1
+        self._lock = RLock()
 
     def capacity(self) -> int:
         """Get the capacity of the ringbuffer.
@@ -45,7 +73,7 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(0)
+        future.set_result(self._ring_capacity)
         return future
 
     def size(self) -> int:
@@ -64,7 +92,11 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(0)
+        with self._lock:
+            if self._tail_seq < 0:
+                future.set_result(0)
+            else:
+                future.set_result(self._tail_seq - self._head_seq + 1)
         return future
 
     def tail_sequence(self) -> int:
@@ -83,7 +115,8 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(-1)
+        with self._lock:
+            future.set_result(self._tail_seq)
         return future
 
     def head_sequence(self) -> int:
@@ -102,7 +135,8 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(0)
+        with self._lock:
+            future.set_result(self._head_seq)
         return future
 
     def remaining_capacity(self) -> int:
@@ -121,7 +155,9 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(0)
+        with self._lock:
+            current_size = 0 if self._tail_seq < 0 else (self._tail_seq - self._head_seq + 1)
+            future.set_result(self._ring_capacity - current_size)
         return future
 
     def add(self, item: E, overflow_policy: OverflowPolicy = OverflowPolicy.OVERWRITE) -> int:
@@ -148,7 +184,24 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(0)
+
+        with self._lock:
+            current_size = 0 if self._tail_seq < 0 else (self._tail_seq - self._head_seq + 1)
+
+            if current_size >= self._ring_capacity:
+                if overflow_policy == OverflowPolicy.FAIL:
+                    future.set_result(self.SEQUENCE_UNAVAILABLE)
+                    return future
+                old_seq = self._head_seq
+                if old_seq in self._items:
+                    del self._items[old_seq]
+                self._head_seq += 1
+
+            self._tail_seq += 1
+            new_seq = self._tail_seq
+            self._items[new_seq] = item
+            future.set_result(new_seq)
+
         return future
 
     def add_all(
@@ -163,7 +216,7 @@ class RingbufferProxy(Proxy, Generic[E]):
             overflow_policy: Policy when the buffer is full.
 
         Returns:
-            The sequence number of the last added item.
+            The sequence number of the last added item, or -1 if failed.
         """
         return self.add_all_async(items, overflow_policy).result()
 
@@ -179,11 +232,37 @@ class RingbufferProxy(Proxy, Generic[E]):
             overflow_policy: Policy when the buffer is full.
 
         Returns:
-            A Future that will contain the sequence number.
+            A Future that will contain the sequence number of the last item.
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(-1)
+
+        if not items:
+            future.set_result(self._tail_seq)
+            return future
+
+        with self._lock:
+            current_size = 0 if self._tail_seq < 0 else (self._tail_seq - self._head_seq + 1)
+            items_to_add = len(items)
+
+            if overflow_policy == OverflowPolicy.FAIL:
+                if current_size + items_to_add > self._ring_capacity:
+                    future.set_result(self.SEQUENCE_UNAVAILABLE)
+                    return future
+
+            for item in items:
+                current_size = 0 if self._tail_seq < 0 else (self._tail_seq - self._head_seq + 1)
+                if current_size >= self._ring_capacity:
+                    old_seq = self._head_seq
+                    if old_seq in self._items:
+                        del self._items[old_seq]
+                    self._head_seq += 1
+
+                self._tail_seq += 1
+                self._items[self._tail_seq] = item
+
+            future.set_result(self._tail_seq)
+
         return future
 
     def read_one(self, sequence: int) -> E:
@@ -194,6 +273,10 @@ class RingbufferProxy(Proxy, Generic[E]):
 
         Returns:
             The item at the sequence.
+
+        Raises:
+            StaleSequenceException: If the sequence is older than the head.
+            IllegalArgumentException: If the sequence is beyond the tail.
         """
         return self.read_one_async(sequence).result()
 
@@ -208,7 +291,32 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(None)
+
+        with self._lock:
+            if self._tail_seq < 0:
+                future.set_exception(
+                    IllegalArgumentException(f"Sequence {sequence} is beyond tail -1")
+                )
+                return future
+
+            if sequence < self._head_seq:
+                future.set_exception(
+                    StaleSequenceException(
+                        f"Sequence {sequence} is older than head {self._head_seq}"
+                    )
+                )
+                return future
+
+            if sequence > self._tail_seq:
+                future.set_exception(
+                    IllegalArgumentException(
+                        f"Sequence {sequence} is beyond tail {self._tail_seq}"
+                    )
+                )
+                return future
+
+            future.set_result(self._items.get(sequence))
+
         return future
 
     def read_many(
@@ -251,7 +359,45 @@ class RingbufferProxy(Proxy, Generic[E]):
         """
         self._check_not_destroyed()
         future: Future = Future()
-        future.set_result(ReadResultSet([], 0, 0))
+
+        if min_count < 0:
+            future.set_exception(
+                IllegalArgumentException("min_count must be non-negative")
+            )
+            return future
+
+        if max_count < min_count:
+            future.set_exception(
+                IllegalArgumentException("max_count must be >= min_count")
+            )
+            return future
+
+        with self._lock:
+            if start_sequence < self._head_seq:
+                future.set_exception(
+                    StaleSequenceException(
+                        f"Sequence {start_sequence} is older than head {self._head_seq}"
+                    )
+                )
+                return future
+
+            items: List[E] = []
+            sequences: List[int] = []
+            current_seq = start_sequence
+
+            while len(items) < max_count and current_seq <= self._tail_seq:
+                item = self._items.get(current_seq)
+                if item is not None:
+                    if filter_predicate is None or filter_predicate(item):
+                        items.append(item)
+                        sequences.append(current_seq)
+                current_seq += 1
+
+            read_count = len(items)
+            next_seq = start_sequence + read_count if items else start_sequence
+            result_set = ReadResultSet(items, read_count, next_seq, sequences)
+            future.set_result(result_set)
+
         return future
 
     def __len__(self) -> int:
@@ -266,10 +412,12 @@ class ReadResultSet(Generic[E]):
         items: List[E],
         read_count: int,
         next_sequence_to_read: int,
+        sequences: Optional[List[int]] = None,
     ):
         self._items = items
         self._read_count = read_count
         self._next_sequence = next_sequence_to_read
+        self._sequences = sequences or []
 
     @property
     def items(self) -> List[E]:
@@ -291,8 +439,15 @@ class ReadResultSet(Generic[E]):
 
         Returns:
             The sequence number.
+
+        Raises:
+            IndexError: If index is out of range.
         """
-        return self._next_sequence - self._read_count + index
+        if self._sequences and 0 <= index < len(self._sequences):
+            return self._sequences[index]
+        if 0 <= index < self._read_count:
+            return self._next_sequence - self._read_count + index
+        raise IndexError(f"Index {index} out of range")
 
     def __len__(self) -> int:
         return len(self._items)
@@ -302,3 +457,6 @@ class ReadResultSet(Generic[E]):
 
     def __iter__(self):
         return iter(self._items)
+
+    def __repr__(self) -> str:
+        return f"ReadResultSet(items={self._items}, read_count={self._read_count})"
