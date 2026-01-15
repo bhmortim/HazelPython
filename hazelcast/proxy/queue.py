@@ -1,11 +1,81 @@
 """Queue distributed data structure proxy."""
 
 from concurrent.futures import Future
-from typing import Any, Collection, Generic, Iterator, List, Optional, TypeVar
+from enum import Enum
+from typing import Any, Callable, Collection, Generic, Iterator, List, Optional, TypeVar
 
 from hazelcast.proxy.base import Proxy, ProxyContext
 
 E = TypeVar("E")
+
+
+class ItemEventType(Enum):
+    """Type of item event."""
+
+    ADDED = 1
+    REMOVED = 2
+
+
+class ItemEvent(Generic[E]):
+    """Event fired when an item is added or removed from a queue."""
+
+    def __init__(
+        self,
+        event_type: ItemEventType,
+        item: Optional[E] = None,
+        member: Any = None,
+        name: str = "",
+    ):
+        self._event_type = event_type
+        self._item = item
+        self._member = member
+        self._name = name
+
+    @property
+    def event_type(self) -> ItemEventType:
+        """Get the event type."""
+        return self._event_type
+
+    @property
+    def item(self) -> Optional[E]:
+        """Get the item associated with this event."""
+        return self._item
+
+    @property
+    def member(self) -> Any:
+        """Get the member that fired this event."""
+        return self._member
+
+    @property
+    def name(self) -> str:
+        """Get the name of the source distributed object."""
+        return self._name
+
+    def __repr__(self) -> str:
+        return f"ItemEvent(type={self._event_type.name}, item={self._item!r})"
+
+
+class ItemListener(Generic[E]):
+    """Listener for item events on queues and other collections.
+
+    Implement the methods you want to handle.
+    """
+
+    def item_added(self, event: ItemEvent[E]) -> None:
+        """Called when an item is added.
+
+        Args:
+            event: The item event.
+        """
+        pass
+
+    def item_removed(self, event: ItemEvent[E]) -> None:
+        """Called when an item is removed.
+
+        Args:
+            event: The item event.
+        """
+        pass
 
 
 class QueueProxy(Proxy, Generic[E]):
@@ -18,7 +88,7 @@ class QueueProxy(Proxy, Generic[E]):
 
     def __init__(self, name: str, context: Optional[ProxyContext] = None):
         super().__init__(self.SERVICE_NAME, name, context)
-        self._item_listeners: dict = {}
+        self._item_listeners: dict[str, tuple[Any, bool]] = {}
 
     def add(self, item: E) -> bool:
         """Add an item to the queue.
@@ -355,21 +425,44 @@ class QueueProxy(Proxy, Generic[E]):
 
     def add_item_listener(
         self,
-        listener: Any,
+        listener: Optional[ItemListener[E]] = None,
         include_value: bool = True,
+        item_added: Optional[Callable[[ItemEvent[E]], None]] = None,
+        item_removed: Optional[Callable[[ItemEvent[E]], None]] = None,
     ) -> str:
         """Add an item listener.
 
+        Can be called with either a listener object or individual callbacks.
+
         Args:
-            listener: The listener to add.
+            listener: An ItemListener instance.
             include_value: Whether to include values in events.
+            item_added: Callback for item added events.
+            item_removed: Callback for item removed events.
 
         Returns:
             A registration ID.
+
+        Raises:
+            ValueError: If neither listener nor callbacks are provided.
         """
+        self._check_not_destroyed()
+
+        if listener is None and item_added is None and item_removed is None:
+            raise ValueError(
+                "Either listener or at least one callback must be provided"
+            )
+
         import uuid
+
+        effective_listener: Any
+        if listener is not None:
+            effective_listener = listener
+        else:
+            effective_listener = _CallbackItemListener(item_added, item_removed)
+
         registration_id = str(uuid.uuid4())
-        self._item_listeners[registration_id] = (listener, include_value)
+        self._item_listeners[registration_id] = (effective_listener, include_value)
         return registration_id
 
     def remove_item_listener(self, registration_id: str) -> bool:
@@ -383,6 +476,28 @@ class QueueProxy(Proxy, Generic[E]):
         """
         return self._item_listeners.pop(registration_id, None) is not None
 
+    def _notify_item_added(self, item: E) -> None:
+        """Notify listeners of an item added event."""
+        for listener, include_value in self._item_listeners.values():
+            event = ItemEvent(
+                ItemEventType.ADDED,
+                item if include_value else None,
+                name=self._name,
+            )
+            if hasattr(listener, "item_added"):
+                listener.item_added(event)
+
+    def _notify_item_removed(self, item: E) -> None:
+        """Notify listeners of an item removed event."""
+        for listener, include_value in self._item_listeners.values():
+            event = ItemEvent(
+                ItemEventType.REMOVED,
+                item if include_value else None,
+                name=self._name,
+            )
+            if hasattr(listener, "item_removed"):
+                listener.item_removed(event)
+
     def __len__(self) -> int:
         return self.size()
 
@@ -391,3 +506,23 @@ class QueueProxy(Proxy, Generic[E]):
 
     def __iter__(self) -> Iterator[E]:
         return iter(self.get_all())
+
+
+class _CallbackItemListener(ItemListener[Any]):
+    """Internal listener that wraps callback functions."""
+
+    def __init__(
+        self,
+        item_added: Optional[Callable[[ItemEvent[Any]], None]] = None,
+        item_removed: Optional[Callable[[ItemEvent[Any]], None]] = None,
+    ):
+        self._item_added = item_added
+        self._item_removed = item_removed
+
+    def item_added(self, event: ItemEvent[Any]) -> None:
+        if self._item_added:
+            self._item_added(event)
+
+    def item_removed(self, event: ItemEvent[Any]) -> None:
+        if self._item_removed:
+            self._item_removed(event)
