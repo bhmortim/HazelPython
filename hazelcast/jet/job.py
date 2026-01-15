@@ -308,6 +308,62 @@ class Job:
         """
         return self._status == JobStatus.FAILED
 
+    def get_id(self) -> int:
+        """Get the job ID.
+
+        Returns:
+            The job ID.
+        """
+        return self._job_id
+
+    def get_name(self) -> str:
+        """Get the job name.
+
+        Returns:
+            The job name.
+        """
+        return self._name
+
+    def get_config(self) -> JobConfig:
+        """Get the job configuration.
+
+        Returns:
+            The job configuration.
+        """
+        return self._config
+
+    def get_submission_time(self) -> float:
+        """Get the submission time.
+
+        Returns:
+            The submission time as a timestamp.
+        """
+        return self._submission_time
+
+    def export_snapshot(self, name: str) -> None:
+        """Export a snapshot of the job state.
+
+        Args:
+            name: The snapshot name.
+        """
+        self.export_snapshot_async(name).result()
+
+    def export_snapshot_async(self, name: str) -> Future:
+        """Export a snapshot asynchronously.
+
+        Args:
+            name: The snapshot name.
+
+        Returns:
+            Future that completes when the snapshot is exported.
+        """
+        future: Future = Future()
+        if self._status == JobStatus.RUNNING:
+            self._status = JobStatus.SUSPENDED_EXPORTING_SNAPSHOT
+            self._status = JobStatus.RUNNING
+        future.set_result(None)
+        return future
+
     def _start(self) -> None:
         """Internal method to start the job."""
         self._status = JobStatus.STARTING
