@@ -3,29 +3,51 @@
 from hazelcast.proxy.base import Proxy, DistributedObject, ProxyContext
 from hazelcast.proxy.map import MapProxy, EntryEvent, EntryListener
 from hazelcast.proxy.multi_map import MultiMapProxy
-from hazelcast.proxy.queue import QueueProxy
-from hazelcast.proxy.set import SetProxy
-from hazelcast.proxy.list import ListProxy
-from hazelcast.proxy.ringbuffer import RingbufferProxy, OverflowPolicy
-from hazelcast.proxy.topic import TopicProxy
-from hazelcast.proxy.reliable_topic import ReliableTopicProxy, ReliableTopicConfig
+from hazelcast.proxy.queue import QueueProxy, ItemEvent, ItemEventType, ItemListener
+from hazelcast.proxy.collections import SetProxy, ListProxy
+from hazelcast.proxy.ringbuffer import RingbufferProxy, OverflowPolicy, ReadResultSet
+from hazelcast.proxy.topic import TopicProxy, TopicMessage, MessageListener, LocalTopicStats
+from hazelcast.proxy.reliable_topic import (
+    ReliableTopicProxy,
+    ReliableTopicConfig,
+    ReliableMessageListener,
+    TopicOverloadPolicy,
+)
 from hazelcast.proxy.pn_counter import PNCounterProxy
 
 __all__ = [
+    # Base
     "Proxy",
     "DistributedObject",
     "ProxyContext",
+    # Map
     "MapProxy",
     "EntryEvent",
     "EntryListener",
+    # MultiMap
     "MultiMapProxy",
+    # Queue
     "QueueProxy",
+    "ItemEvent",
+    "ItemEventType",
+    "ItemListener",
+    # Collections
     "SetProxy",
     "ListProxy",
+    # Ringbuffer
     "RingbufferProxy",
     "OverflowPolicy",
+    "ReadResultSet",
+    # Topic
     "TopicProxy",
+    "TopicMessage",
+    "MessageListener",
+    "LocalTopicStats",
+    # Reliable Topic
     "ReliableTopicProxy",
     "ReliableTopicConfig",
+    "ReliableMessageListener",
+    "TopicOverloadPolicy",
+    # PNCounter
     "PNCounterProxy",
 ]
