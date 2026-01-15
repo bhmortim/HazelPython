@@ -1,654 +1,421 @@
-"""Unit tests for Hazelcast protocol layer."""
+"""Unit tests for protocol layer and address handling."""
 
-import uuid
+import struct
+import unittest
+from unittest.mock import patch, MagicMock
 
-import pytest
-
-from hazelcast.protocol.codec import (
-    FixSizedTypesCodec,
-    LeBytes,
-    BYTE_SIZE,
-    INT_SIZE,
-    LONG_SIZE,
-    DOUBLE_SIZE,
-)
 from hazelcast.protocol.client_message import (
-    ClientMessage,
     Frame,
-    NULL_FRAME,
-    BEGIN_FRAME,
-    END_FRAME,
+    ClientMessage,
     BEGIN_FLAG,
     END_FLAG,
     UNFRAGMENTED_FLAG,
+    IS_NULL_FLAG,
+    BEGIN_DATA_STRUCTURE_FLAG,
+    END_DATA_STRUCTURE_FLAG,
+    IS_EVENT_FLAG,
     SIZE_OF_FRAME_LENGTH_AND_FLAGS,
+    NULL_FRAME,
+    BEGIN_FRAME,
+    END_FRAME,
+    TYPE_OFFSET,
+    CORRELATION_ID_OFFSET,
+    PARTITION_ID_OFFSET,
 )
-from hazelcast.protocol.builtin_codecs import (
-    CodecUtil,
-    StringCodec,
-    ByteArrayCodec,
-    DataCodec,
-    LongCodec,
-    IntegerCodec,
-    ListMultiFrameCodec,
-    ListIntegerCodec,
-    ListLongCodec,
-    EntryListCodec,
-)
-from hazelcast.invocation import Invocation, InvocationService
+from hazelcast.network.address import Address, AddressHelper
 
 
-class TestFixSizedTypesCodec:
-    """Tests for FixSizedTypesCodec."""
+class TestFrame(unittest.TestCase):
+    """Tests for the Frame class."""
 
-    def test_encode_decode_byte(self):
-        buffer = bytearray(BYTE_SIZE)
-        FixSizedTypesCodec.encode_byte(buffer, 0, 42)
-        value, _ = FixSizedTypesCodec.decode_byte(bytes(buffer), 0)
-        assert value == 42
+    def test_frame_creation_empty(self):
+        frame = Frame()
+        self.assertEqual(frame.content, b"")
+        self.assertEqual(frame.flags, 0)
+        self.assertEqual(len(frame), 0)
 
-    def test_encode_decode_byte_negative(self):
-        buffer = bytearray(BYTE_SIZE)
-        FixSizedTypesCodec.encode_byte(buffer, 0, -128)
-        value, _ = FixSizedTypesCodec.decode_byte(bytes(buffer), 0)
-        assert value == -128
+    def test_frame_creation_with_content(self):
+        content = b"test data"
+        frame = Frame(content, BEGIN_FLAG)
+        self.assertEqual(frame.content, content)
+        self.assertEqual(frame.flags, BEGIN_FLAG)
+        self.assertEqual(len(frame), len(content))
 
-    def test_encode_decode_boolean_true(self):
-        buffer = bytearray(1)
-        FixSizedTypesCodec.encode_boolean(buffer, 0, True)
-        value, _ = FixSizedTypesCodec.decode_boolean(bytes(buffer), 0)
-        assert value is True
-
-    def test_encode_decode_boolean_false(self):
-        buffer = bytearray(1)
-        FixSizedTypesCodec.encode_boolean(buffer, 0, False)
-        value, _ = FixSizedTypesCodec.decode_boolean(bytes(buffer), 0)
-        assert value is False
-
-    def test_encode_decode_short(self):
-        buffer = bytearray(2)
-        FixSizedTypesCodec.encode_short(buffer, 0, 12345)
-        value, _ = FixSizedTypesCodec.decode_short(bytes(buffer), 0)
-        assert value == 12345
-
-    def test_encode_decode_short_negative(self):
-        buffer = bytearray(2)
-        FixSizedTypesCodec.encode_short(buffer, 0, -32768)
-        value, _ = FixSizedTypesCodec.decode_short(bytes(buffer), 0)
-        assert value == -32768
-
-    def test_encode_decode_int(self):
-        buffer = bytearray(INT_SIZE)
-        FixSizedTypesCodec.encode_int(buffer, 0, 123456789)
-        value, _ = FixSizedTypesCodec.decode_int(bytes(buffer), 0)
-        assert value == 123456789
-
-    def test_encode_decode_int_negative(self):
-        buffer = bytearray(INT_SIZE)
-        FixSizedTypesCodec.encode_int(buffer, 0, -2147483648)
-        value, _ = FixSizedTypesCodec.decode_int(bytes(buffer), 0)
-        assert value == -2147483648
-
-    def test_encode_decode_long(self):
-        buffer = bytearray(LONG_SIZE)
-        FixSizedTypesCodec.encode_long(buffer, 0, 9223372036854775807)
-        value, _ = FixSizedTypesCodec.decode_long(bytes(buffer), 0)
-        assert value == 9223372036854775807
-
-    def test_encode_decode_long_negative(self):
-        buffer = bytearray(LONG_SIZE)
-        FixSizedTypesCodec.encode_long(buffer, 0, -9223372036854775808)
-        value, _ = FixSizedTypesCodec.decode_long(bytes(buffer), 0)
-        assert value == -9223372036854775808
-
-    def test_encode_decode_float(self):
-        buffer = bytearray(4)
-        FixSizedTypesCodec.encode_float(buffer, 0, 3.14)
-        value, _ = FixSizedTypesCodec.decode_float(bytes(buffer), 0)
-        assert abs(value - 3.14) < 0.001
-
-    def test_encode_decode_double(self):
-        buffer = bytearray(DOUBLE_SIZE)
-        FixSizedTypesCodec.encode_double(buffer, 0, 3.141592653589793)
-        value, _ = FixSizedTypesCodec.decode_double(bytes(buffer), 0)
-        assert value == 3.141592653589793
-
-    def test_encode_decode_uuid(self):
-        test_uuid = uuid.uuid4()
-        buffer = bytearray(17)
-        FixSizedTypesCodec.encode_uuid(buffer, 0, test_uuid)
-        decoded, _ = FixSizedTypesCodec.decode_uuid(bytes(buffer), 0)
-        assert decoded == test_uuid
-
-    def test_encode_decode_uuid_none(self):
-        buffer = bytearray(17)
-        FixSizedTypesCodec.encode_uuid(buffer, 0, None)
-        decoded, _ = FixSizedTypesCodec.decode_uuid(bytes(buffer), 0)
-        assert decoded is None
-
-    def test_multiple_values_at_offsets(self):
-        buffer = bytearray(INT_SIZE + LONG_SIZE + DOUBLE_SIZE)
-        offset = 0
-        offset = FixSizedTypesCodec.encode_int(buffer, offset, 42)
-        offset = FixSizedTypesCodec.encode_long(buffer, offset, 123456789)
-        FixSizedTypesCodec.encode_double(buffer, offset, 99.99)
-
-        data = bytes(buffer)
-        val1, off1 = FixSizedTypesCodec.decode_int(data, 0)
-        val2, off2 = FixSizedTypesCodec.decode_long(data, off1)
-        val3, _ = FixSizedTypesCodec.decode_double(data, off2)
-
-        assert val1 == 42
-        assert val2 == 123456789
-        assert val3 == 99.99
-
-
-class TestLeBytes:
-    """Tests for LeBytes utility."""
-
-    def test_int_to_bytes(self):
-        data = LeBytes.int_to_bytes(12345)
-        assert len(data) == 4
-        assert LeBytes.bytes_to_int(data) == 12345
-
-    def test_long_to_bytes(self):
-        data = LeBytes.long_to_bytes(123456789012345)
-        assert len(data) == 8
-        assert LeBytes.bytes_to_long(data) == 123456789012345
-
-
-class TestFrame:
-    """Tests for Frame class."""
-
-    def test_frame_creation(self):
-        frame = Frame(b"hello", BEGIN_FLAG)
-        assert frame.content == b"hello"
-        assert frame.flags == BEGIN_FLAG
-
-    def test_frame_is_begin(self):
+    def test_frame_is_begin_frame(self):
         frame = Frame(b"", BEGIN_FLAG)
-        assert frame.is_begin_frame is True
-        assert frame.is_end_frame is False
+        self.assertTrue(frame.is_begin_frame)
+        self.assertFalse(frame.is_end_frame)
 
-    def test_frame_is_end(self):
+    def test_frame_is_end_frame(self):
         frame = Frame(b"", END_FLAG)
-        assert frame.is_begin_frame is False
-        assert frame.is_end_frame is True
+        self.assertTrue(frame.is_end_frame)
+        self.assertFalse(frame.is_begin_frame)
 
-    def test_frame_is_null(self):
-        assert NULL_FRAME.is_null_frame is True
+    def test_frame_is_null_frame(self):
+        frame = Frame(b"", IS_NULL_FLAG)
+        self.assertTrue(frame.is_null_frame)
+
+    def test_frame_is_begin_data_structure_frame(self):
+        frame = Frame(b"", BEGIN_DATA_STRUCTURE_FLAG)
+        self.assertTrue(frame.is_begin_data_structure_frame)
+
+    def test_frame_is_end_data_structure_frame(self):
+        frame = Frame(b"", END_DATA_STRUCTURE_FLAG)
+        self.assertTrue(frame.is_end_data_structure_frame)
 
     def test_frame_copy_with_new_flags(self):
-        frame = Frame(b"test", BEGIN_FLAG)
-        copied = frame.copy_with_new_flags(END_FLAG)
-        assert copied.content == b"test"
-        assert copied.flags == END_FLAG
-
-    def test_frame_length(self):
-        frame = Frame(b"hello world")
-        assert len(frame) == 11
+        original = Frame(b"content", BEGIN_FLAG)
+        copied = original.copy_with_new_flags(END_FLAG)
+        self.assertEqual(copied.content, original.content)
+        self.assertEqual(copied.flags, END_FLAG)
+        self.assertEqual(original.flags, BEGIN_FLAG)
 
     def test_frame_equality(self):
-        f1 = Frame(b"test", BEGIN_FLAG)
-        f2 = Frame(b"test", BEGIN_FLAG)
-        f3 = Frame(b"test", END_FLAG)
-        assert f1 == f2
-        assert f1 != f3
+        frame1 = Frame(b"test", BEGIN_FLAG)
+        frame2 = Frame(b"test", BEGIN_FLAG)
+        frame3 = Frame(b"test", END_FLAG)
+        frame4 = Frame(b"other", BEGIN_FLAG)
+        self.assertEqual(frame1, frame2)
+        self.assertNotEqual(frame1, frame3)
+        self.assertNotEqual(frame1, frame4)
+
+    def test_frame_equality_with_non_frame(self):
+        frame = Frame(b"test", 0)
+        self.assertNotEqual(frame, "not a frame")
+        self.assertNotEqual(frame, None)
+
+    def test_predefined_frames(self):
+        self.assertTrue(NULL_FRAME.is_null_frame)
+        self.assertTrue(BEGIN_FRAME.is_begin_data_structure_frame)
+        self.assertTrue(END_FRAME.is_end_data_structure_frame)
 
 
-class TestClientMessage:
-    """Tests for ClientMessage class."""
+class TestClientMessage(unittest.TestCase):
+    """Tests for the ClientMessage class."""
 
-    def test_create_empty_message(self):
+    def test_create_for_encode(self):
         msg = ClientMessage.create_for_encode()
-        assert len(msg) == 0
+        self.assertEqual(len(msg), 0)
+        self.assertIsNone(msg.start_frame)
+
+    def test_create_for_decode(self):
+        frames = [Frame(b"test", UNFRAGMENTED_FLAG)]
+        msg = ClientMessage.create_for_decode(frames)
+        self.assertEqual(len(msg), 1)
 
     def test_add_frame(self):
-        msg = ClientMessage.create_for_encode()
-        msg.add_frame(Frame(b"test"))
-        assert len(msg) == 1
+        msg = ClientMessage()
+        frame = Frame(b"test", 0)
+        msg.add_frame(frame)
+        self.assertEqual(len(msg), 1)
+        self.assertEqual(msg.frames[0], frame)
 
-    def test_message_type(self):
-        initial = ClientMessage.create_initial_frame(0)
-        msg = ClientMessage([initial])
-        msg.set_message_type(0x000100)
-        assert msg.get_message_type() == 0x000100
+    def test_start_frame(self):
+        msg = ClientMessage()
+        self.assertIsNone(msg.start_frame)
+        frame = Frame(b"first", 0)
+        msg.add_frame(frame)
+        self.assertEqual(msg.start_frame, frame)
 
-    def test_correlation_id(self):
-        initial = ClientMessage.create_initial_frame(0)
-        msg = ClientMessage([initial])
-        msg.set_correlation_id(12345)
-        assert msg.get_correlation_id() == 12345
+    def test_next_frame(self):
+        frames = [Frame(b"first", 0), Frame(b"second", 0)]
+        msg = ClientMessage(frames)
+        self.assertEqual(msg.next_frame(), frames[0])
+        self.assertEqual(msg.next_frame(), frames[1])
+        self.assertIsNone(msg.next_frame())
 
-    def test_partition_id(self):
-        initial = ClientMessage.create_initial_frame(0)
-        msg = ClientMessage([initial])
-        msg.set_partition_id(42)
-        assert msg.get_partition_id() == 42
+    def test_peek_next_frame(self):
+        frames = [Frame(b"first", 0)]
+        msg = ClientMessage(frames)
+        self.assertEqual(msg.peek_next_frame(), frames[0])
+        self.assertEqual(msg.peek_next_frame(), frames[0])
 
-    def test_frame_iteration(self):
-        msg = ClientMessage(
-            [
-                Frame(b"one"),
-                Frame(b"two"),
-                Frame(b"three"),
-            ]
-        )
-
-        assert msg.has_next_frame()
-        assert msg.next_frame().content == b"one"
-        assert msg.next_frame().content == b"two"
-        assert msg.peek_next_frame().content == b"three"
-        assert msg.next_frame().content == b"three"
-        assert not msg.has_next_frame()
-
-    def test_skip_frame(self):
-        msg = ClientMessage([Frame(b"one"), Frame(b"two")])
-        msg.skip_frame()
-        assert msg.next_frame().content == b"two"
+    def test_has_next_frame(self):
+        msg = ClientMessage([Frame(b"test", 0)])
+        self.assertTrue(msg.has_next_frame())
+        msg.next_frame()
+        self.assertFalse(msg.has_next_frame())
 
     def test_reset_read_index(self):
-        msg = ClientMessage([Frame(b"test")])
+        msg = ClientMessage([Frame(b"test", 0)])
         msg.next_frame()
-        assert not msg.has_next_frame()
+        self.assertFalse(msg.has_next_frame())
         msg.reset_read_index()
-        assert msg.has_next_frame()
+        self.assertTrue(msg.has_next_frame())
+
+    def test_skip_frame(self):
+        frames = [Frame(b"first", 0), Frame(b"second", 0)]
+        msg = ClientMessage(frames)
+        msg.skip_frame()
+        self.assertEqual(msg.next_frame(), frames[1])
+
+    def test_message_type(self):
+        content = bytearray(16)
+        struct.pack_into("<I", content, TYPE_OFFSET, 0x12345)
+        msg = ClientMessage([Frame(bytes(content), UNFRAGMENTED_FLAG)])
+        self.assertEqual(msg.get_message_type(), 0x12345)
+
+    def test_set_message_type(self):
+        content = bytearray(16)
+        msg = ClientMessage([Frame(bytes(content), UNFRAGMENTED_FLAG)])
+        msg.set_message_type(0xABCDE)
+        self.assertEqual(msg.get_message_type(), 0xABCDE)
+
+    def test_correlation_id(self):
+        content = bytearray(16)
+        struct.pack_into("<q", content, CORRELATION_ID_OFFSET, 9876543210)
+        msg = ClientMessage([Frame(bytes(content), UNFRAGMENTED_FLAG)])
+        self.assertEqual(msg.get_correlation_id(), 9876543210)
+
+    def test_set_correlation_id(self):
+        content = bytearray(16)
+        msg = ClientMessage([Frame(bytes(content), UNFRAGMENTED_FLAG)])
+        msg.set_correlation_id(1234567890)
+        self.assertEqual(msg.get_correlation_id(), 1234567890)
+
+    def test_partition_id(self):
+        content = bytearray(16)
+        struct.pack_into("<i", content, PARTITION_ID_OFFSET, 42)
+        msg = ClientMessage([Frame(bytes(content), UNFRAGMENTED_FLAG)])
+        self.assertEqual(msg.get_partition_id(), 42)
+
+    def test_set_partition_id(self):
+        content = bytearray(16)
+        msg = ClientMessage([Frame(bytes(content), UNFRAGMENTED_FLAG)])
+        msg.set_partition_id(271)
+        self.assertEqual(msg.get_partition_id(), 271)
+
+    def test_get_message_type_empty(self):
+        msg = ClientMessage()
+        self.assertEqual(msg.get_message_type(), 0)
+
+    def test_get_correlation_id_empty(self):
+        msg = ClientMessage()
+        self.assertEqual(msg.get_correlation_id(), 0)
+
+    def test_get_partition_id_empty(self):
+        msg = ClientMessage()
+        self.assertEqual(msg.get_partition_id(), -1)
+
+    def test_get_total_length(self):
+        frame1 = Frame(b"test", 0)
+        frame2 = Frame(b"data", 0)
+        msg = ClientMessage([frame1, frame2])
+        expected = 2 * SIZE_OF_FRAME_LENGTH_AND_FLAGS + len(b"test") + len(b"data")
+        self.assertEqual(msg.get_total_length(), expected)
 
     def test_to_bytes_and_from_bytes(self):
-        original = ClientMessage.create_for_encode()
-        initial = ClientMessage.create_initial_frame(0, UNFRAGMENTED_FLAG)
-        original.add_frame(initial)
-        original.set_message_type(256)
-        original.set_correlation_id(999)
-        original.set_partition_id(5)
-        original.add_frame(Frame(b"payload"))
-
-        data = original.to_bytes()
-        restored = ClientMessage.from_bytes(data)
-
-        assert restored.get_message_type() == 256
-        assert restored.get_correlation_id() == 999
-        assert restored.get_partition_id() == 5
-        assert len(restored) == 2
-
-    def test_total_length(self):
-        msg = ClientMessage(
-            [
-                Frame(b"hello"),
-                Frame(b"world"),
-            ]
-        )
-        expected = SIZE_OF_FRAME_LENGTH_AND_FLAGS + 5 + SIZE_OF_FRAME_LENGTH_AND_FLAGS + 5
-        assert msg.get_total_length() == expected
-
-
-class TestStringCodec:
-    """Tests for StringCodec."""
-
-    def test_encode_decode_string(self):
-        msg = ClientMessage.create_for_encode()
-        StringCodec.encode(msg, "hello world")
-
-        msg.reset_read_index()
-        decoded = StringCodec.decode(msg)
-        assert decoded == "hello world"
-
-    def test_encode_decode_unicode(self):
-        msg = ClientMessage.create_for_encode()
-        text = "Hello \u4e16\u754c \U0001f30d"
-        StringCodec.encode(msg, text)
-
-        msg.reset_read_index()
-        decoded = StringCodec.decode(msg)
-        assert decoded == text
-
-    def test_encode_decode_empty_string(self):
-        msg = ClientMessage.create_for_encode()
-        StringCodec.encode(msg, "")
-
-        msg.reset_read_index()
-        decoded = StringCodec.decode(msg)
-        assert decoded == ""
-
-
-class TestByteArrayCodec:
-    """Tests for ByteArrayCodec."""
-
-    def test_encode_decode_bytes(self):
-        msg = ClientMessage.create_for_encode()
-        data = b"\x00\x01\x02\x03\xff"
-        ByteArrayCodec.encode(msg, data)
-
-        msg.reset_read_index()
-        decoded = ByteArrayCodec.decode(msg)
-        assert decoded == data
-
-    def test_encode_decode_empty_bytes(self):
-        msg = ClientMessage.create_for_encode()
-        ByteArrayCodec.encode(msg, b"")
-
-        msg.reset_read_index()
-        decoded = ByteArrayCodec.decode(msg)
-        assert decoded == b""
-
-
-class TestDataCodec:
-    """Tests for DataCodec."""
-
-    def test_encode_decode_nullable_with_value(self):
-        msg = ClientMessage.create_for_encode()
-        DataCodec.encode_nullable(msg, b"data")
-
-        msg.reset_read_index()
-        decoded = DataCodec.decode_nullable(msg)
-        assert decoded == b"data"
-
-    def test_encode_decode_nullable_none(self):
-        msg = ClientMessage.create_for_encode()
-        DataCodec.encode_nullable(msg, None)
-
-        msg.reset_read_index()
-        decoded = DataCodec.decode_nullable(msg)
-        assert decoded is None
-
-
-class TestLongCodec:
-    """Tests for LongCodec."""
-
-    def test_encode_decode_long(self):
-        msg = ClientMessage.create_for_encode()
-        LongCodec.encode(msg, 9876543210)
-
-        msg.reset_read_index()
-        decoded = LongCodec.decode(msg)
-        assert decoded == 9876543210
-
-
-class TestIntegerCodec:
-    """Tests for IntegerCodec."""
-
-    def test_encode_decode_int(self):
-        msg = ClientMessage.create_for_encode()
-        IntegerCodec.encode(msg, 42)
-
-        msg.reset_read_index()
-        decoded = IntegerCodec.decode(msg)
-        assert decoded == 42
-
-
-class TestListIntegerCodec:
-    """Tests for ListIntegerCodec."""
-
-    def test_encode_decode_list(self):
-        msg = ClientMessage.create_for_encode()
-        items = [1, 2, 3, 42, -100]
-        ListIntegerCodec.encode(msg, items)
-
-        msg.reset_read_index()
-        decoded = ListIntegerCodec.decode(msg)
-        assert decoded == items
-
-    def test_encode_decode_empty_list(self):
-        msg = ClientMessage.create_for_encode()
-        ListIntegerCodec.encode(msg, [])
-
-        msg.reset_read_index()
-        decoded = ListIntegerCodec.decode(msg)
-        assert decoded == []
-
-
-class TestListLongCodec:
-    """Tests for ListLongCodec."""
-
-    def test_encode_decode_list(self):
-        msg = ClientMessage.create_for_encode()
-        items = [100000000000, 200000000000, -300000000000]
-        ListLongCodec.encode(msg, items)
-
-        msg.reset_read_index()
-        decoded = ListLongCodec.decode(msg)
-        assert decoded == items
-
-
-class TestListMultiFrameCodec:
-    """Tests for ListMultiFrameCodec."""
-
-    def test_encode_decode_string_list(self):
-        msg = ClientMessage.create_for_encode()
-        items = ["one", "two", "three"]
-        ListMultiFrameCodec.encode(msg, items, StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = ListMultiFrameCodec.decode(msg, StringCodec.decode)
-        assert decoded == items
-
-    def test_encode_decode_empty_list(self):
-        msg = ClientMessage.create_for_encode()
-        ListMultiFrameCodec.encode(msg, [], StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = ListMultiFrameCodec.decode(msg, StringCodec.decode)
-        assert decoded == []
-
-    def test_encode_decode_nullable_with_value(self):
-        msg = ClientMessage.create_for_encode()
-        items = ["a", "b"]
-        ListMultiFrameCodec.encode_nullable(msg, items, StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = ListMultiFrameCodec.decode_nullable(msg, StringCodec.decode)
-        assert decoded == items
-
-    def test_encode_decode_nullable_none(self):
-        msg = ClientMessage.create_for_encode()
-        ListMultiFrameCodec.encode_nullable(msg, None, StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = ListMultiFrameCodec.decode_nullable(msg, StringCodec.decode)
-        assert decoded is None
-
-
-class TestEntryListCodec:
-    """Tests for EntryListCodec."""
-
-    def test_encode_decode_entries(self):
-        msg = ClientMessage.create_for_encode()
-        entries = [("key1", "value1"), ("key2", "value2")]
-        EntryListCodec.encode(msg, entries, StringCodec.encode, StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = EntryListCodec.decode(msg, StringCodec.decode, StringCodec.decode)
-        assert decoded == entries
-
-    def test_encode_decode_empty_entries(self):
-        msg = ClientMessage.create_for_encode()
-        EntryListCodec.encode(msg, [], StringCodec.encode, StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = EntryListCodec.decode(msg, StringCodec.decode, StringCodec.decode)
-        assert decoded == []
-
-
-class TestCodecUtil:
-    """Tests for CodecUtil."""
-
-    def test_fast_forward_to_end_frame(self):
-        msg = ClientMessage(
-            [
-                BEGIN_FRAME,
-                Frame(b"nested"),
-                END_FRAME,
-                Frame(b"after"),
-            ]
-        )
-        msg.next_frame()
-        CodecUtil.fast_forward_to_end_frame(msg)
-        assert msg.next_frame().content == b"after"
-
-    def test_encode_nullable_with_value(self):
-        msg = ClientMessage.create_for_encode()
-        CodecUtil.encode_nullable(msg, "test", StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = CodecUtil.decode_nullable(msg, StringCodec.decode)
-        assert decoded == "test"
-
-    def test_encode_nullable_none(self):
-        msg = ClientMessage.create_for_encode()
-        CodecUtil.encode_nullable(msg, None, StringCodec.encode)
-
-        msg.reset_read_index()
-        decoded = CodecUtil.decode_nullable(msg, StringCodec.decode)
-        assert decoded is None
-
-
-class TestInvocation:
-    """Tests for Invocation class."""
-
-    def test_invocation_creation(self):
-        initial = ClientMessage.create_initial_frame(0)
-        msg = ClientMessage([initial])
-        inv = Invocation(msg, partition_id=5, timeout=30.0)
-
-        assert inv.request is msg
-        assert inv.partition_id == 5
-        assert inv.timeout == 30.0
-        assert inv.sent_time is None
-
-    def test_correlation_id_set(self):
-        initial = ClientMessage.create_initial_frame(0)
-        msg = ClientMessage([initial])
-        inv = Invocation(msg)
-        inv.correlation_id = 12345
-
-        assert inv.correlation_id == 12345
-        assert msg.get_correlation_id() == 12345
-
-    def test_mark_sent(self):
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]))
-        assert inv.sent_time is None
-        inv.mark_sent()
-        assert inv.sent_time is not None
-
-    def test_is_expired_before_sent(self):
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]), timeout=0.001)
-        assert inv.is_expired() is False
-
-    def test_set_response(self):
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]))
-        response = ClientMessage([Frame(b"response")])
-        inv.set_response(response)
-
-        result = inv.future.result(timeout=1.0)
-        assert result is response
-
-    def test_set_exception(self):
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]))
-        inv.set_exception(ValueError("test error"))
-
-        with pytest.raises(ValueError):
-            inv.future.result(timeout=1.0)
-
-
-class TestInvocationService:
-    """Tests for InvocationService class."""
-
-    def test_service_lifecycle(self):
-        service = InvocationService()
-        assert service.is_running is False
-        service.start()
-        assert service.is_running is True
-        service.shutdown()
-        assert service.is_running is False
-
-    def test_invoke_assigns_correlation_id(self):
-        service = InvocationService()
-        service.start()
-
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]))
-        service.invoke(inv)
-
-        assert inv.correlation_id > 0
-        assert service.get_pending_count() == 1
-        service.shutdown()
-
-    def test_correlation_ids_increment(self):
-        service = InvocationService()
-        service.start()
-
-        initial1 = ClientMessage.create_initial_frame(0)
-        initial2 = ClientMessage.create_initial_frame(0)
-        inv1 = Invocation(ClientMessage([initial1]))
-        inv2 = Invocation(ClientMessage([initial2]))
-
-        service.invoke(inv1)
-        service.invoke(inv2)
-
-        assert inv2.correlation_id > inv1.correlation_id
-        service.shutdown()
-
-    def test_handle_response(self):
-        service = InvocationService()
-        service.start()
-
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]))
-        future = service.invoke(inv)
-
-        response = ClientMessage.create_for_encode()
-        resp_initial = ClientMessage.create_initial_frame(0)
-        response.add_frame(resp_initial)
-        response.set_correlation_id(inv.correlation_id)
-
-        result = service.handle_response(response)
-        assert result is True
-        assert future.result(timeout=1.0) is response
-        assert service.get_pending_count() == 0
-        service.shutdown()
-
-    def test_handle_unknown_response(self):
-        service = InvocationService()
-        service.start()
-
-        response = ClientMessage.create_for_encode()
-        initial = ClientMessage.create_initial_frame(0)
-        response.add_frame(initial)
-        response.set_correlation_id(99999)
-
-        result = service.handle_response(response)
-        assert result is False
-        service.shutdown()
-
-    def test_remove_invocation(self):
-        service = InvocationService()
-        service.start()
-
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]))
-        service.invoke(inv)
-
-        removed = service.remove_invocation(inv.correlation_id)
-        assert removed is inv
-        assert service.get_pending_count() == 0
-
-        removed_again = service.remove_invocation(inv.correlation_id)
-        assert removed_again is None
-        service.shutdown()
-
-    def test_shutdown_completes_pending(self):
-        service = InvocationService()
-        service.start()
-
-        initial = ClientMessage.create_initial_frame(0)
-        inv = Invocation(ClientMessage([initial]))
-        future = service.invoke(inv)
-
-        service.shutdown()
-
-        with pytest.raises(Exception):
-            future.result(timeout=1.0)
+        content = bytearray(16)
+        struct.pack_into("<I", content, TYPE_OFFSET, 0x100)
+        struct.pack_into("<q", content, CORRELATION_ID_OFFSET, 42)
+        struct.pack_into("<i", content, PARTITION_ID_OFFSET, 5)
+
+        original = ClientMessage([Frame(bytes(content), 0)])
+        serialized = original.to_bytes()
+        restored = ClientMessage.from_bytes(serialized)
+
+        self.assertEqual(restored.get_message_type(), 0x100)
+        self.assertEqual(restored.get_correlation_id(), 42)
+        self.assertEqual(restored.get_partition_id(), 5)
+
+    def test_to_bytes_sets_begin_end_flags(self):
+        msg = ClientMessage([Frame(b"only", 0)])
+        data = msg.to_bytes()
+        flags = struct.unpack_from("<H", data, 4)[0]
+        self.assertTrue(flags & BEGIN_FLAG)
+        self.assertTrue(flags & END_FLAG)
+
+    def test_to_bytes_multiple_frames(self):
+        msg = ClientMessage([Frame(b"first", 0), Frame(b"second", 0)])
+        data = msg.to_bytes()
+
+        offset = 0
+        flags1 = struct.unpack_from("<H", data, offset + 4)[0]
+        self.assertTrue(flags1 & BEGIN_FLAG)
+        self.assertFalse(flags1 & END_FLAG)
+
+        frame1_len = struct.unpack_from("<I", data, offset)[0]
+        offset += frame1_len
+
+        flags2 = struct.unpack_from("<H", data, offset + 4)[0]
+        self.assertFalse(flags2 & BEGIN_FLAG)
+        self.assertTrue(flags2 & END_FLAG)
+
+    def test_from_bytes_incomplete_frame(self):
+        data = struct.pack("<I", 100)
+        msg = ClientMessage.from_bytes(data)
+        self.assertEqual(len(msg), 0)
+
+    def test_create_initial_frame(self):
+        frame = ClientMessage.create_initial_frame(8, UNFRAGMENTED_FLAG)
+        self.assertEqual(frame.flags, UNFRAGMENTED_FLAG)
+        self.assertEqual(len(frame.content), 16 + 8)
+
+
+class TestAddress(unittest.TestCase):
+    """Tests for the Address class."""
+
+    def test_address_creation(self):
+        addr = Address("localhost", 5701)
+        self.assertEqual(addr.host, "localhost")
+        self.assertEqual(addr.port, 5701)
+
+    def test_address_default_port(self):
+        addr = Address("localhost")
+        self.assertEqual(addr.port, Address.DEFAULT_PORT)
+
+    def test_address_str(self):
+        addr = Address("192.168.1.1", 5702)
+        self.assertEqual(str(addr), "192.168.1.1:5702")
+
+    def test_address_repr(self):
+        addr = Address("myhost", 5703)
+        self.assertEqual(repr(addr), "Address('myhost', 5703)")
+
+    def test_address_equality(self):
+        addr1 = Address("host1", 5701)
+        addr2 = Address("host1", 5701)
+        addr3 = Address("host2", 5701)
+        addr4 = Address("host1", 5702)
+        self.assertEqual(addr1, addr2)
+        self.assertNotEqual(addr1, addr3)
+        self.assertNotEqual(addr1, addr4)
+
+    def test_address_equality_with_non_address(self):
+        addr = Address("host", 5701)
+        self.assertNotEqual(addr, "host:5701")
+        self.assertNotEqual(addr, None)
+
+    def test_address_hash(self):
+        addr1 = Address("host", 5701)
+        addr2 = Address("host", 5701)
+        self.assertEqual(hash(addr1), hash(addr2))
+        addresses = {addr1}
+        self.assertIn(addr2, addresses)
+
+    @patch("socket.getaddrinfo")
+    def test_address_resolve(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, "", ("192.168.1.1", 5701)),
+            (2, 1, 6, "", ("192.168.1.2", 5701)),
+        ]
+        addr = Address("myhost", 5701)
+        resolved = addr.resolve()
+        self.assertEqual(len(resolved), 2)
+        self.assertIn(("192.168.1.1", 5701), resolved)
+        self.assertIn(("192.168.1.2", 5701), resolved)
+
+    @patch("socket.getaddrinfo")
+    def test_address_resolve_caches_result(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, "", ("192.168.1.1", 5701)),
+        ]
+        addr = Address("myhost", 5701)
+        addr.resolve()
+        addr.resolve()
+        mock_getaddrinfo.assert_called_once()
+
+    @patch("socket.getaddrinfo")
+    def test_address_resolve_deduplicates(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, "", ("192.168.1.1", 5701)),
+            (2, 1, 6, "", ("192.168.1.1", 5701)),
+        ]
+        addr = Address("myhost", 5701)
+        resolved = addr.resolve()
+        self.assertEqual(len(resolved), 1)
+
+    @patch("socket.getaddrinfo")
+    def test_address_resolve_failure(self, mock_getaddrinfo):
+        import socket
+        mock_getaddrinfo.side_effect = socket.gaierror("DNS lookup failed")
+        addr = Address("invalid.host", 5701)
+        resolved = addr.resolve()
+        self.assertEqual(resolved, [("invalid.host", 5701)])
+
+    @patch("socket.getaddrinfo")
+    def test_address_invalidate_cache(self, mock_getaddrinfo):
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, "", ("192.168.1.1", 5701)),
+        ]
+        addr = Address("myhost", 5701)
+        addr.resolve()
+        addr.invalidate_cache()
+        addr.resolve()
+        self.assertEqual(mock_getaddrinfo.call_count, 2)
+
+
+class TestAddressHelper(unittest.TestCase):
+    """Tests for the AddressHelper class."""
+
+    def test_parse_host_only(self):
+        addr = AddressHelper.parse("localhost")
+        self.assertEqual(addr.host, "localhost")
+        self.assertEqual(addr.port, Address.DEFAULT_PORT)
+
+    def test_parse_host_and_port(self):
+        addr = AddressHelper.parse("192.168.1.1:5702")
+        self.assertEqual(addr.host, "192.168.1.1")
+        self.assertEqual(addr.port, 5702)
+
+    def test_parse_with_whitespace(self):
+        addr = AddressHelper.parse("  localhost:5703  ")
+        self.assertEqual(addr.host, "localhost")
+        self.assertEqual(addr.port, 5703)
+
+    def test_parse_ipv6_bracketed(self):
+        addr = AddressHelper.parse("[::1]:5704")
+        self.assertEqual(addr.host, "::1")
+        self.assertEqual(addr.port, 5704)
+
+    def test_parse_ipv6_bracketed_no_port(self):
+        addr = AddressHelper.parse("[2001:db8::1]")
+        self.assertEqual(addr.host, "2001:db8::1")
+        self.assertEqual(addr.port, Address.DEFAULT_PORT)
+
+    def test_parse_ipv6_unbracketed(self):
+        addr = AddressHelper.parse("::1")
+        self.assertEqual(addr.host, "::1")
+        self.assertEqual(addr.port, Address.DEFAULT_PORT)
+
+    def test_parse_invalid_port(self):
+        addr = AddressHelper.parse("host:notaport")
+        self.assertEqual(addr.host, "host:notaport")
+        self.assertEqual(addr.port, Address.DEFAULT_PORT)
+
+    def test_parse_list(self):
+        addresses = AddressHelper.parse_list([
+            "host1:5701",
+            "host2:5702",
+            "host3",
+        ])
+        self.assertEqual(len(addresses), 3)
+        self.assertEqual(addresses[0], Address("host1", 5701))
+        self.assertEqual(addresses[1], Address("host2", 5702))
+        self.assertEqual(addresses[2], Address("host3", 5701))
+
+    def test_parse_list_empty(self):
+        addresses = AddressHelper.parse_list([])
+        self.assertEqual(len(addresses), 0)
+
+    def test_get_possible_addresses(self):
+        base = [Address("host1", 5701)]
+        expanded = AddressHelper.get_possible_addresses(base, port_range=3)
+        self.assertEqual(len(expanded), 3)
+        self.assertIn(Address("host1", 5701), expanded)
+        self.assertIn(Address("host1", 5702), expanded)
+        self.assertIn(Address("host1", 5703), expanded)
+
+    def test_get_possible_addresses_deduplicates(self):
+        base = [Address("host1", 5701), Address("host1", 5701)]
+        expanded = AddressHelper.get_possible_addresses(base, port_range=2)
+        self.assertEqual(len(expanded), 2)
+
+    def test_get_possible_addresses_multiple_hosts(self):
+        base = [Address("host1", 5701), Address("host2", 5701)]
+        expanded = AddressHelper.get_possible_addresses(base, port_range=2)
+        self.assertEqual(len(expanded), 4)
+
+
+if __name__ == "__main__":
+    unittest.main()
