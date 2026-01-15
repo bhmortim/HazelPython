@@ -1,12 +1,39 @@
 """MultiMap distributed data structure proxy."""
 
 from concurrent.futures import Future
-from typing import Any, Collection, Dict, Generic, List, Optional, Set, TypeVar
+from typing import Any, Callable, Collection, Dict, Generic, List, Optional, Set, Tuple, TypeVar
 
 from hazelcast.proxy.base import Proxy, ProxyContext
+from hazelcast.proxy.map import EntryEvent, EntryListener
 
 K = TypeVar("K")
 V = TypeVar("V")
+
+
+class _CallbackEntryListener(EntryListener[Any, Any]):
+    """Internal listener that wraps callback functions for MultiMap."""
+
+    def __init__(
+        self,
+        entry_added: Optional[Callable[[EntryEvent[Any, Any]], None]] = None,
+        entry_removed: Optional[Callable[[EntryEvent[Any, Any]], None]] = None,
+        map_cleared: Optional[Callable[[EntryEvent[Any, Any]], None]] = None,
+    ):
+        self._entry_added = entry_added
+        self._entry_removed = entry_removed
+        self._map_cleared = map_cleared
+
+    def entry_added(self, event: EntryEvent[Any, Any]) -> None:
+        if self._entry_added:
+            self._entry_added(event)
+
+    def entry_removed(self, event: EntryEvent[Any, Any]) -> None:
+        if self._entry_removed:
+            self._entry_removed(event)
+
+    def map_cleared(self, event: EntryEvent[Any, Any]) -> None:
+        if self._map_cleared:
+            self._map_cleared(event)
 
 
 class MultiMapProxy(Proxy, Generic[K, V]):
@@ -19,7 +46,7 @@ class MultiMapProxy(Proxy, Generic[K, V]):
 
     def __init__(self, name: str, context: Optional[ProxyContext] = None):
         super().__init__(self.SERVICE_NAME, name, context)
-        self._entry_listeners: Dict[str, Any] = {}
+        self._entry_listeners: Dict[str, Tuple[Any, bool]] = {}
 
     def put(self, key: K, value: V) -> bool:
         """Add a value to the collection associated with a key.
@@ -320,23 +347,48 @@ class MultiMapProxy(Proxy, Generic[K, V]):
 
     def add_entry_listener(
         self,
-        listener: Any,
+        listener: Optional[EntryListener[K, V]] = None,
         include_value: bool = True,
         key: Optional[K] = None,
+        entry_added: Optional[Callable[[EntryEvent[K, V]], None]] = None,
+        entry_removed: Optional[Callable[[EntryEvent[K, V]], None]] = None,
+        map_cleared: Optional[Callable[[EntryEvent[K, V]], None]] = None,
     ) -> str:
         """Add an entry listener.
 
+        Can be called with either a listener object or individual callbacks.
+
         Args:
-            listener: The listener to add.
+            listener: An EntryListener instance.
             include_value: Whether to include values in events.
             key: Optional specific key to listen on.
+            entry_added: Callback for entry added events.
+            entry_removed: Callback for entry removed events.
+            map_cleared: Callback for map cleared events.
 
         Returns:
             A registration ID.
+
+        Raises:
+            ValueError: If neither listener nor callbacks are provided.
         """
+        self._check_not_destroyed()
+
+        if listener is None and entry_added is None and entry_removed is None and map_cleared is None:
+            raise ValueError(
+                "Either listener or at least one callback must be provided"
+            )
+
         import uuid
+
+        effective_listener: Any
+        if listener is not None:
+            effective_listener = listener
+        else:
+            effective_listener = _CallbackEntryListener(entry_added, entry_removed, map_cleared)
+
         registration_id = str(uuid.uuid4())
-        self._entry_listeners[registration_id] = (listener, include_value)
+        self._entry_listeners[registration_id] = (effective_listener, include_value)
         return registration_id
 
     def remove_entry_listener(self, registration_id: str) -> bool:
@@ -349,6 +401,38 @@ class MultiMapProxy(Proxy, Generic[K, V]):
             True if the listener was removed.
         """
         return self._entry_listeners.pop(registration_id, None) is not None
+
+    def _notify_entry_added(self, key: K, value: V) -> None:
+        """Notify listeners of an entry added event."""
+        for listener, include_value in self._entry_listeners.values():
+            event = EntryEvent(
+                EntryEvent.ADDED,
+                key,
+                value if include_value else None,
+            )
+            if hasattr(listener, "entry_added"):
+                listener.entry_added(event)
+
+    def _notify_entry_removed(self, key: K, value: V) -> None:
+        """Notify listeners of an entry removed event."""
+        for listener, include_value in self._entry_listeners.values():
+            event = EntryEvent(
+                EntryEvent.REMOVED,
+                key,
+                value if include_value else None,
+            )
+            if hasattr(listener, "entry_removed"):
+                listener.entry_removed(event)
+
+    def _notify_map_cleared(self) -> None:
+        """Notify listeners of a map cleared event."""
+        for listener, include_value in self._entry_listeners.values():
+            event: EntryEvent[K, V] = EntryEvent(
+                EntryEvent.CLEAR_ALL,
+                None,  # type: ignore
+            )
+            if hasattr(listener, "map_cleared"):
+                listener.map_cleared(event)
 
     def lock(self, key: K, ttl: float = -1) -> None:
         """Acquire a lock on a key.
