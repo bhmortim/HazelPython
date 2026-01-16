@@ -1,10 +1,10 @@
-Data Structures API Reference
-=============================
+Data Structures API
+===================
 
 Map
 ---
 
-.. automodule:: hazelcast.proxy.map
+.. autoclass:: hazelcast.proxy.map.Map
    :members:
    :undoc-members:
    :show-inheritance:
@@ -12,7 +12,7 @@ Map
 Queue
 -----
 
-.. automodule:: hazelcast.proxy.queue
+.. autoclass:: hazelcast.proxy.queue.Queue
    :members:
    :undoc-members:
    :show-inheritance:
@@ -20,7 +20,7 @@ Queue
 Set
 ---
 
-.. automodule:: hazelcast.proxy.set
+.. autoclass:: hazelcast.proxy.collections.Set
    :members:
    :undoc-members:
    :show-inheritance:
@@ -28,7 +28,7 @@ Set
 List
 ----
 
-.. automodule:: hazelcast.proxy.list
+.. autoclass:: hazelcast.proxy.collections.List
    :members:
    :undoc-members:
    :show-inheritance:
@@ -36,7 +36,7 @@ List
 MultiMap
 --------
 
-.. automodule:: hazelcast.proxy.multi_map
+.. autoclass:: hazelcast.proxy.multi_map.MultiMap
    :members:
    :undoc-members:
    :show-inheritance:
@@ -44,7 +44,7 @@ MultiMap
 ReplicatedMap
 -------------
 
-.. automodule:: hazelcast.proxy.replicated_map
+.. autoclass:: hazelcast.proxy.replicated_map.ReplicatedMap
    :members:
    :undoc-members:
    :show-inheritance:
@@ -52,7 +52,7 @@ ReplicatedMap
 Ringbuffer
 ----------
 
-.. automodule:: hazelcast.proxy.ringbuffer
+.. autoclass:: hazelcast.proxy.ringbuffer.Ringbuffer
    :members:
    :undoc-members:
    :show-inheritance:
@@ -60,15 +60,7 @@ Ringbuffer
 Topic
 -----
 
-.. automodule:: hazelcast.proxy.topic
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-ReliableTopic
--------------
-
-.. automodule:: hazelcast.proxy.reliable_topic
+.. autoclass:: hazelcast.proxy.topic.Topic
    :members:
    :undoc-members:
    :show-inheritance:
@@ -76,31 +68,7 @@ ReliableTopic
 PNCounter
 ---------
 
-.. automodule:: hazelcast.proxy.pn_counter
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-CardinalityEstimator
---------------------
-
-.. automodule:: hazelcast.proxy.cardinality_estimator
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Executor Service
-----------------
-
-.. automodule:: hazelcast.proxy.executor
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Base Classes
-------------
-
-.. automodule:: hazelcast.proxy.base
+.. autoclass:: hazelcast.proxy.pn_counter.PNCounter
    :members:
    :undoc-members:
    :show-inheritance:

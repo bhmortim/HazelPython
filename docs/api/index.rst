@@ -1,7 +1,8 @@
 API Reference
 =============
 
-Complete API reference for the Hazelcast Python Client.
+This section contains the complete API documentation for the Hazelcast
+Python Client.
 
 .. toctree::
    :maxdepth: 2
@@ -9,76 +10,108 @@ Complete API reference for the Hazelcast Python Client.
    client
    config
    data_structures
-   cp
-   sql
-   jet
-   transactions
    predicates
    aggregators
    serialization
+   sql
+   jet
+   transactions
+   cp
    listeners
    exceptions
 
-
-Module Index
+Core Classes
 ------------
 
-Core
-~~~~
+.. currentmodule:: hazelcast
 
-* :mod:`hazelcast` - Main package exports
-* :mod:`hazelcast.client` - HazelcastClient
-* :mod:`hazelcast.config` - Configuration classes
-
-Data Structures
+HazelcastClient
 ~~~~~~~~~~~~~~~
 
-* :mod:`hazelcast.proxy.map` - Map
-* :mod:`hazelcast.proxy.queue` - Queue
-* :mod:`hazelcast.proxy.collections` - Set, List
-* :mod:`hazelcast.proxy.multi_map` - MultiMap
-* :mod:`hazelcast.proxy.replicated_map` - ReplicatedMap
-* :mod:`hazelcast.proxy.ringbuffer` - Ringbuffer
-* :mod:`hazelcast.proxy.topic` - Topic
-* :mod:`hazelcast.proxy.reliable_topic` - ReliableTopic
-* :mod:`hazelcast.proxy.pn_counter` - PNCounter
-* :mod:`hazelcast.proxy.cardinality_estimator` - CardinalityEstimator
-* :mod:`hazelcast.proxy.executor` - IExecutorService
+.. autoclass:: HazelcastClient
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-CP Subsystem
+ClientConfig
 ~~~~~~~~~~~~
 
-* :mod:`hazelcast.cp.atomic` - AtomicLong, AtomicReference
-* :mod:`hazelcast.cp.sync` - FencedLock, Semaphore, CountDownLatch
+.. autoclass:: hazelcast.config.ClientConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-SQL
-~~~
+Quick Reference
+---------------
 
-* :mod:`hazelcast.sql.service` - SqlService
-* :mod:`hazelcast.sql.statement` - SqlStatement
+**Client Lifecycle:**
 
-Jet
-~~~
+.. code-block:: python
 
-* :mod:`hazelcast.jet.service` - JetService
-* :mod:`hazelcast.jet` - Pipeline, Job, JobConfig
+   from hazelcast import HazelcastClient, ClientConfig
 
-Transactions
-~~~~~~~~~~~~
+   config = ClientConfig()
+   client = HazelcastClient(config)
+   client.start()
+   # ... use client ...
+   client.shutdown()
 
-* :mod:`hazelcast.transaction` - TransactionContext, TransactionOptions
+**Data Structures:**
 
-Query
-~~~~~
+.. code-block:: python
 
-* :mod:`hazelcast.predicate` - Predicates
-* :mod:`hazelcast.aggregator` - Aggregators
-* :mod:`hazelcast.projection` - Projections
+   # Map
+   my_map = client.get_map("my-map")
+   
+   # Queue
+   queue = client.get_queue("my-queue")
+   
+   # Set
+   my_set = client.get_set("my-set")
+   
+   # List
+   my_list = client.get_list("my-list")
+   
+   # MultiMap
+   multi_map = client.get_multi_map("my-multimap")
+   
+   # ReplicatedMap
+   rep_map = client.get_replicated_map("my-rep-map")
+   
+   # Ringbuffer
+   ringbuffer = client.get_ringbuffer("my-ringbuffer")
+   
+   # Topic
+   topic = client.get_topic("my-topic")
 
-Other
-~~~~~
+**CP Subsystem:**
 
-* :mod:`hazelcast.exceptions` - Exception classes
-* :mod:`hazelcast.listener` - Event listeners
-* :mod:`hazelcast.failover` - Failover configuration
-* :mod:`hazelcast.near_cache` - Near cache
+.. code-block:: python
+
+   # AtomicLong
+   counter = client.get_atomic_long("my-counter")
+   
+   # AtomicReference
+   ref = client.get_atomic_reference("my-ref")
+   
+   # FencedLock
+   lock = client.get_fenced_lock("my-lock")
+   
+   # Semaphore
+   semaphore = client.get_semaphore("my-semaphore")
+   
+   # CountDownLatch
+   latch = client.get_count_down_latch("my-latch")
+
+**Services:**
+
+.. code-block:: python
+
+   # SQL
+   sql = client.get_sql()
+   
+   # Jet
+   jet = client.get_jet()
+   
+   # Transactions
+   ctx = client.new_transaction_context()

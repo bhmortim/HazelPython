@@ -1,59 +1,43 @@
-Configuration API Reference
-===========================
+Configuration API
+=================
 
 .. automodule:: hazelcast.config
    :members:
    :undoc-members:
    :show-inheritance:
 
-ClientConfig
-------------
+Configuration Classes
+---------------------
 
-.. autoclass:: hazelcast.config.ClientConfig
-   :members:
-   :undoc-members:
+ClientConfig
+~~~~~~~~~~~~
+
+Main configuration class for the Hazelcast client.
 
 NetworkConfig
--------------
+~~~~~~~~~~~~~
 
-.. autoclass:: hazelcast.config.NetworkConfig
-   :members:
-   :undoc-members:
+Network-related configuration including addresses and timeouts.
 
 SecurityConfig
---------------
+~~~~~~~~~~~~~~
 
-.. autoclass:: hazelcast.config.SecurityConfig
-   :members:
-   :undoc-members:
+Security configuration including credentials and TLS settings.
 
 SerializationConfig
--------------------
+~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: hazelcast.config.SerializationConfig
-   :members:
-   :undoc-members:
+Serialization settings including portable and custom serializers.
 
 NearCacheConfig
----------------
+~~~~~~~~~~~~~~~
 
-.. autoclass:: hazelcast.config.NearCacheConfig
-   :members:
-   :undoc-members:
+Near cache configuration for client-side caching.
 
-ConnectionStrategyConfig
-------------------------
+DiscoveryConfig
+~~~~~~~~~~~~~~~
 
-.. autoclass:: hazelcast.config.ConnectionStrategyConfig
-   :members:
-   :undoc-members:
-
-RetryConfig
------------
-
-.. autoclass:: hazelcast.config.RetryConfig
-   :members:
-   :undoc-members:
+Cloud discovery configuration for automatic cluster member discovery.
 
 Enumerations
 ------------
@@ -67,5 +51,9 @@ Enumerations
    :undoc-members:
 
 .. autoclass:: hazelcast.config.InMemoryFormat
+   :members:
+   :undoc-members:
+
+.. autoclass:: hazelcast.config.DiscoveryStrategyType
    :members:
    :undoc-members:

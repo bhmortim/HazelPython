@@ -1,157 +1,95 @@
-Predicates
-==========
+Predicates API
+==============
 
-.. module:: hazelcast.predicate
+.. automodule:: hazelcast.predicate
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Predicate Classes
+-----------------
 
 Base Class
-----------
+~~~~~~~~~~
 
-.. autoclass:: Predicate
+.. autoclass:: hazelcast.predicate.Predicate
    :members:
    :undoc-members:
-   :show-inheritance:
 
-Built-in Predicates
--------------------
+Comparison Predicates
+~~~~~~~~~~~~~~~~~~~~~
 
-SqlPredicate
-~~~~~~~~~~~~
-
-.. autoclass:: SqlPredicate
+.. autoclass:: hazelcast.predicate.EqualPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-TruePredicate
-~~~~~~~~~~~~~
-
-.. autoclass:: TruePredicate
+.. autoclass:: hazelcast.predicate.NotEqualPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-FalsePredicate
-~~~~~~~~~~~~~~
-
-.. autoclass:: FalsePredicate
+.. autoclass:: hazelcast.predicate.GreaterThanPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-EqualPredicate
-~~~~~~~~~~~~~~
-
-.. autoclass:: EqualPredicate
+.. autoclass:: hazelcast.predicate.GreaterThanOrEqualPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-NotEqualPredicate
-~~~~~~~~~~~~~~~~~
-
-.. autoclass:: NotEqualPredicate
+.. autoclass:: hazelcast.predicate.LessThanPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-GreaterLessPredicate
-~~~~~~~~~~~~~~~~~~~~
-
-.. autoclass:: GreaterLessPredicate
+.. autoclass:: hazelcast.predicate.LessThanOrEqualPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-BetweenPredicate
-~~~~~~~~~~~~~~~~
-
-.. autoclass:: BetweenPredicate
+.. autoclass:: hazelcast.predicate.BetweenPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-InPredicate
-~~~~~~~~~~~
-
-.. autoclass:: InPredicate
+.. autoclass:: hazelcast.predicate.InPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-LikePredicate
-~~~~~~~~~~~~~
+Pattern Predicates
+~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: LikePredicate
+.. autoclass:: hazelcast.predicate.LikePredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-ILikePredicate
-~~~~~~~~~~~~~~
-
-.. autoclass:: ILikePredicate
+.. autoclass:: hazelcast.predicate.ILikePredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-RegexPredicate
-~~~~~~~~~~~~~~
-
-.. autoclass:: RegexPredicate
+.. autoclass:: hazelcast.predicate.RegexPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-Compound Predicates
--------------------
+Logical Predicates
+~~~~~~~~~~~~~~~~~~
 
-AndPredicate
-~~~~~~~~~~~~
-
-.. autoclass:: AndPredicate
+.. autoclass:: hazelcast.predicate.AndPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-OrPredicate
-~~~~~~~~~~~
-
-.. autoclass:: OrPredicate
+.. autoclass:: hazelcast.predicate.OrPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-NotPredicate
-~~~~~~~~~~~~
-
-.. autoclass:: NotPredicate
+.. autoclass:: hazelcast.predicate.NotPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
 Special Predicates
-------------------
+~~~~~~~~~~~~~~~~~~
 
-InstanceOfPredicate
-~~~~~~~~~~~~~~~~~~~
-
-.. autoclass:: InstanceOfPredicate
+.. autoclass:: hazelcast.predicate.SqlPredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-PagingPredicate
-~~~~~~~~~~~~~~~
-
-.. autoclass:: PagingPredicate
+.. autoclass:: hazelcast.predicate.TruePredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-PredicateBuilder
-----------------
-
-.. autoclass:: PredicateBuilder
+.. autoclass:: hazelcast.predicate.FalsePredicate
    :members:
-   :undoc-members:
-   :show-inheritance:
+
+.. autoclass:: hazelcast.predicate.PagingPredicate
+   :members:
+
+Factory Functions
+-----------------
+
+.. autofunction:: hazelcast.predicate.attr
+.. autofunction:: hazelcast.predicate.sql
+.. autofunction:: hazelcast.predicate.and_
+.. autofunction:: hazelcast.predicate.or_
+.. autofunction:: hazelcast.predicate.not_
+.. autofunction:: hazelcast.predicate.true
+.. autofunction:: hazelcast.predicate.false
+.. autofunction:: hazelcast.predicate.paging

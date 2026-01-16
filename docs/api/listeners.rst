@@ -1,80 +1,127 @@
-Event Listeners
-===============
+Listeners API
+=============
 
-.. module:: hazelcast.listener
+.. automodule:: hazelcast.listener
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-Lifecycle Events
-----------------
+Lifecycle Listeners
+-------------------
 
-LifecycleState
-~~~~~~~~~~~~~~
+LifecycleListener
+~~~~~~~~~~~~~~~~~
 
-.. autoclass:: LifecycleState
+.. autoclass:: hazelcast.listener.LifecycleListener
    :members:
    :undoc-members:
 
 LifecycleEvent
 ~~~~~~~~~~~~~~
 
-.. autoclass:: LifecycleEvent
+.. autoclass:: hazelcast.listener.LifecycleEvent
    :members:
    :undoc-members:
 
-LifecycleListener
-~~~~~~~~~~~~~~~~~
+LifecycleState
+~~~~~~~~~~~~~~
 
-.. autoclass:: LifecycleListener
+.. autoclass:: hazelcast.listener.LifecycleState
    :members:
    :undoc-members:
-   :show-inheritance:
 
-Membership Events
------------------
-
-MembershipEvent
-~~~~~~~~~~~~~~~
-
-.. autoclass:: MembershipEvent
-   :members:
-   :undoc-members:
+Membership Listeners
+--------------------
 
 MembershipListener
 ~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: MembershipListener
+.. autoclass:: hazelcast.listener.MembershipListener
    :members:
    :undoc-members:
-   :show-inheritance:
 
-Distributed Object Events
--------------------------
+MembershipEvent
+~~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.MembershipEvent
+   :members:
+   :undoc-members:
+
+InitialMembershipListener
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.InitialMembershipListener
+   :members:
+   :undoc-members:
+
+InitialMembershipEvent
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.InitialMembershipEvent
+   :members:
+   :undoc-members:
+
+Distributed Object Listeners
+----------------------------
+
+DistributedObjectListener
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.DistributedObjectListener
+   :members:
+   :undoc-members:
 
 DistributedObjectEvent
 ~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: DistributedObjectEvent
+.. autoclass:: hazelcast.listener.DistributedObjectEvent
    :members:
    :undoc-members:
 
 DistributedObjectEventType
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: DistributedObjectEventType
+.. autoclass:: hazelcast.listener.DistributedObjectEventType
    :members:
    :undoc-members:
 
-DistributedObjectListener
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Partition Listeners
+-------------------
 
-.. autoclass:: DistributedObjectListener
+PartitionLostListener
+~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.PartitionLostListener
    :members:
    :undoc-members:
-   :show-inheritance:
 
-ListenerService
----------------
+PartitionLostEvent
+~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: ListenerService
+.. autoclass:: hazelcast.listener.PartitionLostEvent
    :members:
    :undoc-members:
-   :show-inheritance:
+
+Migration Listeners
+-------------------
+
+MigrationListener
+~~~~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.MigrationListener
+   :members:
+   :undoc-members:
+
+MigrationEvent
+~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.MigrationEvent
+   :members:
+   :undoc-members:
+
+MigrationState
+~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.listener.MigrationState
+   :members:
+   :undoc-members:

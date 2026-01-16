@@ -1,301 +1,272 @@
 CP Subsystem
 ============
 
-The CP (Consensus Protocol) Subsystem provides distributed data structures
-with strong consistency guarantees using the Raft consensus algorithm.
+The CP (Consensus Protocol) Subsystem provides strongly consistent distributed
+primitives using the Raft consensus algorithm. Unlike AP (Available/Partition-tolerant)
+data structures, CP primitives guarantee linearizability.
 
 .. note::
 
-   CP Subsystem requires a Hazelcast cluster with at least 3 members.
+   The CP Subsystem requires a minimum of 3 cluster members to operate.
+   Configure CP members in the Hazelcast cluster configuration.
 
 AtomicLong
 ----------
 
-A distributed atomic counter with strong consistency.
+A distributed atomic long counter with strong consistency:
 
 .. code-block:: python
 
-   counter = client.get_atomic_long("sequence-generator")
+   from hazelcast import HazelcastClient
 
-   # Set and get
-   counter.set(0)
-   value = counter.get()
-
-   # Increment/decrement
-   value = counter.increment_and_get()
-   value = counter.get_and_increment()
-   value = counter.decrement_and_get()
-   value = counter.get_and_decrement()
-
-   # Add/subtract
-   value = counter.add_and_get(10)
-   value = counter.get_and_add(10)
-   value = counter.subtract_and_get(5)
-   value = counter.get_and_subtract(5)
-
-   # Compare and set (CAS)
-   success = counter.compare_and_set(expected=10, update=20)
-
-   # Alter with function
-   counter.alter(lambda x: x * 2)
-   value = counter.alter_and_get(lambda x: x + 1)
-   value = counter.get_and_alter(lambda x: x - 1)
-
-   # Apply (read-only)
-   result = counter.apply(lambda x: f"Value is {x}")
-
+   with HazelcastClient() as client:
+       counter = client.get_atomic_long("my-counter")
+       
+       # Set initial value
+       counter.set(0)
+       
+       # Atomic increment
+       new_value = counter.increment_and_get()
+       old_value = counter.get_and_increment()
+       
+       # Add arbitrary value
+       counter.add_and_get(10)
+       counter.get_and_add(5)
+       
+       # Compare and set (CAS)
+       success = counter.compare_and_set(expected=15, update=20)
+       
+       # Get current value
+       current = counter.get()
+       
+       # Alter with function
+       counter.alter(lambda x: x * 2)
+       result = counter.alter_and_get(lambda x: x + 1)
 
 AtomicReference
 ---------------
 
-A distributed atomic object reference.
+A distributed atomic reference for arbitrary objects:
 
 .. code-block:: python
 
-   ref = client.get_atomic_reference("config")
-
-   # Set and get
-   ref.set({"version": "1.0", "enabled": True})
-   config = ref.get()
-
-   # Get and set
-   old_config = ref.get_and_set({"version": "2.0"})
-
+   config_ref = client.get_atomic_reference("app-config")
+   
+   # Set value
+   config_ref.set({"version": "1.0", "features": ["a", "b"]})
+   
+   # Get value
+   config = config_ref.get()
+   
    # Compare and set
-   current = ref.get()
-   new_config = {"version": "2.1"}
-   success = ref.compare_and_set(current, new_config)
-
-   # Check contents
-   has_value = ref.contains(new_config)
-   is_empty = ref.is_null()
-
+   old_config = config_ref.get()
+   new_config = {**old_config, "version": "2.0"}
+   success = config_ref.compare_and_set(old_config, new_config)
+   
    # Clear
-   ref.clear()
-
+   config_ref.clear()
+   
+   # Check if null
+   is_null = config_ref.is_null()
 
 FencedLock
 ----------
 
-A distributed lock with fencing token support for safe ownership verification.
-
-Basic Usage
-~~~~~~~~~~~
+A distributed mutex with fencing token support to prevent split-brain issues:
 
 .. code-block:: python
 
    lock = client.get_fenced_lock("resource-lock")
-
-   # Acquire lock
-   fence_token = lock.lock()
+   
+   # Basic lock/unlock
+   fence = lock.lock()
    try:
        # Critical section
-       print(f"Lock acquired with fence: {fence_token}")
+       print(f"Lock acquired with fence token: {fence}")
+       # Do protected work...
    finally:
        lock.unlock()
-
-Context Manager
-~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   lock = client.get_fenced_lock("resource-lock")
-
-   with lock as fence_token:
+   
+   # Context manager (recommended)
+   with lock as fence:
+       print(f"Lock acquired: {fence}")
        # Critical section
-       print(f"Working with fence: {fence_token}")
-   # Lock automatically released
-
-Try Lock
-~~~~~~~~
-
-.. code-block:: python
-
-   lock = client.get_fenced_lock("resource-lock")
-
-   # Non-blocking
-   if lock.try_lock():
+   
+   # Try lock with timeout
+   fence = lock.try_lock(timeout=5.0)
+   if fence:
        try:
-           # Got the lock
+           # Acquired the lock
            pass
        finally:
            lock.unlock()
    else:
-       print("Lock not available")
+       print("Could not acquire lock")
+   
+   # Check lock status
+   is_locked = lock.is_locked()
+   is_mine = lock.is_locked_by_current_thread()
+   lock_count = lock.get_lock_count()
 
-   # With timeout
-   if lock.try_lock(timeout=5.0):
-       try:
-           # Got the lock within 5 seconds
-           pass
-       finally:
-           lock.unlock()
+**Fencing Tokens:**
 
-Lock Status
-~~~~~~~~~~~
-
-.. code-block:: python
-
-   lock = client.get_fenced_lock("resource-lock")
-
-   lock.lock()
-   print(f"Is locked: {lock.is_locked()}")
-   print(f"Is locked by me: {lock.is_locked_by_current_thread()}")
-   print(f"Lock count: {lock.get_lock_count()}")
-
-Reentrant Locking
-~~~~~~~~~~~~~~~~~
-
-FencedLock supports reentrant acquisition:
+Fencing tokens are monotonically increasing numbers that can be used to
+detect stale lock holders. Pass the fence token to protected resources
+to ensure only the current lock holder can make changes:
 
 .. code-block:: python
 
-   lock = client.get_fenced_lock("resource-lock")
-
-   lock.lock()  # count = 1
-   lock.lock()  # count = 2 (reentrant)
-
-   lock.unlock()  # count = 1
-   lock.unlock()  # count = 0 (released)
-
+   with lock as fence:
+       # Use fence token when accessing protected resource
+       update_resource(fence_token=fence, data=my_data)
 
 Semaphore
 ---------
 
-A distributed counting semaphore.
+A distributed counting semaphore:
 
 .. code-block:: python
 
-   sem = client.get_semaphore("connection-pool")
-
-   # Initialize permits (only once)
-   sem.init(10)  # 10 permits
-
-   # Acquire permits
-   sem.acquire(1)
-   sem.acquire(2)  # Acquire multiple
-
-   # Release permits
-   sem.release(1)
-   sem.release(2)
-
-   # Try acquire (non-blocking)
-   if sem.try_acquire(1):
-       try:
-           # Got a permit
-           pass
-       finally:
-           sem.release(1)
-
+   semaphore = client.get_semaphore("connection-pool")
+   
+   # Initialize with permits
+   semaphore.init(10)  # Allow 10 concurrent connections
+   
+   # Acquire permit(s)
+   semaphore.acquire()
+   semaphore.acquire(permits=3)  # Acquire multiple
+   
    # Try acquire with timeout
-   if sem.try_acquire(1, timeout=5.0):
-       try:
-           # Got a permit within 5 seconds
-           pass
-       finally:
-           sem.release(1)
-
+   acquired = semaphore.try_acquire(timeout=5.0)
+   acquired = semaphore.try_acquire(permits=2, timeout=5.0)
+   
+   # Release permit(s)
+   semaphore.release()
+   semaphore.release(permits=3)
+   
    # Check available permits
-   available = sem.available_permits()
-
-   # Modify permit count
-   sem.reduce_permits(2)
-   sem.increase_permits(5)
-
+   available = semaphore.available_permits()
+   
    # Drain all permits
-   drained = sem.drain_permits()
+   drained = semaphore.drain_permits()
+   
+   # Increase/decrease permits
+   semaphore.increase_permits(5)
+   semaphore.reduce_permits(2)
 
+**Rate Limiting Example:**
+
+.. code-block:: python
+
+   rate_limiter = client.get_semaphore("api-rate-limiter")
+   rate_limiter.init(100)  # 100 requests per period
+   
+   def make_api_call():
+       if rate_limiter.try_acquire(timeout=1.0):
+           try:
+               # Make the API call
+               pass
+           finally:
+               # Release after rate limit window
+               # (typically done by a background task)
+               pass
+       else:
+           raise RateLimitExceeded()
 
 CountDownLatch
 --------------
 
-A distributed synchronization barrier.
+A distributed countdown latch for coordinating multiple processes:
 
 .. code-block:: python
 
    latch = client.get_count_down_latch("startup-latch")
-
-   # Set count (typically done once by coordinator)
-   latch.try_set_count(3)
-
-   # Check count
-   count = latch.get_count()
-
-   # Count down (done by workers)
+   
+   # Initialize (typically by coordinator)
+   success = latch.try_set_count(3)  # Wait for 3 services
+   
+   # Wait for countdown (blocking)
+   latch.await_latch()
+   latch.await_latch(timeout=30.0)  # With timeout
+   
+   # Count down (by each service when ready)
    latch.count_down()
+   
+   # Get current count
+   remaining = latch.get_count()
 
-   # Wait for count to reach zero
-   latch.await_latch()  # Blocking wait
-   success = latch.await_latch(timeout=30.0)  # With timeout
-
-Example: Multi-Service Startup
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Coordinated Startup Example:**
 
 .. code-block:: python
 
-   import threading
+   # Coordinator
+   startup_latch = client.get_count_down_latch("app-startup")
+   startup_latch.try_set_count(3)
+   
+   print("Waiting for all services...")
+   startup_latch.await_latch(timeout=60.0)
+   print("All services ready!")
 
-   # Coordinator sets up the latch
-   latch = client.get_count_down_latch("services-ready")
-   latch.try_set_count(3)
+   # Service 1, 2, 3 (each runs this)
+   startup_latch = client.get_count_down_latch("app-startup")
+   
+   # Do initialization...
+   initialize_service()
+   
+   # Signal ready
+   startup_latch.count_down()
+   print("Service ready")
 
-   # Each service counts down when ready
-   def start_database():
-       # Initialize database...
-       latch.count_down()
+CPMap
+-----
 
-   def start_cache():
-       # Initialize cache...
-       latch.count_down()
-
-   def start_message_queue():
-       # Initialize MQ...
-       latch.count_down()
-
-   # Start services in threads
-   threads = [
-       threading.Thread(target=start_database),
-       threading.Thread(target=start_cache),
-       threading.Thread(target=start_message_queue),
-   ]
-   for t in threads:
-       t.start()
-
-   # Main thread waits for all services
-   if latch.await_latch(timeout=60.0):
-       print("All services started!")
-   else:
-       print("Timeout waiting for services")
-
-
-CP Groups
----------
-
-CP structures belong to CP groups. By default, they use the "default" group.
+A distributed map with strong consistency (CP):
 
 .. code-block:: python
 
-   # Default group (implicitly)
-   counter = client.get_atomic_long("my-counter")
+   cp_map = client.get_cp_map("critical-config")
+   
+   # Basic operations (similar to IMap but strongly consistent)
+   cp_map.put("key", "value")
+   value = cp_map.get("key")
+   
+   # Compare and set
+   success = cp_map.compare_and_set("key", "value", "new-value")
+   
+   # Put if absent
+   old = cp_map.put_if_absent("key2", "value2")
+   
+   # Remove
+   cp_map.remove("key")
 
-   # The underlying CP group can be accessed via the proxy
-   # group_id = counter.group_id
+.. warning::
 
+   CPMap has lower throughput than IMap due to consensus overhead.
+   Use it only when strong consistency is required.
 
 Best Practices
 --------------
 
-1. **Use FencedLock fence tokens**: Always check fence tokens when
-   accessing protected resources to detect stale locks.
+1. **Use CP for Coordination, AP for Data**
+   
+   Use CP primitives for coordination (locks, latches, counters) and
+   AP data structures (IMap, IQueue) for application data.
 
-2. **Initialize Semaphores once**: Call ``init()`` only once per semaphore
-   name, typically at application startup.
+2. **Keep Critical Sections Short**
+   
+   When holding a FencedLock, complete work quickly to avoid blocking
+   other processes.
 
-3. **Set appropriate timeouts**: Use timeouts with ``try_lock()`` and
-   ``await_latch()`` to prevent deadlocks.
+3. **Use Fencing Tokens**
+   
+   Always use fencing tokens when the lock protects external resources
+   to prevent split-brain scenarios.
 
-4. **Handle failures gracefully**: CP operations can fail if the CP
-   subsystem loses quorum.
+4. **Handle Timeouts**
+   
+   Always use timeouts with try_acquire/try_lock to prevent deadlocks.
 
-5. **Size your CP group appropriately**: Minimum 3 members, 5 or 7
-   recommended for production.
+5. **Monitor CP Health**
+   
+   Monitor CP group health through Management Center to detect issues
+   early.

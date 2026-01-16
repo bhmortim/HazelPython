@@ -1,34 +1,57 @@
 Transactions
 ============
 
-Hazelcast supports ACID transactions across multiple distributed data structures.
+Hazelcast provides ACID transactions across multiple distributed data structures.
+Transactions ensure that either all operations succeed or none do.
 
 Basic Usage
 -----------
 
-Use the context manager pattern for automatic commit/rollback:
+Using context manager (recommended):
 
 .. code-block:: python
 
-   from hazelcast import HazelcastClient, ClientConfig
+   from hazelcast import HazelcastClient
 
-   with HazelcastClient(config) as client:
+   with HazelcastClient() as client:
+       # Create transaction context
        with client.new_transaction_context() as ctx:
            # Get transactional proxies
-           txn_map = ctx.get_map("accounts")
-           txn_queue = ctx.get_queue("audit-log")
-
+           accounts = ctx.get_map("accounts")
+           audit_log = ctx.get_list("audit-log")
+           
            # Perform operations
-           balance = txn_map.get("account:123") or 0
-           txn_map.put("account:123", balance - 100)
-           txn_map.put("account:456", (txn_map.get("account:456") or 0) + 100)
-           txn_queue.offer("Transfer: 123 -> 456, amount: 100")
+           balance = accounts.get("account:123")
+           accounts.put("account:123", balance - 100)
+           accounts.put("account:456", accounts.get("account:456") + 100)
+           
+           audit_log.add({
+               "from": "account:123",
+               "to": "account:456",
+               "amount": 100
+           })
+           
+           # Auto-commits on successful exit
 
-           # Transaction auto-commits on successful exit
-       # Transaction is committed here
+Manual Transaction Control
+--------------------------
 
-If an exception occurs, the transaction automatically rolls back.
+For fine-grained control:
 
+.. code-block:: python
+
+   ctx = client.new_transaction_context()
+   
+   try:
+       ctx.begin()
+       
+       accounts = ctx.get_map("accounts")
+       # ... operations ...
+       
+       ctx.commit()
+   except Exception as e:
+       ctx.rollback()
+       raise
 
 Transaction Options
 -------------------
@@ -40,56 +63,30 @@ Configure transaction behavior:
    from hazelcast.transaction import TransactionOptions, TransactionType
 
    options = TransactionOptions(
-       timeout=60.0,                              # 60 second timeout
-       durability=1,                              # Number of backups
-       transaction_type=TransactionType.TWO_PHASE,  # Two-phase commit
+       timeout=60.0,  # Transaction timeout in seconds
+       durability=2,  # Number of backup copies for transaction log
+       transaction_type=TransactionType.TWO_PHASE,  # Commit protocol
    )
-
+   
    with client.new_transaction_context(options) as ctx:
-       # Transaction operations
+       # Transactional operations
        pass
 
-Transaction Types
-~~~~~~~~~~~~~~~~~
+**Transaction Types:**
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 70
+   :widths: 20 80
 
    * - Type
      - Description
    * - ``ONE_PHASE``
-     - Single-phase commit (default). Faster but less durable.
+     - Single-phase commit. Faster but less reliable if coordinator fails.
    * - ``TWO_PHASE``
-     - Two-phase commit. More durable but slower.
-
-
-Manual Commit/Rollback
-----------------------
-
-For fine-grained control:
-
-.. code-block:: python
-
-   ctx = client.new_transaction_context()
-   ctx.begin_transaction()
-
-   try:
-       txn_map = ctx.get_map("data")
-       txn_map.put("key", "value")
-
-       # Explicit commit
-       ctx.commit_transaction()
-   except Exception:
-       # Explicit rollback
-       ctx.rollback_transaction()
-       raise
-
+     - Two-phase commit with prepare and commit phases. Stronger consistency.
 
 Transactional Data Structures
 -----------------------------
-
-The following data structures support transactions:
 
 TransactionalMap
 ~~~~~~~~~~~~~~~~
@@ -98,21 +95,21 @@ TransactionalMap
 
    with client.new_transaction_context() as ctx:
        txn_map = ctx.get_map("my-map")
-
-       # Supported operations
-       txn_map.put("key", "value")
+       
+       # Read operations
        value = txn_map.get("key")
-       txn_map.remove("key")
-       txn_map.put_if_absent("key", "default")
-       old = txn_map.replace("key", "new")
-       txn_map.set("key", "value")
-
        exists = txn_map.contains_key("key")
+       size = txn_map.size()
        keys = txn_map.key_set()
        values = txn_map.values()
-
-       size = txn_map.size()
-       is_empty = txn_map.is_empty()
+       
+       # Write operations
+       txn_map.put("key", "value")
+       txn_map.put_if_absent("key2", "value2")
+       txn_map.set("key3", "value3")
+       txn_map.remove("key4")
+       txn_map.delete("key5")
+       old = txn_map.replace("key", "new-value")
 
 TransactionalSet
 ~~~~~~~~~~~~~~~~
@@ -121,10 +118,11 @@ TransactionalSet
 
    with client.new_transaction_context() as ctx:
        txn_set = ctx.get_set("my-set")
-
-       txn_set.add("item")
-       txn_set.remove("item")
-
+       
+       txn_set.add("item1")
+       txn_set.add("item2")
+       exists = txn_set.contains("item1")
+       txn_set.remove("item1")
        size = txn_set.size()
 
 TransactionalList
@@ -134,10 +132,12 @@ TransactionalList
 
    with client.new_transaction_context() as ctx:
        txn_list = ctx.get_list("my-list")
-
-       txn_list.add("item")
-       txn_list.remove("item")
-
+       
+       txn_list.add("item1")
+       txn_list.add("item2")
+       first = txn_list.get(0)
+       txn_list.set(0, "updated")
+       txn_list.remove_at(1)
        size = txn_list.size()
 
 TransactionalQueue
@@ -147,12 +147,12 @@ TransactionalQueue
 
    with client.new_transaction_context() as ctx:
        txn_queue = ctx.get_queue("my-queue")
-
-       txn_queue.offer("item")
+       
+       txn_queue.offer("item1")
+       txn_queue.offer("item2", timeout=5.0)
        item = txn_queue.poll()
        item = txn_queue.poll(timeout=5.0)
-       item = txn_queue.peek()
-
+       peek = txn_queue.peek()
        size = txn_queue.size()
 
 TransactionalMultiMap
@@ -162,49 +162,44 @@ TransactionalMultiMap
 
    with client.new_transaction_context() as ctx:
        txn_mm = ctx.get_multi_map("my-multimap")
-
+       
        txn_mm.put("key", "value1")
        txn_mm.put("key", "value2")
        values = txn_mm.get("key")
+       count = txn_mm.value_count("key")
        txn_mm.remove("key", "value1")
        txn_mm.remove_all("key")
-
-       count = txn_mm.value_count("key")
-       size = txn_mm.size()
-
 
 Transaction States
 ------------------
 
-A transaction goes through these states:
+Transactions go through the following states:
 
 .. code-block:: text
 
-   NOT_STARTED -> ACTIVE -> PREPARED -> COMMITTED
-                    |                       |
-                    +--------> ROLLED_BACK <+
+   NO_TXN → ACTIVE → PREPARING → PREPARED → COMMITTING → COMMITTED
+                  ↘                      ↗
+                   → ROLLING_BACK → ROLLED_BACK
 
-You can check the current state:
+Check transaction state:
 
 .. code-block:: python
 
    from hazelcast.transaction import TransactionState
 
    ctx = client.new_transaction_context()
+   print(f"State: {ctx.state}")  # NO_TXN
+   
+   ctx.begin()
+   print(f"State: {ctx.state}")  # ACTIVE
+   
+   ctx.commit()
+   print(f"State: {ctx.state}")  # COMMITTED
 
-   print(ctx.state)  # TransactionState.NOT_STARTED
+Error Handling
+--------------
 
-   ctx.begin_transaction()
-   print(ctx.state)  # TransactionState.ACTIVE
-
-   ctx.commit_transaction()
-   print(ctx.state)  # TransactionState.COMMITTED
-
-
-Exception Handling
-------------------
-
-Transaction-specific exceptions:
+Handle transaction-specific exceptions:
 
 .. code-block:: python
 
@@ -216,41 +211,39 @@ Transaction-specific exceptions:
 
    try:
        with client.new_transaction_context() as ctx:
-           txn_map = ctx.get_map("data")
-           # Operations...
+           accounts = ctx.get_map("accounts")
+           # ... operations ...
    except TransactionTimedOutException:
        print("Transaction timed out")
    except TransactionNotActiveException:
        print("Transaction is not active")
    except TransactionException as e:
-       print(f"Transaction error: {e}")
-
+       print(f"Transaction failed: {e}")
 
 Best Practices
 --------------
 
-1. **Keep transactions short**: Long-running transactions hold locks and
-   can cause contention.
+1. **Keep Transactions Short**
+   
+   Long-running transactions lock resources and increase contention.
 
-2. **Use context managers**: They ensure proper cleanup on exceptions.
+2. **Use Context Manager**
+   
+   The context manager ensures proper commit/rollback handling.
 
-3. **Handle exceptions**: Always be prepared for transaction failures.
+3. **Set Appropriate Timeout**
+   
+   Configure timeout based on expected operation duration.
 
-4. **Choose the right transaction type**: Use ONE_PHASE for speed,
-   TWO_PHASE for durability.
+4. **Choose Transaction Type Wisely**
+   
+   Use ONE_PHASE for better performance when strong consistency isn't critical.
+   Use TWO_PHASE when consistency is paramount.
 
-5. **Set appropriate timeouts**: Prevent indefinite blocking.
+5. **Handle Failures Gracefully**
+   
+   Always implement proper error handling and consider retry logic.
 
-.. code-block:: python
-
-   # Good: Short, focused transaction
-   with client.new_transaction_context() as ctx:
-       txn_map = ctx.get_map("accounts")
-       balance = txn_map.get(account_id) or 0
-       txn_map.put(account_id, balance + amount)
-
-   # Avoid: Long-running transaction
-   with client.new_transaction_context() as ctx:
-       txn_map = ctx.get_map("data")
-       for item in large_dataset:  # Don't do this!
-           txn_map.put(item.key, item.value)
+6. **Avoid Nested Transactions**
+   
+   Hazelcast doesn't support nested transactions. Design accordingly.

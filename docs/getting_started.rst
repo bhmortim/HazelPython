@@ -1,95 +1,106 @@
 Getting Started
 ===============
 
-This guide will help you get started with the Hazelcast Python Client.
+This guide walks you through connecting to a Hazelcast cluster and performing
+basic operations with the Python client.
 
-Prerequisites
--------------
+Connecting to a Cluster
+-----------------------
 
-Before you begin, ensure you have:
+The simplest way to connect is using default settings:
 
-* Python 3.8 or higher installed
-* A running Hazelcast cluster (or use Docker to start one)
+.. code-block:: python
 
-Starting a Hazelcast Cluster
-----------------------------
+   from hazelcast import HazelcastClient
 
-The easiest way to start a Hazelcast cluster for development:
+   # Connect to localhost:5701
+   client = HazelcastClient()
+   
+   # Use the client...
+   
+   # Always shutdown when done
+   client.shutdown()
 
-.. code-block:: bash
+Using Context Manager
+~~~~~~~~~~~~~~~~~~~~~
 
-   docker run -d -p 5701:5701 hazelcast/hazelcast
-
-Installation
-------------
-
-Install the client using pip:
-
-.. code-block:: bash
-
-   pip install hazelcast-python-client
-
-For development with additional tools:
-
-.. code-block:: bash
-
-   pip install hazelcast-python-client[dev]
-
-
-Basic Connection
-----------------
-
-Connect to a Hazelcast cluster using the context manager pattern:
+The recommended approach uses a context manager for automatic cleanup:
 
 .. code-block:: python
 
    from hazelcast import HazelcastClient, ClientConfig
 
-   # Create configuration
    config = ClientConfig()
    config.cluster_name = "dev"
    config.cluster_members = ["localhost:5701"]
 
-   # Connect using context manager (recommended)
    with HazelcastClient(config) as client:
-       print(f"Connected to cluster: {config.cluster_name}")
-       
-       # Use distributed data structures
+       # Client automatically shuts down on exit
        my_map = client.get_map("my-map")
        my_map.put("greeting", "Hello, Hazelcast!")
-       
-       value = my_map.get("greeting")
-       print(f"Retrieved: {value}")
 
-   # Client automatically shuts down when exiting the context
+Configuring the Client
+----------------------
 
-
-Manual Connection
------------------
-
-If you need more control over the client lifecycle:
+Use ``ClientConfig`` to customize connection settings:
 
 .. code-block:: python
 
-   from hazelcast import HazelcastClient, ClientConfig
+   from hazelcast import ClientConfig, HazelcastClient
 
    config = ClientConfig()
-   config.cluster_name = "dev"
+   
+   # Cluster settings
+   config.cluster_name = "production"
+   config.cluster_members = [
+       "server1.example.com:5701",
+       "server2.example.com:5701",
+       "server3.example.com:5701",
+   ]
+   
+   # Connection settings
+   config.connection_timeout = 10.0  # seconds
+   config.smart_routing = True
+   
+   # Optional client name and labels
+   config.client_name = "my-python-app"
+   config.labels = ["env:production", "app:orders"]
 
    client = HazelcastClient(config)
-   client.start()
 
-   try:
-       my_map = client.get_map("my-map")
-       my_map.put("key", "value")
-   finally:
-       client.shutdown()
+Working with Maps
+-----------------
 
+Maps are the most commonly used data structure:
 
-Async Usage
------------
+.. code-block:: python
 
-The client supports asynchronous operations:
+   with HazelcastClient(config) as client:
+       users = client.get_map("users")
+       
+       # Basic operations
+       users.put("user:1", {"name": "Alice", "age": 30})
+       users.put("user:2", {"name": "Bob", "age": 25})
+       
+       # Get a value
+       user = users.get("user:1")
+       print(f"User: {user}")
+       
+       # Check existence
+       if users.contains_key("user:1"):
+           print("User exists!")
+       
+       # Get all keys
+       keys = users.key_set()
+       print(f"All keys: {keys}")
+       
+       # Remove a value
+       old_value = users.remove("user:2")
+
+Async Operations
+----------------
+
+All operations have async variants for non-blocking execution:
 
 .. code-block:: python
 
@@ -98,126 +109,74 @@ The client supports asynchronous operations:
 
    async def main():
        config = ClientConfig()
-       config.cluster_name = "dev"
-
+       
        async with HazelcastClient(config) as client:
-           my_map = client.get_map("my-map")
+           my_map = client.get_map("async-map")
            
-           # Async operations return futures
+           # Async put
            await my_map.put_async("key", "value")
-           future = my_map.get_async("key")
-           value = await future
-           print(f"Retrieved: {value}")
+           
+           # Async get
+           value = await my_map.get_async("key")
+           print(f"Value: {value}")
 
    asyncio.run(main())
 
-
-Working with Maps
------------------
-
-The distributed Map is the most commonly used data structure:
-
-.. code-block:: python
-
-   with HazelcastClient(config) as client:
-       users = client.get_map("users")
-       
-       # Basic CRUD operations
-       users.put("user:1", {"name": "Alice", "age": 30})
-       users.put("user:2", {"name": "Bob", "age": 25})
-       
-       # Get a single value
-       user = users.get("user:1")
-       print(f"User: {user}")
-       
-       # Check existence
-       exists = users.contains_key("user:1")
-       
-       # Get multiple values
-       entries = users.get_all({"user:1", "user:2"})
-       
-       # Conditional operations
-       users.put_if_absent("user:3", {"name": "Charlie"})
-       users.replace("user:1", {"name": "Alice", "age": 31})
-       
-       # Remove entries
-       removed = users.remove("user:2")
-       
-       # Clear all entries
-       users.clear()
-
-
-Entry Listeners
+Using Listeners
 ---------------
 
-Listen to map changes in real-time:
+Register listeners to react to cluster events:
 
 .. code-block:: python
 
-   from hazelcast.proxy.map import EntryListener, EntryEvent
+   from hazelcast import HazelcastClient, ClientConfig
+   from hazelcast.listener import LifecycleEvent
 
-   class MyListener(EntryListener):
-       def entry_added(self, event: EntryEvent) -> None:
-           print(f"Added: {event.key} = {event.value}")
-       
-       def entry_removed(self, event: EntryEvent) -> None:
-           print(f"Removed: {event.key}")
-       
-       def entry_updated(self, event: EntryEvent) -> None:
-           print(f"Updated: {event.key}: {event.old_value} -> {event.value}")
+   def on_lifecycle_change(event: LifecycleEvent):
+       print(f"Client state: {event.state.name}")
 
-   with HazelcastClient(config) as client:
-       my_map = client.get_map("events")
-       
-       # Register listener
-       listener = MyListener()
-       reg_id = my_map.add_entry_listener(listener, include_value=True)
-       
-       # Operations will trigger listener callbacks
-       my_map.put("key", "value")
-       my_map.put("key", "new_value")
-       my_map.remove("key")
-       
-       # Unregister when done
-       my_map.remove_entry_listener(reg_id)
-
+   config = ClientConfig()
+   client = HazelcastClient(config)
+   
+   # Add lifecycle listener
+   reg_id = client.add_lifecycle_listener(
+       on_state_changed=on_lifecycle_change
+   )
+   
+   # Remove listener when done
+   client.remove_listener(reg_id)
 
 Error Handling
 --------------
 
-Handle common exceptions:
+Handle common exceptions appropriately:
 
 .. code-block:: python
 
-   from hazelcast import (
-       HazelcastClient,
-       ClientConfig,
+   from hazelcast import HazelcastClient, ClientConfig
+   from hazelcast.exceptions import (
        ClientOfflineException,
-       OperationTimeoutException,
-       IllegalStateException,
+       TimeoutException,
+       HazelcastException,
    )
 
    config = ClientConfig()
-   config.cluster_members = ["localhost:5701"]
-
+   
    try:
        with HazelcastClient(config) as client:
            my_map = client.get_map("my-map")
-           my_map.put("key", "value")
+           value = my_map.get("key")
    except ClientOfflineException:
-       print("Could not connect to the cluster")
-   except OperationTimeoutException:
+       print("Cannot connect to cluster")
+   except TimeoutException:
        print("Operation timed out")
-   except IllegalStateException as e:
-       print(f"Client is in an invalid state: {e}")
-
+   except HazelcastException as e:
+       print(f"Hazelcast error: {e}")
 
 Next Steps
 ----------
 
-* :doc:`configuration` - Learn about all configuration options
-* :doc:`data_structures` - Explore all distributed data structures
-* :doc:`transactions` - Use ACID transactions
-* :doc:`cp_subsystem` - Use CP data structures for strong consistency
-* :doc:`sql` - Execute SQL queries
-* :doc:`jet` - Build stream processing pipelines
+* :doc:`configuration` - Detailed configuration options
+* :doc:`data_structures` - Working with distributed data structures
+* :doc:`sql_jet` - SQL queries and stream processing
+* :doc:`transactions` - ACID transactions

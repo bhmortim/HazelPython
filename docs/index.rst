@@ -1,51 +1,83 @@
 Hazelcast Python Client Documentation
 =====================================
 
-The Hazelcast Python Client enables Python applications to connect to a
-Hazelcast cluster for distributed computing, caching, and real-time
-stream processing.
+Welcome to the **Hazelcast Python Client** documentation. This client provides
+a Pythonic interface to Hazelcast, the real-time data platform for
+low-latency stream processing and fast data at any scale.
 
 .. toctree::
    :maxdepth: 2
    :caption: Getting Started
 
-   quickstart
+   getting_started
    installation
 
 .. toctree::
    :maxdepth: 2
    :caption: User Guide
 
-   user_guide/client_configuration
-   user_guide/data_structures
-   user_guide/sql_queries
-   user_guide/jet_pipelines
-   user_guide/cp_subsystem
-   user_guide/transactions
-   user_guide/events_listeners
+   configuration
+   data_structures
+   cp_subsystem
+   sql_jet
+   near_cache
+   transactions
+   serialization
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Advanced Topics
+
+   entry_processors
+   predicates_aggregators
+   listeners
+   discovery
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Migration
+
+   migration
 
 .. toctree::
    :maxdepth: 2
    :caption: API Reference
 
-   api/client
-   api/config
-   api/data_structures
-   api/sql
-   api/jet
-   api/cp
-   api/exceptions
+   api/index
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Additional Resources
+Features
+--------
 
-   changelog
-   contributing
+* **Distributed Data Structures**: Maps, Queues, Sets, Lists, MultiMaps, and more
+* **CP Subsystem**: Strongly consistent primitives (AtomicLong, FencedLock, Semaphore)
+* **SQL Queries**: Execute SQL queries against cluster data
+* **Jet Pipelines**: Stream and batch processing with Jet
+* **Near Cache**: Client-side caching for reduced latency
+* **Transactions**: ACID transactions across data structures
+* **Cloud Discovery**: AWS, Azure, GCP, Kubernetes, and Hazelcast Cloud support
 
+Quick Example
+-------------
 
-Indices and tables
-==================
+.. code-block:: python
+
+   from hazelcast import HazelcastClient, ClientConfig
+
+   # Connect to cluster
+   config = ClientConfig()
+   config.cluster_name = "dev"
+   
+   with HazelcastClient(config) as client:
+       # Get a distributed map
+       my_map = client.get_map("my-map")
+       
+       # Perform operations
+       my_map.put("key", "value")
+       value = my_map.get("key")
+       print(f"Value: {value}")
+
+Indices and Tables
+------------------
 
 * :ref:`genindex`
 * :ref:`modindex`

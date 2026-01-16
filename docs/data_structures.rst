@@ -1,395 +1,393 @@
 Distributed Data Structures
 ===========================
 
-Hazelcast provides a rich set of distributed data structures that can be
-accessed through the Python client.
+Hazelcast provides distributed versions of common data structures. Data is
+automatically partitioned across cluster members for scalability and
+high availability.
 
 Map (IMap)
 ----------
 
-The distributed Map is a key-value store partitioned across the cluster.
+The distributed map is the most commonly used data structure. It provides
+key-value storage with support for queries, entry processors, and listeners.
+
+Basic Operations
+~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   my_map = client.get_map("my-map")
+   from hazelcast import HazelcastClient
 
-   # Basic operations
-   my_map.put("key", "value")
-   value = my_map.get("key")
-   my_map.remove("key")
+   with HazelcastClient() as client:
+       my_map = client.get_map("my-map")
+       
+       # Put and get
+       my_map.put("key1", "value1")
+       value = my_map.get("key1")
+       
+       # Put with TTL
+       my_map.put("temp-key", "temp-value", ttl=60)  # Expires in 60 seconds
+       
+       # Put if absent
+       my_map.put_if_absent("key1", "new-value")  # Won't overwrite
+       
+       # Replace
+       my_map.replace("key1", "updated-value")
+       my_map.replace_if_same("key1", "updated-value", "final-value")
+       
+       # Remove
+       old = my_map.remove("key1")
+       removed = my_map.remove_if_same("key2", "expected-value")
+       
+       # Bulk operations
+       my_map.put_all({"a": 1, "b": 2, "c": 3})
+       values = my_map.get_all(["a", "b", "c"])
 
-   # Bulk operations
-   my_map.put_all({"k1": "v1", "k2": "v2"})
-   entries = my_map.get_all({"k1", "k2"})
+Querying Maps
+~~~~~~~~~~~~~
 
-   # Conditional operations
-   my_map.put_if_absent("key", "default")
-   old = my_map.replace("key", "new_value")
-   success = my_map.replace_if_equals("key", "expected", "new")
-
-   # TTL support
-   my_map.put("expiring", "value", ttl=300)  # Expires in 5 minutes
-
-   # Query with predicates
-   from hazelcast import SqlPredicate
-   results = my_map.values(SqlPredicate("age > 30"))
-
-
-ReplicatedMap
--------------
-
-ReplicatedMap stores data on all cluster members (no partitioning).
-Suitable for small, read-heavy datasets with eventual consistency.
-
-.. code-block:: python
-
-   rep_map = client.get_replicated_map("config")
-
-   # Same API as Map
-   rep_map.put("setting", "value")
-   value = rep_map.get("setting")
-
-   # With TTL
-   rep_map.put("temp", "data", ttl=60)
-
-   # Bulk operations
-   all_entries = rep_map.entry_set()
-   all_keys = rep_map.key_set()
-   all_values = rep_map.values()
-
-
-MultiMap
---------
-
-MultiMap allows multiple values per key.
+Use predicates to query map entries:
 
 .. code-block:: python
 
-   mm = client.get_multi_map("user-roles")
+   from hazelcast.predicate import (
+       attr, sql, and_, or_, not_, between, paging
+   )
 
-   # Add multiple values for same key
-   mm.put("user:1", "admin")
-   mm.put("user:1", "editor")
-   mm.put("user:1", "viewer")
+   users = client.get_map("users")
+   
+   # SQL-like predicate
+   adults = users.values(sql("age >= 18"))
+   
+   # Attribute predicates
+   seniors = users.values(attr("age").greater_than_or_equal(65))
+   
+   # Combined predicates
+   young_devs = users.values(
+       and_(
+           attr("age").between(20, 30),
+           attr("role").equal("developer")
+       )
+   )
+   
+   # Paging predicate for large results
+   paging_pred = paging(page_size=100)
+   page1 = users.values(paging_pred)
+   
+   paging_pred.next_page()
+   page2 = users.values(paging_pred)
 
-   # Get all values for a key
-   roles = mm.get("user:1")  # ["admin", "editor", "viewer"]
+Aggregations
+~~~~~~~~~~~~
 
-   # Remove specific value
-   mm.remove("user:1", "viewer")
+Perform server-side aggregations:
 
-   # Remove all values for key
-   mm.remove_all("user:1")
+.. code-block:: python
 
-   # Count values
-   count = mm.value_count("user:1")
+   from hazelcast.aggregator import count, sum_, average, min_, max_
 
+   employees = client.get_map("employees")
+   
+   # Count all entries
+   total = employees.aggregate(count())
+   
+   # Sum salaries
+   total_salary = employees.aggregate(sum_("salary"))
+   
+   # Average age
+   avg_age = employees.aggregate(average("age"))
+   
+   # With predicate
+   from hazelcast.predicate import attr
+   
+   dept_avg = employees.aggregate(
+       average("salary"),
+       predicate=attr("department").equal("Engineering")
+   )
 
-Queue
------
+Projections
+~~~~~~~~~~~
 
-Distributed blocking queue.
+Project specific attributes:
+
+.. code-block:: python
+
+   from hazelcast.projection import single_attribute, multi_attribute
+
+   users = client.get_map("users")
+   
+   # Get only names
+   names = users.project(single_attribute("name"))
+   
+   # Get multiple attributes
+   contacts = users.project(multi_attribute("name", "email", "phone"))
+
+Entry Listeners
+~~~~~~~~~~~~~~~
+
+React to map changes:
+
+.. code-block:: python
+
+   def on_entry_added(event):
+       print(f"Added: {event.key} = {event.value}")
+
+   def on_entry_updated(event):
+       print(f"Updated: {event.key}: {event.old_value} -> {event.value}")
+
+   def on_entry_removed(event):
+       print(f"Removed: {event.key}")
+
+   users = client.get_map("users")
+   
+   reg_id = users.add_entry_listener(
+       on_added=on_entry_added,
+       on_updated=on_entry_updated,
+       on_removed=on_entry_removed,
+       include_value=True,
+   )
+   
+   # Later, remove the listener
+   users.remove_entry_listener(reg_id)
+
+Queue (IQueue)
+--------------
+
+A distributed blocking queue for producer-consumer patterns:
 
 .. code-block:: python
 
    queue = client.get_queue("task-queue")
-
-   # Add items
-   queue.offer("task-1")  # Non-blocking, returns bool
-   queue.put("task-2")    # Blocking
-
-   # Retrieve items
-   item = queue.poll()           # Non-blocking, returns None if empty
-   item = queue.poll(timeout=5)  # Wait up to 5 seconds
-   item = queue.take()           # Blocking wait
-
+   
+   # Producer
+   queue.offer("task-1")
+   queue.offer("task-2", timeout=5.0)  # Wait up to 5 seconds
+   queue.put("task-3")  # Block until space available
+   
+   # Consumer
+   task = queue.poll()  # Non-blocking
+   task = queue.poll(timeout=10.0)  # Wait up to 10 seconds
+   task = queue.take()  # Block until item available
+   
    # Peek without removing
-   item = queue.peek()
-
+   next_task = queue.peek()
+   
    # Bulk operations
-   items = queue.drain_to([])
+   tasks = queue.drain_to(max_elements=100)
 
+Set (ISet)
+----------
 
-Set
----
-
-Distributed set that doesn't allow duplicates.
+A distributed set that doesn't allow duplicates:
 
 .. code-block:: python
 
-   my_set = client.get_set("unique-ids")
+   tags = client.get_set("tags")
+   
+   # Add items
+   tags.add("python")
+   tags.add_all(["java", "golang", "rust"])
+   
+   # Check membership
+   has_python = tags.contains("python")
+   has_all = tags.contains_all(["python", "java"])
+   
+   # Remove items
+   tags.remove("golang")
+   tags.remove_all(["java", "rust"])
+   
+   # Get all items
+   all_tags = tags.get_all()
+   
+   # Size
+   count = tags.size()
 
-   my_set.add("id-1")
-   my_set.add("id-2")
-   my_set.add("id-1")  # Duplicate, ignored
+List (IList)
+------------
 
-   size = my_set.size()  # 2
-   exists = my_set.contains("id-1")
-
-   my_set.remove("id-2")
-
-   # Bulk operations
-   my_set.add_all(["id-3", "id-4"])
-   all_items = my_set.get_all()
-
-
-List
-----
-
-Distributed list maintaining insertion order.
+A distributed list maintaining insertion order:
 
 .. code-block:: python
 
-   my_list = client.get_list("items")
+   items = client.get_list("items")
+   
+   # Add items
+   items.add("first")
+   items.add("second")
+   items.add_at(1, "inserted")  # Insert at index
+   
+   # Access by index
+   first = items.get(0)
+   
+   # Modify
+   items.set(0, "updated-first")
+   items.remove_at(1)
+   
+   # Sublist
+   subset = items.sub_list(0, 2)
 
-   my_list.add("first")
-   my_list.add("second")
-   my_list.add_at(0, "new-first")
+MultiMap
+--------
 
-   item = my_list.get(0)
-   my_list.set(1, "updated")
-   my_list.remove_at(0)
+A map that allows multiple values per key:
 
-   size = my_list.size()
-   sublist = my_list.sub_list(0, 2)
+.. code-block:: python
 
+   user_roles = client.get_multi_map("user-roles")
+   
+   # Add multiple values for a key
+   user_roles.put("user:1", "admin")
+   user_roles.put("user:1", "editor")
+   user_roles.put("user:1", "viewer")
+   
+   # Get all values for a key
+   roles = user_roles.get("user:1")  # ["admin", "editor", "viewer"]
+   
+   # Remove specific value
+   user_roles.remove("user:1", "viewer")
+   
+   # Remove all values for key
+   user_roles.remove_all("user:1")
+   
+   # Get counts
+   value_count = user_roles.value_count("user:1")
+   total_size = user_roles.size()
+
+ReplicatedMap
+-------------
+
+A map replicated to all cluster members (not partitioned):
+
+.. code-block:: python
+
+   config_map = client.get_replicated_map("config")
+   
+   # Operations are similar to IMap
+   config_map.put("timeout", 30)
+   config_map.put("max_retries", 3)
+   
+   timeout = config_map.get("timeout")
+   
+   # Replicated to all members - fast local reads
+   # Best for small, read-heavy datasets
 
 Ringbuffer
 ----------
 
-Bounded, circular data structure with sequence-based access.
+A bounded, circular buffer with sequence-based access:
 
 .. code-block:: python
 
-   rb = client.get_ringbuffer("events")
+   from hazelcast.proxy.ringbuffer import OverflowPolicy
 
+   events = client.get_ringbuffer("events")
+   
    # Add items
-   sequence = rb.add("event-1")
-   rb.add_all(["event-2", "event-3"])
-
-   # Read items
-   item = rb.read_one(sequence)
-
-   # Batch read
-   result = rb.read_many(
+   seq = events.add("event-1")
+   seq = events.add("event-2", overflow_policy=OverflowPolicy.OVERWRITE)
+   
+   # Read by sequence
+   event = events.read_one(seq)
+   
+   # Read multiple
+   items = events.read_many(
        start_sequence=0,
        min_count=1,
        max_count=100,
    )
-   for item in result:
-       print(item)
+   
+   # Get capacity and size
+   capacity = events.capacity()
+   size = events.size()
+   head_seq = events.head_sequence()
+   tail_seq = events.tail_sequence()
 
-   # Capacity and size
-   capacity = rb.capacity()
-   size = rb.size()
-   head = rb.head_sequence()
-   tail = rb.tail_sequence()
+Topic (ITopic)
+--------------
 
-
-Topic
------
-
-Publish-subscribe messaging.
+Publish-subscribe messaging:
 
 .. code-block:: python
 
-   topic = client.get_topic("notifications")
-
-   # Subscribe to messages
    def on_message(message):
        print(f"Received: {message.message}")
-       print(f"Published at: {message.publish_time}")
 
-   reg_id = topic.add_message_listener(on_message=on_message)
-
-   # Publish messages
-   topic.publish("Hello, subscribers!")
-
+   notifications = client.get_topic("notifications")
+   
+   # Subscribe
+   reg_id = notifications.add_message_listener(on_message=on_message)
+   
+   # Publish
+   notifications.publish("Hello, subscribers!")
+   notifications.publish({"type": "alert", "message": "Server restarting"})
+   
    # Unsubscribe
-   topic.remove_message_listener(reg_id)
-
+   notifications.remove_message_listener(reg_id)
 
 ReliableTopic
--------------
+~~~~~~~~~~~~~
 
-Topic backed by a Ringbuffer for reliable delivery.
-
-.. code-block:: python
-
-   from hazelcast.proxy.reliable_topic import ReliableMessageListener
-
-   class MyListener(ReliableMessageListener):
-       def on_message(self, message):
-           print(f"Received: {message.message}")
-
-       def is_loss_tolerant(self):
-           return False
-
-       def is_terminal(self, error):
-           return True
-
-       def store_sequence(self, sequence):
-           pass
-
-       def retrieve_initial_sequence(self):
-           return -1
-
-   topic = client.get_reliable_topic("reliable-events")
-   topic.add_message_listener(MyListener())
-   topic.publish("Important message")
-
-
-PN Counter
-----------
-
-CRDT Positive-Negative Counter with eventual consistency.
+A topic backed by a ringbuffer for reliable delivery:
 
 .. code-block:: python
 
-   counter = client.get_pn_counter("page-views")
+   reliable = client.get_reliable_topic("reliable-notifications")
+   
+   # Same API as Topic
+   reg_id = reliable.add_message_listener(on_message=on_message)
+   reliable.publish("Important message")
 
+PNCounter
+---------
+
+A CRDT counter supporting increment and decrement with eventual consistency:
+
+.. code-block:: python
+
+   page_views = client.get_pn_counter("page-views")
+   
    # Increment
-   value = counter.increment_and_get()
-   value = counter.add_and_get(10)
-
+   new_value = page_views.increment_and_get()
+   page_views.add_and_get(5)
+   
    # Decrement
-   value = counter.decrement_and_get()
-   value = counter.subtract_and_get(5)
-
+   new_value = page_views.decrement_and_get()
+   
    # Get current value
-   current = counter.get()
-
-
-Cardinality Estimator
----------------------
-
-Estimate unique element count using HyperLogLog algorithm.
-
-.. code-block:: python
-
-   estimator = client.get_cardinality_estimator("unique-visitors")
-
-   # Add elements
-   estimator.add("user-1")
-   estimator.add("user-2")
-   estimator.add("user-1")  # Duplicate
-
-   # Get estimate
-   count = estimator.estimate()
-   print(f"Unique visitors: ~{count}")
-
+   current = page_views.get()
+   
+   # Reset
+   page_views.reset()
 
 FlakeIdGenerator
 ----------------
 
-Generate cluster-wide unique IDs using Flake ID algorithm. IDs are
-64-bit integers, roughly ordered by time, and generated without
-coordination between cluster members.
+Generate cluster-wide unique, roughly time-ordered IDs:
 
 .. code-block:: python
 
    id_gen = client.get_flake_id_generator("order-ids")
-
-   # Generate a single unique ID
+   
+   # Generate unique ID
    order_id = id_gen.new_id()
+   
+   # IDs are 64-bit integers, roughly ordered by time
    print(f"New order ID: {order_id}")
 
-   # Generate multiple IDs in a batch (more efficient)
-   batch = id_gen.new_id_batch(10)
-   for id in batch:
-       print(f"Batch ID: {id}")
+CardinalityEstimator
+--------------------
 
-Async Variants
-~~~~~~~~~~~~~~
+Estimate distinct element count using HyperLogLog:
 
 .. code-block:: python
 
-   id_gen = client.get_flake_id_generator("async-ids")
-
-   # Async single ID
-   future = id_gen.new_id_async()
-   new_id = future.result()
-
-   # Async batch
-   future = id_gen.new_id_batch_async(5)
-   batch = future.result()
-
-Configuration
-~~~~~~~~~~~~~
-
-FlakeIdGenerator can be configured with prefetch settings for
-batching efficiency:
-
-.. code-block:: python
-
-   from hazelcast.proxy.flake_id import FlakeIdGeneratorConfig
-
-   config = FlakeIdGeneratorConfig(
-       name="my-id-gen",
-       prefetch_count=100,           # IDs to prefetch
-       prefetch_validity_millis=600000,  # 10 minutes validity
-   )
-
-
-Entry Listeners
----------------
-
-Listen to data structure changes:
-
-.. code-block:: python
-
-   from hazelcast.proxy.map import EntryListener, EntryEvent
-
-   class MapListener(EntryListener):
-       def entry_added(self, event: EntryEvent):
-           print(f"Added: {event.key}")
-
-       def entry_removed(self, event: EntryEvent):
-           print(f"Removed: {event.key}")
-
-       def entry_updated(self, event: EntryEvent):
-           print(f"Updated: {event.key}")
-
-       def entry_evicted(self, event: EntryEvent):
-           print(f"Evicted: {event.key}")
-
-   my_map = client.get_map("observed-map")
-   reg_id = my_map.add_entry_listener(
-       MapListener(),
-       include_value=True,
-   )
-
-   # Filter by key
-   reg_id = my_map.add_entry_listener(
-       MapListener(),
-       key="specific-key",
-       include_value=True,
-   )
-
-   # Filter by predicate
-   from hazelcast import SqlPredicate
-   reg_id = my_map.add_entry_listener(
-       MapListener(),
-       predicate=SqlPredicate("status = 'active'"),
-       include_value=True,
-   )
-
-
-Item Listeners
---------------
-
-Listen to collection changes:
-
-.. code-block:: python
-
-   from hazelcast.proxy.queue import ItemListener, ItemEvent, ItemEventType
-
-   class QueueListener(ItemListener):
-       def item_added(self, event: ItemEvent):
-           print(f"Added: {event.item}")
-
-       def item_removed(self, event: ItemEvent):
-           print(f"Removed: {event.item}")
-
-   queue = client.get_queue("observed-queue")
-   reg_id = queue.add_item_listener(QueueListener(), include_value=True)
+   visitors = client.get_cardinality_estimator("unique-visitors")
+   
+   # Add elements
+   visitors.add("user-1")
+   visitors.add("user-2")
+   visitors.add("user-1")  # Duplicate
+   
+   # Estimate count
+   estimate = visitors.estimate()
+   print(f"Approximately {estimate} unique visitors")

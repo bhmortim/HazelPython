@@ -1,60 +1,33 @@
-Serialization
-=============
+Serialization API
+=================
 
-Configuration
--------------
+JSON Serialization
+------------------
 
-.. module:: hazelcast.config
-
-.. autoclass:: SerializationConfig
+.. autoclass:: hazelcast.serialization.json.HazelcastJsonValue
    :members:
    :undoc-members:
-   :show-inheritance:
-
-Service
--------
-
-.. module:: hazelcast.serialization.service
-
-.. autoclass:: SerializationService
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 Compact Serialization
 ---------------------
 
-.. module:: hazelcast.serialization.compact
+.. autoclass:: hazelcast.serialization.compact.CompactSerializer
+   :members:
+   :undoc-members:
 
-For high-performance serialization with schema evolution support.
+.. autoclass:: hazelcast.serialization.compact.GenericRecord
+   :members:
+   :undoc-members:
 
-Usage Example
+Portable Serialization
+----------------------
+
+Portable serialization provides cross-language interoperability
+and partial deserialization capabilities.
+
+Configuration
 ~~~~~~~~~~~~~
 
-.. code-block:: python
-
-   from hazelcast.config import SerializationConfig
-
-   class Employee:
-       def __init__(self, id: int, name: str):
-           self.id = id
-           self.name = name
-
-   class EmployeeSerializer:
-       def get_type_name(self) -> str:
-           return "Employee"
-
-       def get_class(self) -> type:
-           return Employee
-
-       def write(self, writer, obj: Employee) -> None:
-           writer.write_int32("id", obj.id)
-           writer.write_string("name", obj.name)
-
-       def read(self, reader) -> Employee:
-           id = reader.read_int32("id")
-           name = reader.read_string("name")
-           return Employee(id, name)
-
-   config = SerializationConfig()
-   config.add_compact_serializer(EmployeeSerializer())
+.. autoclass:: hazelcast.config.SerializationConfig
+   :members:
+   :undoc-members:

@@ -1,106 +1,85 @@
-Transactions
-============
+Transactions API
+================
 
-.. module:: hazelcast.transaction
+.. automodule:: hazelcast.transaction
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 TransactionContext
 ------------------
 
-.. autoclass:: TransactionContext
+.. autoclass:: hazelcast.transaction.TransactionContext
    :members:
    :undoc-members:
-   :show-inheritance:
 
 TransactionOptions
 ------------------
 
-.. autoclass:: TransactionOptions
+.. autoclass:: hazelcast.transaction.TransactionOptions
    :members:
    :undoc-members:
-   :show-inheritance:
 
 Enumerations
 ------------
 
-TransactionType
-~~~~~~~~~~~~~~~
-
-.. autoclass:: TransactionType
+.. autoclass:: hazelcast.transaction.TransactionType
    :members:
    :undoc-members:
 
-TransactionState
-~~~~~~~~~~~~~~~~
+.. autoclass:: hazelcast.transaction.TransactionState
+   :members:
+   :undoc-members:
 
-.. autoclass:: TransactionState
+Exceptions
+----------
+
+.. autoclass:: hazelcast.transaction.TransactionException
+   :members:
+   :undoc-members:
+
+.. autoclass:: hazelcast.transaction.TransactionNotActiveException
+   :members:
+   :undoc-members:
+
+.. autoclass:: hazelcast.transaction.TransactionTimedOutException
    :members:
    :undoc-members:
 
 Transactional Proxies
 ---------------------
 
-TransactionalProxy
-~~~~~~~~~~~~~~~~~~
-
-.. autoclass:: TransactionalProxy
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 TransactionalMap
 ~~~~~~~~~~~~~~~~
 
-.. autoclass:: TransactionalMap
+.. autoclass:: hazelcast.proxy.transactional.TransactionalMap
    :members:
    :undoc-members:
-   :show-inheritance:
 
 TransactionalSet
 ~~~~~~~~~~~~~~~~
 
-.. autoclass:: TransactionalSet
+.. autoclass:: hazelcast.proxy.transactional.TransactionalSet
    :members:
    :undoc-members:
-   :show-inheritance:
 
 TransactionalList
 ~~~~~~~~~~~~~~~~~
 
-.. autoclass:: TransactionalList
+.. autoclass:: hazelcast.proxy.transactional.TransactionalList
    :members:
    :undoc-members:
-   :show-inheritance:
 
 TransactionalQueue
 ~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: TransactionalQueue
+.. autoclass:: hazelcast.proxy.transactional.TransactionalQueue
    :members:
    :undoc-members:
-   :show-inheritance:
 
 TransactionalMultiMap
 ~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: TransactionalMultiMap
+.. autoclass:: hazelcast.proxy.transactional.TransactionalMultiMap
    :members:
    :undoc-members:
-   :show-inheritance:
-
-Exceptions
-----------
-
-.. autoclass:: TransactionException
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: TransactionNotActiveException
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: TransactionTimedOutException
-   :members:
-   :undoc-members:
-   :show-inheritance:

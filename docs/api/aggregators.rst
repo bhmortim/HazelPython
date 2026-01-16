@@ -1,83 +1,97 @@
-Aggregators
-===========
+Aggregators API
+===============
 
-.. module:: hazelcast.aggregator
+.. automodule:: hazelcast.aggregator
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Aggregator Classes
+------------------
 
 Base Class
-----------
+~~~~~~~~~~
 
-.. autoclass:: Aggregator
+.. autoclass:: hazelcast.aggregator.Aggregator
    :members:
-   :undoc-members:
-   :show-inheritance:
 
 Built-in Aggregators
---------------------
+~~~~~~~~~~~~~~~~~~~~
 
-CountAggregator
-~~~~~~~~~~~~~~~
-
-.. autoclass:: CountAggregator
+.. autoclass:: hazelcast.aggregator.CountAggregator
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-SumAggregator
-~~~~~~~~~~~~~
-
-.. autoclass:: SumAggregator
+.. autoclass:: hazelcast.aggregator.SumAggregator
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-AverageAggregator
-~~~~~~~~~~~~~~~~~
-
-.. autoclass:: AverageAggregator
+.. autoclass:: hazelcast.aggregator.AverageAggregator
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-MinAggregator
-~~~~~~~~~~~~~
-
-.. autoclass:: MinAggregator
+.. autoclass:: hazelcast.aggregator.MinAggregator
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-MaxAggregator
-~~~~~~~~~~~~~
-
-.. autoclass:: MaxAggregator
+.. autoclass:: hazelcast.aggregator.MaxAggregator
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-DistinctValuesAggregator
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. autoclass:: DistinctValuesAggregator
+.. autoclass:: hazelcast.aggregator.DistinctValuesAggregator
    :members:
-   :undoc-members:
-   :show-inheritance:
+
+Type-Specific Aggregators
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: hazelcast.aggregator.IntegerSumAggregator
+   :members:
+
+.. autoclass:: hazelcast.aggregator.IntegerAverageAggregator
+   :members:
+
+.. autoclass:: hazelcast.aggregator.LongSumAggregator
+   :members:
+
+.. autoclass:: hazelcast.aggregator.LongAverageAggregator
+   :members:
+
+.. autoclass:: hazelcast.aggregator.DoubleSumAggregator
+   :members:
+
+.. autoclass:: hazelcast.aggregator.DoubleAverageAggregator
+   :members:
+
+Factory Functions
+-----------------
+
+.. autofunction:: hazelcast.aggregator.count
+.. autofunction:: hazelcast.aggregator.sum_
+.. autofunction:: hazelcast.aggregator.average
+.. autofunction:: hazelcast.aggregator.min_
+.. autofunction:: hazelcast.aggregator.max_
+.. autofunction:: hazelcast.aggregator.distinct
+.. autofunction:: hazelcast.aggregator.integer_sum
+.. autofunction:: hazelcast.aggregator.integer_average
+.. autofunction:: hazelcast.aggregator.long_sum
+.. autofunction:: hazelcast.aggregator.long_average
+.. autofunction:: hazelcast.aggregator.double_sum
+.. autofunction:: hazelcast.aggregator.double_average
 
 Projections
 -----------
 
-.. module:: hazelcast.projection
-
-.. autoclass:: Projection
+.. automodule:: hazelcast.projection
    :members:
    :undoc-members:
-   :show-inheritance:
 
-.. autoclass:: SingleAttributeProjection
+.. autoclass:: hazelcast.projection.Projection
    :members:
-   :undoc-members:
-   :show-inheritance:
 
-.. autoclass:: MultiAttributeProjection
+.. autoclass:: hazelcast.projection.SingleAttributeProjection
    :members:
-   :undoc-members:
-   :show-inheritance:
+
+.. autoclass:: hazelcast.projection.MultiAttributeProjection
+   :members:
+
+.. autoclass:: hazelcast.projection.IdentityProjection
+   :members:
+
+.. autofunction:: hazelcast.projection.single_attribute
+.. autofunction:: hazelcast.projection.multi_attribute
+.. autofunction:: hazelcast.projection.identity
