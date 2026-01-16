@@ -3,8 +3,9 @@
 from concurrent.futures import Future
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, List, Optional
 import threading
+import time
 
 
 class JobStatus(Enum):
@@ -39,6 +40,10 @@ class JobConfig:
         snapshot_interval_millis: Interval between snapshots in milliseconds.
         processing_guarantee: Processing guarantee level.
         max_processor_accumulated_records: Max records accumulated per processor.
+        timeout_millis: Job timeout in milliseconds (0 = no timeout).
+        metrics_enabled: Whether to collect job metrics.
+        store_metrics_after_job_completion: Whether to retain metrics after completion.
+        suspend_on_failure: Whether to suspend job on failure instead of failing.
     """
 
     def __init__(
@@ -49,6 +54,10 @@ class JobConfig:
         snapshot_interval_millis: int = 10000,
         processing_guarantee: ProcessingGuarantee = ProcessingGuarantee.NONE,
         max_processor_accumulated_records: int = -1,
+        timeout_millis: int = 0,
+        metrics_enabled: bool = True,
+        store_metrics_after_job_completion: bool = False,
+        suspend_on_failure: bool = False,
     ):
         self._name = name
         self._auto_scaling_enabled = auto_scaling_enabled
@@ -57,6 +66,11 @@ class JobConfig:
         self._processing_guarantee = processing_guarantee
         self._max_processor_accumulated_records = max_processor_accumulated_records
         self._initial_snapshot_name: Optional[str] = None
+        self._timeout_millis = timeout_millis
+        self._metrics_enabled = metrics_enabled
+        self._store_metrics_after_job_completion = store_metrics_after_job_completion
+        self._suspend_on_failure = suspend_on_failure
+        self._arguments: Dict[str, Any] = {}
 
     @property
     def name(self) -> Optional[str]:
@@ -128,12 +142,160 @@ class JobConfig:
         """Set the initial snapshot name for job restart."""
         self._initial_snapshot_name = value
 
+    @property
+    def timeout_millis(self) -> int:
+        """Get the job timeout in milliseconds."""
+        return self._timeout_millis
+
+    @timeout_millis.setter
+    def timeout_millis(self, value: int) -> None:
+        """Set the job timeout in milliseconds."""
+        self._timeout_millis = value
+
+    @property
+    def metrics_enabled(self) -> bool:
+        """Get whether metrics collection is enabled."""
+        return self._metrics_enabled
+
+    @metrics_enabled.setter
+    def metrics_enabled(self, value: bool) -> None:
+        """Set whether metrics collection is enabled."""
+        self._metrics_enabled = value
+
+    @property
+    def store_metrics_after_job_completion(self) -> bool:
+        """Get whether to store metrics after job completion."""
+        return self._store_metrics_after_job_completion
+
+    @store_metrics_after_job_completion.setter
+    def store_metrics_after_job_completion(self, value: bool) -> None:
+        """Set whether to store metrics after job completion."""
+        self._store_metrics_after_job_completion = value
+
+    @property
+    def suspend_on_failure(self) -> bool:
+        """Get whether to suspend on failure."""
+        return self._suspend_on_failure
+
+    @suspend_on_failure.setter
+    def suspend_on_failure(self, value: bool) -> None:
+        """Set whether to suspend on failure."""
+        self._suspend_on_failure = value
+
+    @property
+    def arguments(self) -> Dict[str, Any]:
+        """Get job arguments."""
+        return self._arguments
+
+    def set_argument(self, key: str, value: Any) -> "JobConfig":
+        """Set a job argument.
+
+        Args:
+            key: Argument key.
+            value: Argument value.
+
+        Returns:
+            This config for chaining.
+        """
+        self._arguments[key] = value
+        return self
+
+    def get_argument(self, key: str, default: Any = None) -> Any:
+        """Get a job argument.
+
+        Args:
+            key: Argument key.
+            default: Default value if not found.
+
+        Returns:
+            The argument value or default.
+        """
+        return self._arguments.get(key, default)
+
     def __repr__(self) -> str:
         return (
             f"JobConfig(name={self._name!r}, "
             f"auto_scaling={self._auto_scaling_enabled}, "
             f"guarantee={self._processing_guarantee.value})"
         )
+
+
+class JobMetrics:
+    """Metrics collected from a running or completed job."""
+
+    def __init__(self):
+        self._metrics: Dict[str, Any] = {}
+        self._timestamp = datetime.now()
+        self._items_in: int = 0
+        self._items_out: int = 0
+        self._snapshot_count: int = 0
+        self._last_snapshot_time: Optional[datetime] = None
+
+    @property
+    def timestamp(self) -> datetime:
+        """Get the timestamp when metrics were collected."""
+        return self._timestamp
+
+    @property
+    def items_in(self) -> int:
+        """Get the number of items received."""
+        return self._items_in
+
+    @items_in.setter
+    def items_in(self, value: int) -> None:
+        """Set the number of items received."""
+        self._items_in = value
+
+    @property
+    def items_out(self) -> int:
+        """Get the number of items emitted."""
+        return self._items_out
+
+    @items_out.setter
+    def items_out(self, value: int) -> None:
+        """Set the number of items emitted."""
+        self._items_out = value
+
+    @property
+    def snapshot_count(self) -> int:
+        """Get the number of snapshots taken."""
+        return self._snapshot_count
+
+    @property
+    def last_snapshot_time(self) -> Optional[datetime]:
+        """Get the time of the last snapshot."""
+        return self._last_snapshot_time
+
+    def record_snapshot(self) -> None:
+        """Record a snapshot being taken."""
+        self._snapshot_count += 1
+        self._last_snapshot_time = datetime.now()
+
+    def get(self, name: str, default: Any = None) -> Any:
+        """Get a metric by name."""
+        return self._metrics.get(name, default)
+
+    def set(self, name: str, value: Any) -> None:
+        """Set a metric value."""
+        self._metrics[name] = value
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to a dictionary."""
+        return {
+            "timestamp": self._timestamp.isoformat(),
+            "items_in": self._items_in,
+            "items_out": self._items_out,
+            "snapshot_count": self._snapshot_count,
+            "last_snapshot_time": (
+                self._last_snapshot_time.isoformat()
+                if self._last_snapshot_time
+                else None
+            ),
+            **self._metrics,
+        }
+
+    def __repr__(self) -> str:
+        return f"JobMetrics(in={self._items_in}, out={self._items_out}, snapshots={self._snapshot_count})"
 
 
 class Job:
@@ -181,6 +343,10 @@ class Job:
         self._failure_reason: Optional[str] = None
         self._lock = threading.Lock()
         self._completion_future: Future = Future()
+        self._metrics = JobMetrics()
+        self._snapshots: List[str] = []
+        self._light_job = False
+        self._user_cancelled = False
 
     @property
     def id(self) -> int:
@@ -217,6 +383,26 @@ class Job:
     def failure_reason(self) -> Optional[str]:
         """Get the failure reason if the job failed."""
         return self._failure_reason
+
+    @property
+    def metrics(self) -> JobMetrics:
+        """Get the job metrics."""
+        return self._metrics
+
+    @property
+    def snapshots(self) -> List[str]:
+        """Get list of snapshot names."""
+        return self._snapshots.copy()
+
+    @property
+    def is_light_job(self) -> bool:
+        """Check if this is a light job (no fault tolerance)."""
+        return self._light_job
+
+    @property
+    def is_user_cancelled(self) -> bool:
+        """Check if the job was cancelled by user."""
+        return self._user_cancelled
 
     def is_terminal(self) -> bool:
         """Check if the job is in a terminal state."""
@@ -364,6 +550,7 @@ class Job:
         ):
             with self._lock:
                 self._status = JobStatus.COMPLETING
+                self._user_cancelled = True
             self._transition_status(JobStatus.COMPLETED)
             self._completion_time = datetime.now()
             if not self._completion_future.done():
@@ -376,6 +563,47 @@ class Job:
             future.set_exception(
                 IllegalStateException(
                     f"Cannot cancel job in status {current.value}"
+                )
+            )
+        return future
+
+    def cancel_and_export_snapshot(self, name: str) -> None:
+        """Cancel the job and export a terminal snapshot.
+
+        This allows the job to be restarted from this snapshot later.
+
+        Args:
+            name: Name for the exported snapshot.
+        """
+        self.cancel_and_export_snapshot_async(name).result()
+
+    def cancel_and_export_snapshot_async(self, name: str) -> Future:
+        """Cancel and export snapshot asynchronously.
+
+        Args:
+            name: Name for the exported snapshot.
+
+        Returns:
+            Future that completes when operation is done.
+        """
+        future: Future = Future()
+        current = self.status
+        if current in (JobStatus.RUNNING, JobStatus.SUSPENDED):
+            self._snapshots.append(name)
+            self._metrics.record_snapshot()
+            with self._lock:
+                self._status = JobStatus.COMPLETING
+                self._user_cancelled = True
+            self._transition_status(JobStatus.COMPLETED)
+            self._completion_time = datetime.now()
+            if not self._completion_future.done():
+                self._completion_future.set_result(self)
+            future.set_result(None)
+        else:
+            from hazelcast.exceptions import IllegalStateException
+            future.set_exception(
+                IllegalStateException(
+                    f"Cannot cancel and export snapshot in status {current.value}"
                 )
             )
         return future
@@ -409,7 +637,7 @@ class Job:
         Returns:
             Dictionary of metric name to value.
         """
-        return {
+        base_metrics = {
             "status": self.status.value,
             "submission_time": (
                 self._submission_time.isoformat() if self._submission_time else None
@@ -417,20 +645,69 @@ class Job:
             "completion_time": (
                 self._completion_time.isoformat() if self._completion_time else None
             ),
+            "user_cancelled": self._user_cancelled,
         }
+        if self._config.metrics_enabled:
+            base_metrics.update(self._metrics.to_dict())
+        return base_metrics
+
+    def get_metrics_async(self) -> Future:
+        """Get job metrics asynchronously.
+
+        Returns:
+            Future containing metrics dictionary.
+        """
+        future: Future = Future()
+        future.set_result(self.get_metrics())
+        return future
 
     def export_snapshot(self, name: str) -> Future:
         """Export a snapshot of the job state.
+
+        Creates a named snapshot of the current job state that can be
+        used to restart the job later.
 
         Args:
             name: Name for the snapshot.
 
         Returns:
             Future that completes when the snapshot is exported.
+
+        Raises:
+            IllegalStateException: If the job is not in a snapshotable state.
         """
         future: Future = Future()
-        future.set_result(None)
+        current = self.status
+        if current in (JobStatus.RUNNING, JobStatus.SUSPENDED):
+            self._snapshots.append(name)
+            self._metrics.record_snapshot()
+            future.set_result(None)
+        else:
+            from hazelcast.exceptions import IllegalStateException
+            future.set_exception(
+                IllegalStateException(
+                    f"Cannot export snapshot in status {current.value}"
+                )
+            )
         return future
+
+    def get_suspension_cause(self) -> Optional[str]:
+        """Get the cause of job suspension.
+
+        Returns:
+            The suspension cause, or None if not suspended.
+        """
+        if self.status == JobStatus.SUSPENDED:
+            return self._failure_reason
+        return None
+
+    def get_id_string(self) -> str:
+        """Get a string representation of the job ID.
+
+        Returns:
+            Hex string of the job ID.
+        """
+        return f"{self._id:016x}"
 
     def __repr__(self) -> str:
         return (
