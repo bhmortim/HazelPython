@@ -3,7 +3,7 @@
 import struct
 import threading
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Set, Type
 
 from hazelcast.serialization.api import (
     ObjectDataInput,
@@ -19,7 +19,10 @@ from hazelcast.serialization.builtin import (
     get_type_serializer_mapping,
     NONE_TYPE_ID,
 )
-from hazelcast.serialization.compact import CompactSerializationService
+from hazelcast.serialization.compact import (
+    CompactSerializationService,
+    GenericRecord,
+)
 from hazelcast.exceptions import SerializationException
 
 
@@ -448,12 +451,15 @@ class SerializationService:
     IDENTIFIED_DATA_SERIALIZABLE_ID = -2
     PORTABLE_ID = -1
 
+    COMPACT_TYPE_ID = -55
+
     def __init__(
         self,
         portable_version: int = 0,
         portable_factories: Dict[int, Any] = None,
         data_serializable_factories: Dict[int, Any] = None,
         custom_serializers: Dict[type, Serializer] = None,
+        compact_serializers: List[Any] = None,
     ):
         self._portable_version = portable_version
         self._portable_factories = portable_factories or {}
@@ -467,6 +473,13 @@ class SerializationService:
                 self.register_serializer(clazz, serializer)
 
         self._compact_service = CompactSerializationService()
+        self._compact_classes: set = set()
+
+        if compact_serializers:
+            for serializer in compact_serializers:
+                self._compact_service.register_serializer(serializer)
+                self._compact_classes.add(serializer.clazz)
+
         self._class_definition_context = ClassDefinitionContext(portable_version)
         self._lock = threading.Lock()
 
@@ -506,6 +519,9 @@ class SerializationService:
         if isinstance(obj, Data):
             return obj
 
+        if self._is_compact_object(obj):
+            return self._serialize_compact(obj)
+
         serializer = self._find_serializer_for_object(obj)
         if serializer is None:
             raise SerializationException(
@@ -516,6 +532,14 @@ class SerializationService:
         output.write_int(serializer.type_id)
         serializer.write(output, obj)
 
+        return Data(output.to_byte_array())
+
+    def _serialize_compact(self, obj: Any) -> Data:
+        """Serialize an object using compact serialization."""
+        compact_bytes = self._compact_service.serialize(obj)
+        output = ObjectDataOutputImpl(self)
+        output.write_int(self.COMPACT_TYPE_ID)
+        output.write_byte_array(compact_bytes)
         return Data(output.to_byte_array())
 
     def to_object(self, data: Any) -> Any:
@@ -544,6 +568,9 @@ class SerializationService:
         if type_id == NONE_TYPE_ID:
             return None
 
+        if type_id == self.COMPACT_TYPE_ID:
+            return self._deserialize_compact(data)
+
         serializer = self._type_id_to_serializer.get(type_id)
         if serializer is None:
             raise SerializationException(
@@ -554,6 +581,41 @@ class SerializationService:
         input_stream = ObjectDataInputImpl(payload, self)
 
         return serializer.read(input_stream)
+
+    def _deserialize_compact(self, data: Data) -> Any:
+        """Deserialize compact data."""
+        payload = data.get_payload()
+        input_stream = ObjectDataInputImpl(payload, self)
+        compact_bytes = input_stream.read_byte_array()
+        return self._compact_service.to_generic_record(compact_bytes, "unknown")
+
+    def deserialize_compact(self, data: Data, type_name: str) -> Any:
+        """Deserialize compact data to a specific type."""
+        if data is None:
+            return None
+
+        if isinstance(data, bytes):
+            data = Data(data)
+
+        type_id = data.get_type_id()
+        if type_id != self.COMPACT_TYPE_ID:
+            raise SerializationException(
+                f"Expected compact type ID {self.COMPACT_TYPE_ID}, got {type_id}"
+            )
+
+        payload = data.get_payload()
+        input_stream = ObjectDataInputImpl(payload, self)
+        compact_bytes = input_stream.read_byte_array()
+        return self._compact_service.deserialize(compact_bytes, type_name)
+
+    def register_compact_serializer(self, serializer: Any) -> None:
+        """Register a compact serializer.
+
+        Args:
+            serializer: The compact serializer to register.
+        """
+        self._compact_service.register_serializer(serializer)
+        self._compact_classes.add(serializer.clazz)
 
     def _find_serializer_for_object(self, obj: Any) -> Optional[Serializer]:
         """Find a serializer for the given object."""
@@ -569,11 +631,20 @@ class SerializationService:
         if isinstance(obj, Portable):
             return self._get_portable_serializer()
 
+        if isinstance(obj, GenericRecord) or obj_type in self._compact_classes:
+            return None
+
         for base_type, ser in self._type_to_serializer.items():
             if isinstance(obj, base_type):
                 return ser
 
         return None
+
+    def _is_compact_object(self, obj: Any) -> bool:
+        """Check if an object should use compact serialization."""
+        if isinstance(obj, GenericRecord):
+            return True
+        return type(obj) in self._compact_classes
 
     def _get_data_serializable_serializer(self) -> Serializer:
         """Get or create serializer for IdentifiedDataSerializable."""

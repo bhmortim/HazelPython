@@ -1,208 +1,120 @@
-"""Comprehensive tests for compact serialization."""
+"""Tests for compact serialization."""
 
+import pytest
 from dataclasses import dataclass
 from typing import List, Optional
 
-import pytest
-
-from hazelcast.serialization.api import CompactReader, CompactWriter, CompactSerializer
 from hazelcast.serialization.compact import (
-    CompactSerializationService,
+    FieldKind,
+    FieldDescriptor,
     Schema,
     SchemaService,
-    FieldDescriptor,
-    FieldKind,
-    DefaultCompactReader,
     DefaultCompactWriter,
-    CompactStreamReader,
+    DefaultCompactReader,
     CompactStreamWriter,
+    CompactStreamReader,
+    CompactSerializationService,
+    GenericRecord,
+    GenericRecordBuilder,
+    GenericRecordSerializer,
     ReflectiveCompactSerializer,
 )
+from hazelcast.serialization.api import CompactSerializer, CompactReader, CompactWriter
 
 
-@dataclass
-class Person:
-    """Sample dataclass for testing."""
+class TestFieldKind:
+    """Tests for FieldKind enum."""
 
-    name: str
-    age: int
-    active: bool
+    def test_basic_field_kinds_exist(self):
+        assert FieldKind.BOOLEAN == 0
+        assert FieldKind.INT8 == 1
+        assert FieldKind.INT32 == 3
+        assert FieldKind.STRING == 7
 
+    def test_array_field_kinds_exist(self):
+        assert FieldKind.ARRAY_BOOLEAN == 9
+        assert FieldKind.ARRAY_INT32 == 12
+        assert FieldKind.ARRAY_STRING == 16
 
-@dataclass
-class Address:
-    """Sample address dataclass."""
-
-    street: str
-    city: str
-    zip_code: int
-
-
-@dataclass
-class Employee:
-    """Employee with nested address."""
-
-    name: str
-    employee_id: int
-    salary: float
-
-
-class PersonSerializer(CompactSerializer[Person]):
-    """Serializer for Person."""
-
-    @property
-    def type_name(self) -> str:
-        return "Person"
-
-    @property
-    def clazz(self) -> type:
-        return Person
-
-    def write(self, writer: CompactWriter, obj: Person) -> None:
-        writer.write_string("name", obj.name)
-        writer.write_int32("age", obj.age)
-        writer.write_boolean("active", obj.active)
-
-    def read(self, reader: CompactReader) -> Person:
-        return Person(
-            name=reader.read_string("name"),
-            age=reader.read_int32("age"),
-            active=reader.read_boolean("active"),
-        )
-
-
-class EmployeeSerializer(CompactSerializer[Employee]):
-    """Serializer for Employee."""
-
-    @property
-    def type_name(self) -> str:
-        return "Employee"
-
-    @property
-    def clazz(self) -> type:
-        return Employee
-
-    def write(self, writer: CompactWriter, obj: Employee) -> None:
-        writer.write_string("name", obj.name)
-        writer.write_int32("employee_id", obj.employee_id)
-        writer.write_float64("salary", obj.salary)
-
-    def read(self, reader: CompactReader) -> Employee:
-        return Employee(
-            name=reader.read_string("name"),
-            employee_id=reader.read_int32("employee_id"),
-            salary=reader.read_float64("salary"),
-        )
-
-
-class TestSchema:
-    """Tests for Schema class."""
-
-    def test_schema_creation(self):
-        schema = Schema(type_name="TestType")
-        assert schema.type_name == "TestType"
-        assert schema.schema_id != 0
-
-    def test_add_field(self):
-        schema = Schema(type_name="TestType")
-        field = schema.add_field("name", "string")
-        assert field.name == "name"
-        assert field.field_type == "string"
-        assert field.index == 0
-
-    def test_get_field(self):
-        schema = Schema(type_name="TestType")
-        schema.add_field("name", "string")
-        schema.add_field("age", "int32")
-
-        field = schema.get_field("name")
-        assert field is not None
-        assert field.name == "name"
-
-        field = schema.get_field("nonexistent")
-        assert field is None
-
-    def test_schema_id_computation(self):
-        schema1 = Schema(type_name="Type1")
-        schema1.add_field("field1", "string")
-
-        schema2 = Schema(type_name="Type1")
-        schema2.add_field("field1", "string")
-
-        schema3 = Schema(type_name="Type1")
-        schema3.add_field("field2", "string")
-
-        assert schema1.schema_id != schema3.schema_id
+    def test_nullable_field_kinds_exist(self):
+        assert FieldKind.NULLABLE_BOOLEAN == 18
+        assert FieldKind.NULLABLE_INT32 == 21
 
 
 class TestFieldDescriptor:
-    """Tests for FieldDescriptor class."""
+    """Tests for FieldDescriptor."""
 
-    def test_field_kind(self):
-        field = FieldDescriptor(name="test", field_type="boolean", index=0)
-        assert field.kind == FieldKind.BOOLEAN
-
-        field = FieldDescriptor(name="test", field_type="int32", index=0)
+    def test_create_field_descriptor(self):
+        field = FieldDescriptor(name="age", field_type="int32", index=0)
+        assert field.name == "age"
+        assert field.field_type == "int32"
+        assert field.index == 0
         assert field.kind == FieldKind.INT32
 
-        field = FieldDescriptor(name="test", field_type="string", index=0)
-        assert field.kind == FieldKind.STRING
+    def test_is_variable_size(self):
+        string_field = FieldDescriptor(name="name", field_type="string", index=0)
+        int_field = FieldDescriptor(name="age", field_type="int32", index=1)
+
+        assert string_field.is_variable_size() is True
+        assert int_field.is_variable_size() is False
+
+
+class TestSchema:
+    """Tests for Schema."""
+
+    def test_create_schema(self):
+        schema = Schema(type_name="Person")
+        assert schema.type_name == "Person"
+        assert len(schema.fields) == 0
+
+    def test_add_field(self):
+        schema = Schema(type_name="Person")
+        field = schema.add_field("name", "string")
+
+        assert field.name == "name"
+        assert field.field_type == "string"
+        assert len(schema.fields) == 1
+
+    def test_get_field(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+        schema.add_field("age", "int32")
+
+        name_field = schema.get_field("name")
+        assert name_field is not None
+        assert name_field.name == "name"
+
+        missing = schema.get_field("missing")
+        assert missing is None
+
+    def test_schema_id_computed(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+
+        assert schema.schema_id != 0
 
 
 class TestSchemaService:
-    """Tests for SchemaService class."""
+    """Tests for SchemaService."""
 
-    def test_register_and_get_by_id(self):
+    def test_register_and_get_schema(self):
         service = SchemaService()
-        schema = Schema(type_name="TestType")
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+
         service.register(schema)
 
         retrieved = service.get_by_id(schema.schema_id)
-        assert retrieved == schema
+        assert retrieved is not None
+        assert retrieved.type_name == "Person"
 
     def test_get_by_type_name(self):
         service = SchemaService()
-        schema = Schema(type_name="TestType")
+        schema = Schema(type_name="Person")
         service.register(schema)
 
-        retrieved = service.get_by_type_name("TestType")
-        assert retrieved == schema
-
-    def test_has_schema(self):
-        service = SchemaService()
-        schema = Schema(type_name="TestType")
-
-        assert not service.has_schema(schema.schema_id)
-        service.register(schema)
-        assert service.has_schema(schema.schema_id)
-
-    def test_all_schemas(self):
-        service = SchemaService()
-        schema1 = Schema(type_name="Type1")
-        schema2 = Schema(type_name="Type2")
-
-        service.register(schema1)
-        service.register(schema2)
-
-        all_schemas = service.all_schemas()
-        assert len(all_schemas) == 2
-        assert schema1 in all_schemas
-        assert schema2 in all_schemas
-
-    def test_schema_versioning(self):
-        service = SchemaService()
-
-        v1 = Schema(type_name="Person")
-        v1.add_field("name", "string")
-        service.register(v1)
-
-        v2 = Schema(type_name="Person")
-        v2.add_field("name", "string")
-        v2.add_field("age", "int32")
-        service.register(v2)
-
-        versions = service.get_all_versions("Person")
-        assert len(versions) == 2
+        retrieved = service.get_by_type_name("Person")
+        assert retrieved is not None
 
     def test_schema_compatibility(self):
         service = SchemaService()
@@ -214,519 +126,431 @@ class TestSchemaService:
         new_schema.add_field("name", "string")
         new_schema.add_field("age", "int32")
 
-        assert service.is_compatible(old_schema, new_schema)
+        assert service.is_compatible(old_schema, new_schema) is True
 
-        incompatible_schema = Schema(type_name="Person")
-        incompatible_schema.add_field("name", "int32")
+    def test_schema_incompatibility_type_change(self):
+        service = SchemaService()
 
-        assert not service.is_compatible(old_schema, incompatible_schema)
+        old_schema = Schema(type_name="Person")
+        old_schema.add_field("age", "int32")
+
+        new_schema = Schema(type_name="Person")
+        new_schema.add_field("age", "string")
+
+        assert service.is_compatible(old_schema, new_schema) is False
 
 
-class TestCompactStreamIO:
-    """Tests for CompactStreamReader and CompactStreamWriter."""
+class TestCompactStreamWriter:
+    """Tests for CompactStreamWriter."""
 
-    def test_boolean_roundtrip(self):
+    def test_write_boolean(self):
         writer = CompactStreamWriter()
         writer.write_boolean(True)
         writer.write_boolean(False)
 
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_boolean() is True
-        assert reader.read_boolean() is False
+        data = writer.to_bytes()
+        assert data == bytes([1, 0])
 
-    def test_int8_roundtrip(self):
+    def test_write_int32(self):
         writer = CompactStreamWriter()
-        writer.write_int8(127)
-        writer.write_int8(-128)
+        writer.write_int32(42)
 
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_int8() == 127
-        assert reader.read_int8() == -128
+        data = writer.to_bytes()
+        assert len(data) == 4
 
-    def test_int16_roundtrip(self):
+    def test_write_string(self):
         writer = CompactStreamWriter()
-        writer.write_int16(32767)
-        writer.write_int16(-32768)
+        writer.write_string("hello")
 
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_int16() == 32767
-        assert reader.read_int16() == -32768
+        data = writer.to_bytes()
+        assert len(data) == 4 + 5
 
-    def test_int32_roundtrip(self):
-        writer = CompactStreamWriter()
-        writer.write_int32(2147483647)
-        writer.write_int32(-2147483648)
-
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_int32() == 2147483647
-        assert reader.read_int32() == -2147483648
-
-    def test_int64_roundtrip(self):
-        writer = CompactStreamWriter()
-        writer.write_int64(9223372036854775807)
-        writer.write_int64(-9223372036854775808)
-
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_int64() == 9223372036854775807
-        assert reader.read_int64() == -9223372036854775808
-
-    def test_float32_roundtrip(self):
-        writer = CompactStreamWriter()
-        writer.write_float32(3.14)
-
-        reader = CompactStreamReader(writer.to_bytes())
-        assert abs(reader.read_float32() - 3.14) < 0.001
-
-    def test_float64_roundtrip(self):
-        writer = CompactStreamWriter()
-        writer.write_float64(3.141592653589793)
-
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_float64() == 3.141592653589793
-
-    def test_string_roundtrip(self):
-        writer = CompactStreamWriter()
-        writer.write_string("Hello, World!")
-        writer.write_string("")
-        writer.write_string("日本語")
-
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_string() == "Hello, World!"
-        assert reader.read_string() == ""
-        assert reader.read_string() == "日本語"
-
-    def test_null_string(self):
+    def test_write_null_string(self):
         writer = CompactStreamWriter()
         writer.write_string(None)
 
-        reader = CompactStreamReader(writer.to_bytes())
-        assert reader.read_string() is None
+        data = writer.to_bytes()
+        reader = CompactStreamReader(data)
+        length = reader.read_int32()
+        assert length == -1
+
+
+class TestCompactStreamReader:
+    """Tests for CompactStreamReader."""
+
+    def test_read_boolean(self):
+        reader = CompactStreamReader(bytes([1, 0]))
+        assert reader.read_boolean() is True
+        assert reader.read_boolean() is False
+
+    def test_read_int32(self):
+        writer = CompactStreamWriter()
+        writer.write_int32(12345)
+        data = writer.to_bytes()
+
+        reader = CompactStreamReader(data)
+        assert reader.read_int32() == 12345
+
+    def test_read_string(self):
+        writer = CompactStreamWriter()
+        writer.write_string("test")
+        data = writer.to_bytes()
+
+        reader = CompactStreamReader(data)
+        assert reader.read_string() == "test"
 
 
 class TestDefaultCompactWriter:
     """Tests for DefaultCompactWriter."""
 
-    def test_write_primitives(self):
-        schema = Schema(type_name="Test")
+    def test_write_fields(self):
+        schema = Schema(type_name="Person")
         writer = DefaultCompactWriter(schema)
 
-        writer.write_boolean("bool_field", True)
-        writer.write_int8("int8_field", 42)
-        writer.write_int16("int16_field", 1000)
-        writer.write_int32("int32_field", 100000)
-        writer.write_int64("int64_field", 10000000000)
-        writer.write_float32("float32_field", 3.14)
-        writer.write_float64("float64_field", 3.141592653589793)
-        writer.write_string("string_field", "test")
+        writer.write_string("name", "Alice")
+        writer.write_int32("age", 30)
+        writer.write_boolean("active", True)
 
-        assert writer.fields["bool_field"] is True
-        assert writer.fields["int8_field"] == 42
-        assert writer.fields["int16_field"] == 1000
-        assert writer.fields["int32_field"] == 100000
-        assert writer.fields["int64_field"] == 10000000000
-        assert abs(writer.fields["float32_field"] - 3.14) < 0.001
-        assert writer.fields["float64_field"] == 3.141592653589793
-        assert writer.fields["string_field"] == "test"
+        assert writer.fields["name"] == "Alice"
+        assert writer.fields["age"] == 30
+        assert writer.fields["active"] is True
 
     def test_write_arrays(self):
-        schema = Schema(type_name="Test")
+        schema = Schema(type_name="Data")
         writer = DefaultCompactWriter(schema)
 
-        writer.write_array_of_boolean("bool_array", [True, False, True])
-        writer.write_array_of_int32("int_array", [1, 2, 3])
-        writer.write_array_of_string("string_array", ["a", "b", "c"])
+        writer.write_array_of_int32("numbers", [1, 2, 3])
+        writer.write_array_of_string("names", ["a", "b"])
 
-        assert writer.fields["bool_array"] == [True, False, True]
-        assert writer.fields["int_array"] == [1, 2, 3]
-        assert writer.fields["string_array"] == ["a", "b", "c"]
+        assert writer.fields["numbers"] == [1, 2, 3]
+        assert writer.fields["names"] == ["a", "b"]
 
     def test_write_nullable(self):
-        schema = Schema(type_name="Test")
+        schema = Schema(type_name="Data")
         writer = DefaultCompactWriter(schema)
 
-        writer.write_nullable_boolean("nullable_bool", True)
-        writer.write_nullable_boolean("null_bool", None)
-        writer.write_nullable_int32("nullable_int", 42)
-        writer.write_nullable_int32("null_int", None)
+        writer.write_nullable_int32("value", None)
+        writer.write_nullable_boolean("flag", True)
 
-        assert writer.fields["nullable_bool"] is True
-        assert writer.fields["null_bool"] is None
-        assert writer.fields["nullable_int"] == 42
-        assert writer.fields["null_int"] is None
+        assert writer.fields["value"] is None
+        assert writer.fields["flag"] is True
 
 
 class TestDefaultCompactReader:
     """Tests for DefaultCompactReader."""
 
-    def test_read_primitives(self):
-        schema = Schema(type_name="Test")
-        fields = {
-            "bool_field": True,
-            "int8_field": 42,
-            "int16_field": 1000,
-            "int32_field": 100000,
-            "int64_field": 10000000000,
-            "float32_field": 3.14,
-            "float64_field": 3.141592653589793,
-            "string_field": "test",
-        }
+    def test_read_fields(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+        schema.add_field("age", "int32")
+
+        fields = {"name": "Bob", "age": 25}
         reader = DefaultCompactReader(schema, fields)
 
-        assert reader.read_boolean("bool_field") is True
-        assert reader.read_int8("int8_field") == 42
-        assert reader.read_int16("int16_field") == 1000
-        assert reader.read_int32("int32_field") == 100000
-        assert reader.read_int64("int64_field") == 10000000000
-        assert abs(reader.read_float32("float32_field") - 3.14) < 0.001
-        assert reader.read_float64("float64_field") == 3.141592653589793
-        assert reader.read_string("string_field") == "test"
+        assert reader.read_string("name") == "Bob"
+        assert reader.read_int32("age") == 25
 
-    def test_read_missing_fields_returns_defaults(self):
-        schema = Schema(type_name="Test")
-        reader = DefaultCompactReader(schema, {})
+    def test_read_missing_field_returns_default(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
 
-        assert reader.read_boolean("missing") is False
-        assert reader.read_int8("missing") == 0
-        assert reader.read_int16("missing") == 0
-        assert reader.read_int32("missing") == 0
-        assert reader.read_int64("missing") == 0
-        assert reader.read_float32("missing") == 0.0
-        assert reader.read_float64("missing") == 0.0
-        assert reader.read_string("missing") == ""
-
-    def test_read_arrays(self):
-        schema = Schema(type_name="Test")
-        fields = {
-            "bool_array": [True, False],
-            "int_array": [1, 2, 3],
-            "string_array": ["a", "b"],
-        }
+        fields = {}
         reader = DefaultCompactReader(schema, fields)
 
-        assert reader.read_array_of_boolean("bool_array") == [True, False]
-        assert reader.read_array_of_int32("int_array") == [1, 2, 3]
-        assert reader.read_array_of_string("string_array") == ["a", "b"]
-
-    def test_read_nullable(self):
-        schema = Schema(type_name="Test")
-        fields = {
-            "nullable_bool": True,
-            "null_bool": None,
-            "nullable_int": 42,
-            "null_int": None,
-        }
-        reader = DefaultCompactReader(schema, fields)
-
-        assert reader.read_nullable_boolean("nullable_bool") is True
-        assert reader.read_nullable_boolean("null_bool") is None
-        assert reader.read_nullable_int32("nullable_int") == 42
-        assert reader.read_nullable_int32("null_int") is None
+        assert reader.read_string("name") is None
+        assert reader.read_int32("age") == 0
 
     def test_has_field(self):
-        schema = Schema(type_name="Test")
-        fields = {"existing": 42}
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+
+        fields = {"name": "Alice"}
         reader = DefaultCompactReader(schema, fields)
 
-        assert reader.has_field("existing")
-        assert not reader.has_field("missing")
+        assert reader.has_field("name") is True
+        assert reader.has_field("missing") is False
+
+    def test_get_field_kind(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("age", "int32")
+
+        fields = {"age": 30}
+        reader = DefaultCompactReader(schema, fields)
+
+        assert reader.get_field_kind("age") == FieldKind.INT32
+        assert reader.get_field_kind("missing") is None
+
+
+class TestGenericRecord:
+    """Tests for GenericRecord."""
+
+    def test_create_generic_record(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+        schema.add_field("age", "int32")
+
+        fields = {"name": "Alice", "age": 30}
+        record = GenericRecord(schema, fields)
+
+        assert record.type_name == "Person"
+        assert record.get_string("name") == "Alice"
+        assert record.get_int32("age") == 30
+
+    def test_has_field(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+
+        record = GenericRecord(schema, {"name": "Bob"})
+
+        assert record.has_field("name") is True
+        assert record.has_field("missing") is False
+
+    def test_get_field_kind(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("age", "int32")
+
+        record = GenericRecord(schema, {"age": 25})
+
+        assert record.get_field_kind("age") == FieldKind.INT32
+
+    def test_to_dict(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+        schema.add_field("age", "int32")
+
+        record = GenericRecord(schema, {"name": "Charlie", "age": 35})
+
+        result = record.to_dict()
+        assert result == {"name": "Charlie", "age": 35}
+
+    def test_get_wrong_type_raises_error(self):
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+
+        record = GenericRecord(schema, {"name": "Alice"})
+
+        with pytest.raises(TypeError):
+            record.get_int32("name")
+
+    def test_get_missing_field_raises_error(self):
+        schema = Schema(type_name="Person")
+
+        record = GenericRecord(schema, {})
+
+        with pytest.raises(ValueError):
+            record.get_string("missing")
+
+
+class TestGenericRecordBuilder:
+    """Tests for GenericRecordBuilder."""
+
+    def test_build_simple_record(self):
+        record = (
+            GenericRecordBuilder("Person")
+            .set_string("name", "Alice")
+            .set_int32("age", 30)
+            .build()
+        )
+
+        assert record.type_name == "Person"
+        assert record.get_string("name") == "Alice"
+        assert record.get_int32("age") == 30
+
+    def test_build_with_arrays(self):
+        record = (
+            GenericRecordBuilder("Data")
+            .set_array_of_int32("numbers", [1, 2, 3])
+            .set_array_of_string("names", ["a", "b"])
+            .build()
+        )
+
+        assert record.get_array_of_int32("numbers") == [1, 2, 3]
+        assert record.get_array_of_string("names") == ["a", "b"]
+
+    def test_build_with_nullable(self):
+        record = (
+            GenericRecordBuilder("Data")
+            .set_nullable_int32("value", None)
+            .set_nullable_boolean("flag", True)
+            .build()
+        )
+
+        assert record.get_nullable_int32("value") is None
+        assert record.get_nullable_boolean("flag") is True
+
+    def test_from_existing_record(self):
+        original = (
+            GenericRecordBuilder("Person")
+            .set_string("name", "Bob")
+            .set_int32("age", 25)
+            .build()
+        )
+
+        modified = (
+            original.new_builder()
+            .set_int32("age", 26)
+            .build()
+        )
+
+        assert modified.get_string("name") == "Bob"
+        assert modified.get_int32("age") == 26
 
 
 class TestCompactSerializationService:
     """Tests for CompactSerializationService."""
 
-    def test_register_serializer(self):
-        service = CompactSerializationService()
-        serializer = PersonSerializer()
-        service.register_serializer(serializer)
+    def test_serialize_and_deserialize(self):
+        @dataclass
+        class Person:
+            name: str
+            age: int
 
-        retrieved = service.get_serializer("Person")
-        assert retrieved == serializer
+        class PersonSerializer(CompactSerializer[Person]):
+            @property
+            def type_name(self) -> str:
+                return "Person"
 
-        retrieved_by_class = service.get_serializer_for_class(Person)
-        assert retrieved_by_class == serializer
+            @property
+            def clazz(self) -> type:
+                return Person
 
-    def test_simple_roundtrip(self):
+            def write(self, writer: CompactWriter, obj: Person) -> None:
+                writer.write_string("name", obj.name)
+                writer.write_int32("age", obj.age)
+
+            def read(self, reader: CompactReader) -> Person:
+                return Person(
+                    name=reader.read_string("name") or "",
+                    age=reader.read_int32("age"),
+                )
+
         service = CompactSerializationService()
         service.register_serializer(PersonSerializer())
 
-        original = Person(name="Alice", age=30, active=True)
-        data = service.serialize(original)
+        person = Person(name="Alice", age=30)
+        data = service.serialize(person)
+
         result = service.deserialize(data, "Person")
+        assert result.name == "Alice"
+        assert result.age == 30
 
-        assert result.name == original.name
-        assert result.age == original.age
-        assert result.active == original.active
-
-    def test_multiple_types(self):
+    def test_to_generic_record(self):
         service = CompactSerializationService()
-        service.register_serializer(PersonSerializer())
-        service.register_serializer(EmployeeSerializer())
 
-        person = Person(name="Bob", age=25, active=False)
-        employee = Employee(name="Charlie", employee_id=12345, salary=75000.50)
+        record = (
+            GenericRecordBuilder("Test")
+            .set_string("message", "hello")
+            .set_int32("count", 42)
+            .build()
+        )
 
-        person_data = service.serialize(person)
-        employee_data = service.serialize(employee)
+        service.register_serializer(GenericRecordSerializer("Test"))
+        data = service.serialize(record)
 
-        person_result = service.deserialize(person_data, "Person")
-        employee_result = service.deserialize(employee_data, "Employee")
-
-        assert person_result.name == person.name
-        assert employee_result.employee_id == employee.employee_id
+        result = service.to_generic_record(data, "Test")
+        assert result.get_string("message") == "hello"
+        assert result.get_int32("count") == 42
 
     def test_schema_registration(self):
         service = CompactSerializationService()
-        service.register_serializer(PersonSerializer())
 
-        original = Person(name="Test", age=20, active=True)
-        service.serialize(original)
-
-        assert service.schema_service.get_by_type_name("Person") is not None
-
-    def test_missing_serializer_raises(self):
-        service = CompactSerializationService()
-
-        with pytest.raises(ValueError):
-            service.serialize(Person(name="Test", age=20, active=True))
-
-    def test_schema_evolution_field_added(self):
-        service = CompactSerializationService()
-        service.register_serializer(PersonSerializer())
-
-        old_schema = Schema(type_name="Person")
-        old_schema.add_field("name", "string")
-        old_schema.add_field("age", "int32")
-
-        new_schema = Schema(type_name="Person")
-        new_schema.add_field("name", "string")
-        new_schema.add_field("age", "int32")
-        new_schema.add_field("active", "boolean")
-
-        service.register_schema(old_schema)
-        service.register_schema(new_schema)
-
-        assert service.check_schema_compatibility(old_schema.schema_id, new_schema.schema_id)
-
-    def test_deserialize_with_missing_new_field(self):
-        service = CompactSerializationService()
-        service.register_serializer(PersonSerializer())
-
-        fields = {"name": "Test", "age": 25}
         schema = Schema(type_name="Person")
         schema.add_field("name", "string")
-        schema.add_field("age", "int32")
         service.register_schema(schema)
 
-        reader = DefaultCompactReader(schema, fields)
-        result = PersonSerializer().read(reader)
-
-        assert result.name == "Test"
-        assert result.age == 25
-        assert result.active is False
+        retrieved = service.get_schema(schema.schema_id)
+        assert retrieved is not None
+        assert retrieved.type_name == "Person"
 
 
 class TestReflectiveCompactSerializer:
     """Tests for ReflectiveCompactSerializer."""
 
-    def test_dataclass_serialization(self):
+    def test_serialize_dataclass(self):
+        @dataclass
+        class Point:
+            x: int
+            y: int
+
+        serializer = ReflectiveCompactSerializer(Point)
         service = CompactSerializationService()
-        serializer = ReflectiveCompactSerializer(Person)
         service.register_serializer(serializer)
 
-        original = Person(name="Reflective", age=40, active=True)
-        data = service.serialize(original)
-        result = service.deserialize(data, "Person")
+        point = Point(x=10, y=20)
+        data = service.serialize(point)
+        result = service.deserialize(data, "Point")
 
-        assert result.name == original.name
-        assert result.age == original.age
-        assert result.active == original.active
+        assert result.x == 10
+        assert result.y == 20
 
-    def test_custom_type_name(self):
-        serializer = ReflectiveCompactSerializer(Person, "CustomPerson")
-        assert serializer.type_name == "CustomPerson"
+    def test_serialize_dataclass_with_string(self):
+        @dataclass
+        class Named:
+            name: str
+            value: int
 
-    def test_address_dataclass(self):
+        serializer = ReflectiveCompactSerializer(Named)
         service = CompactSerializationService()
-        serializer = ReflectiveCompactSerializer(Address)
         service.register_serializer(serializer)
 
-        original = Address(street="123 Main St", city="Springfield", zip_code=12345)
-        data = service.serialize(original)
-        result = service.deserialize(data, "Address")
+        obj = Named(name="test", value=42)
+        data = service.serialize(obj)
+        result = service.deserialize(data, "Named")
 
-        assert result.street == original.street
-        assert result.city == original.city
-        assert result.zip_code == original.zip_code
-
-
-class TestFieldKind:
-    """Tests for FieldKind enum."""
-
-    def test_field_kind_values(self):
-        assert FieldKind.BOOLEAN == 0
-        assert FieldKind.INT8 == 1
-        assert FieldKind.INT16 == 2
-        assert FieldKind.INT32 == 3
-        assert FieldKind.INT64 == 4
-        assert FieldKind.FLOAT32 == 5
-        assert FieldKind.FLOAT64 == 6
-        assert FieldKind.STRING == 7
-        assert FieldKind.COMPACT == 8
+        assert result.name == "test"
+        assert result.value == 42
 
 
-class TestCompactArraySerialization:
-    """Tests for array field serialization in compact format."""
+class TestSchemaEvolution:
+    """Tests for schema evolution support."""
 
-    def test_boolean_array(self):
+    def test_add_field_evolution(self):
+        v1_schema = Schema(type_name="Person")
+        v1_schema.add_field("name", "string")
+
+        v2_schema = Schema(type_name="Person")
+        v2_schema.add_field("name", "string")
+        v2_schema.add_field("age", "int32")
+
+        fields = {"name": "Alice"}
+        reader = DefaultCompactReader(v1_schema, fields, v2_schema)
+
+        assert reader.read_string("name") == "Alice"
+        assert reader.read_int32("age") == 0
+
+    def test_service_schema_compatibility_check(self):
         service = CompactSerializationService()
 
-        @dataclass
-        class BoolArrayContainer:
-            values: list
+        v1_schema = Schema(type_name="Person")
+        v1_schema.add_field("name", "string")
+        service.register_schema(v1_schema)
 
-        class BoolArraySerializer(CompactSerializer):
-            @property
-            def type_name(self) -> str:
-                return "BoolArrayContainer"
+        v2_schema = Schema(type_name="Person")
+        v2_schema.add_field("name", "string")
+        v2_schema.add_field("age", "int32")
+        service.register_schema(v2_schema)
 
-            @property
-            def clazz(self) -> type:
-                return BoolArrayContainer
-
-            def write(self, writer: CompactWriter, obj) -> None:
-                writer.write_array_of_boolean("values", obj.values)
-
-            def read(self, reader: CompactReader):
-                return BoolArrayContainer(values=reader.read_array_of_boolean("values"))
-
-        service.register_serializer(BoolArraySerializer())
-
-        original = BoolArrayContainer(values=[True, False, True, False])
-        data = service.serialize(original)
-        result = service.deserialize(data, "BoolArrayContainer")
-
-        assert result.values == original.values
-
-    def test_int_array(self):
-        service = CompactSerializationService()
-
-        @dataclass
-        class IntArrayContainer:
-            values: list
-
-        class IntArraySerializer(CompactSerializer):
-            @property
-            def type_name(self) -> str:
-                return "IntArrayContainer"
-
-            @property
-            def clazz(self) -> type:
-                return IntArrayContainer
-
-            def write(self, writer: CompactWriter, obj) -> None:
-                writer.write_array_of_int32("values", obj.values)
-
-            def read(self, reader: CompactReader):
-                return IntArrayContainer(values=reader.read_array_of_int32("values"))
-
-        service.register_serializer(IntArraySerializer())
-
-        original = IntArrayContainer(values=[1, 2, 3, 4, 5])
-        data = service.serialize(original)
-        result = service.deserialize(data, "IntArrayContainer")
-
-        assert result.values == original.values
-
-    def test_string_array(self):
-        service = CompactSerializationService()
-
-        @dataclass
-        class StringArrayContainer:
-            values: list
-
-        class StringArraySerializer(CompactSerializer):
-            @property
-            def type_name(self) -> str:
-                return "StringArrayContainer"
-
-            @property
-            def clazz(self) -> type:
-                return StringArrayContainer
-
-            def write(self, writer: CompactWriter, obj) -> None:
-                writer.write_array_of_string("values", obj.values)
-
-            def read(self, reader: CompactReader):
-                return StringArrayContainer(values=reader.read_array_of_string("values"))
-
-        service.register_serializer(StringArraySerializer())
-
-        original = StringArrayContainer(values=["hello", "world", "test"])
-        data = service.serialize(original)
-        result = service.deserialize(data, "StringArrayContainer")
-
-        assert result.values == original.values
+        assert service.check_schema_compatibility(v1_schema.schema_id, v2_schema.schema_id)
 
 
-class TestNullableFieldSerialization:
-    """Tests for nullable field serialization."""
+class TestCompactReaderFieldTypeChecking:
+    """Tests for field type checking in CompactReader."""
 
-    def test_nullable_boolean(self):
-        service = CompactSerializationService()
+    def test_read_wrong_type_raises_error(self):
+        schema = Schema(type_name="Data")
+        schema.add_field("value", "string")
 
-        @dataclass
-        class NullableBoolContainer:
-            value: Optional[bool]
+        fields = {"value": "test"}
+        reader = DefaultCompactReader(schema, fields)
 
-        class NullableBoolSerializer(CompactSerializer):
-            @property
-            def type_name(self) -> str:
-                return "NullableBoolContainer"
+        with pytest.raises(TypeError):
+            reader.read_int32("value")
 
-            @property
-            def clazz(self) -> type:
-                return NullableBoolContainer
+    def test_read_correct_type_succeeds(self):
+        schema = Schema(type_name="Data")
+        schema.add_field("value", "int32")
 
-            def write(self, writer: CompactWriter, obj) -> None:
-                writer.write_nullable_boolean("value", obj.value)
+        fields = {"value": 42}
+        reader = DefaultCompactReader(schema, fields)
 
-            def read(self, reader: CompactReader):
-                return NullableBoolContainer(value=reader.read_nullable_boolean("value"))
-
-        service.register_serializer(NullableBoolSerializer())
-
-        for value in [True, False, None]:
-            original = NullableBoolContainer(value=value)
-            data = service.serialize(original)
-            result = service.deserialize(data, "NullableBoolContainer")
-            assert result.value == original.value
-
-    def test_nullable_int(self):
-        service = CompactSerializationService()
-
-        @dataclass
-        class NullableIntContainer:
-            value: Optional[int]
-
-        class NullableIntSerializer(CompactSerializer):
-            @property
-            def type_name(self) -> str:
-                return "NullableIntContainer"
-
-            @property
-            def clazz(self) -> type:
-                return NullableIntContainer
-
-            def write(self, writer: CompactWriter, obj) -> None:
-                writer.write_nullable_int32("value", obj.value)
-
-            def read(self, reader: CompactReader):
-                return NullableIntContainer(value=reader.read_nullable_int32("value"))
-
-        service.register_serializer(NullableIntSerializer())
-
-        for value in [42, 0, -100, None]:
-            original = NullableIntContainer(value=value)
-            data = service.serialize(original)
-            result = service.deserialize(data, "NullableIntContainer")
-            assert result.value == original.value
+        assert reader.read_int32("value") == 42

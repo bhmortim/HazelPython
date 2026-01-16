@@ -196,6 +196,9 @@ class HazelcastSerializationException(HazelcastException):
     pass
 
 
+SerializationException = HazelcastSerializationException
+
+
 class ClientOfflineException(HazelcastException):
     """Raised when the client is not connected to the cluster.
 
