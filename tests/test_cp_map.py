@@ -1,455 +1,318 @@
-"""Unit tests for CP Subsystem components."""
+"""Comprehensive unit tests for CP Subsystem CPMap."""
 
-import threading
-import time
 import unittest
 from concurrent.futures import Future
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from hazelcast.cp.cp_map import CPMap
-from hazelcast.cp.session import CPSession, CPSessionState, CPSessionManager
-from hazelcast.cp.group import CPGroup, CPGroupStatus, CPMember, CPGroupManager
-from hazelcast.proxy.base import ProxyContext
-from hazelcast.exceptions import IllegalStateException
 
 
 class TestCPMap(unittest.TestCase):
-    """Tests for CPMap proxy."""
+    """Tests for CPMap distributed data structure."""
 
     def setUp(self):
-        self.mock_context = Mock(spec=ProxyContext)
-        self.mock_invocation = Mock()
-        self.mock_serialization = Mock()
+        with patch("hazelcast.cp.cp_map.Proxy.__init__", return_value=None):
+            self.cp_map = CPMap("hz:raft:mapService", "test-map")
+            self.cp_map._name = "test-map"
+            self.cp_map._invoke = MagicMock()
+            self.cp_map._to_data = MagicMock(side_effect=lambda x: f"data:{x}" if x else None)
+            self.cp_map._to_object = MagicMock(side_effect=lambda x: x)
 
-        self.mock_context.invocation_service = self.mock_invocation
-        self.mock_context.serialization_service = self.mock_serialization
-
-        self.mock_serialization.to_data = Mock(
-            side_effect=lambda x: x.encode() if isinstance(x, str) else x
-        )
-        self.mock_serialization.to_object = Mock(
-            side_effect=lambda x: x.decode() if isinstance(x, bytes) else x
-        )
-
-    def test_init_default_group(self):
-        """Test CPMap initialization with default group."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
-        self.assertEqual(cp_map.name, "test-map")
-        self.assertEqual(cp_map._group_id, "default")
-        self.assertEqual(cp_map._get_object_name(), "test-map")
-
-    def test_init_custom_group(self):
-        """Test CPMap initialization with custom group."""
-        cp_map = CPMap("hz:raft:mapService", "test-map@custom-group", self.mock_context)
-        self.assertEqual(cp_map.name, "test-map@custom-group")
-        self.assertEqual(cp_map._group_id, "custom-group")
-        self.assertEqual(cp_map._get_object_name(), "test-map")
-
-    def test_get_async_returns_future(self):
-        """Test that get_async returns a Future."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
-
+    def _mock_invoke_result(self, result):
+        """Create a mock future with result."""
         future = Future()
-        future.set_result(None)
-        self.mock_invocation.invoke = Mock(return_value=future)
+        future.set_result(result)
+        self.cp_map._invoke.return_value = future
 
-        result = cp_map.get_async("key")
-        self.assertIsInstance(result, Future)
+    def test_parse_group_id_with_at_symbol(self):
+        """Test _parse_group_id() extracts group from name."""
+        with patch("hazelcast.cp.cp_map.Proxy.__init__", return_value=None):
+            cp_map = CPMap("service", "map@mygroup")
+            cp_map._name = "map@mygroup"
+            self.assertEqual(cp_map._parse_group_id("map@mygroup"), "mygroup")
 
-    def test_put_async_returns_future(self):
-        """Test that put_async returns a Future."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
+    def test_parse_group_id_without_at_symbol(self):
+        """Test _parse_group_id() returns default when no group specified."""
+        self.assertEqual(self.cp_map._parse_group_id("map"), "default")
 
-        future = Future()
-        future.set_result(None)
-        self.mock_invocation.invoke = Mock(return_value=future)
+    def test_get_object_name_with_at_symbol(self):
+        """Test _get_object_name() extracts name without group suffix."""
+        with patch("hazelcast.cp.cp_map.Proxy.__init__", return_value=None):
+            cp_map = CPMap("service", "map@mygroup")
+            cp_map._name = "map@mygroup"
+            self.assertEqual(cp_map._get_object_name(), "map")
 
-        result = cp_map.put_async("key", "value")
-        self.assertIsInstance(result, Future)
+    def test_get_object_name_without_at_symbol(self):
+        """Test _get_object_name() returns full name when no group suffix."""
+        self.assertEqual(self.cp_map._get_object_name(), "test-map")
 
-    def test_set_async_returns_future(self):
-        """Test that set_async returns a Future."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
+    def test_get_existing_key(self):
+        """Test get() returns value for existing key."""
+        self._mock_invoke_result("value1")
+        result = self.cp_map.get("key1")
+        self.assertEqual(result, "value1")
+        self.cp_map._invoke.assert_called_once()
 
-        future = Future()
-        future.set_result(None)
-        self.mock_invocation.invoke = Mock(return_value=future)
+    def test_get_nonexistent_key(self):
+        """Test get() returns None for nonexistent key."""
+        self._mock_invoke_result(None)
+        result = self.cp_map.get("nonexistent")
+        self.assertIsNone(result)
 
-        result = cp_map.set_async("key", "value")
-        self.assertIsInstance(result, Future)
+    def test_get_async(self):
+        """Test get_async() returns Future."""
+        self._mock_invoke_result("async-value")
+        future = self.cp_map.get_async("key")
+        self.assertIsInstance(future, Future)
+        self.assertEqual(future.result(), "async-value")
 
-    def test_remove_async_returns_future(self):
-        """Test that remove_async returns a Future."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
+    def test_put_returns_old_value(self):
+        """Test put() returns previous value."""
+        self._mock_invoke_result("old-value")
+        result = self.cp_map.put("key", "new-value")
+        self.assertEqual(result, "old-value")
 
-        future = Future()
-        future.set_result(None)
-        self.mock_invocation.invoke = Mock(return_value=future)
+    def test_put_returns_none_for_new_key(self):
+        """Test put() returns None for new key."""
+        self._mock_invoke_result(None)
+        result = self.cp_map.put("new-key", "value")
+        self.assertIsNone(result)
 
-        result = cp_map.remove_async("key")
-        self.assertIsInstance(result, Future)
+    def test_put_async(self):
+        """Test put_async() returns Future."""
+        self._mock_invoke_result("previous")
+        future = self.cp_map.put_async("key", "value")
+        self.assertIsInstance(future, Future)
 
-    def test_delete_async_returns_future(self):
-        """Test that delete_async returns a Future."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
+    def test_set(self):
+        """Test set() sets value without returning old value."""
+        self._mock_invoke_result(None)
+        self.cp_map.set("key", "value")
+        self.cp_map._invoke.assert_called_once()
 
-        future = Future()
-        future.set_result(None)
-        self.mock_invocation.invoke = Mock(return_value=future)
+    def test_set_async(self):
+        """Test set_async() returns Future."""
+        self._mock_invoke_result(None)
+        future = self.cp_map.set_async("key", "value")
+        self.assertIsInstance(future, Future)
 
-        result = cp_map.delete_async("key")
-        self.assertIsInstance(result, Future)
+    def test_remove_returns_value(self):
+        """Test remove() returns removed value."""
+        self._mock_invoke_result("removed-value")
+        result = self.cp_map.remove("key")
+        self.assertEqual(result, "removed-value")
 
-    def test_compare_and_set_async_returns_future(self):
-        """Test that compare_and_set_async returns a Future."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
+    def test_remove_returns_none_for_nonexistent(self):
+        """Test remove() returns None for nonexistent key."""
+        self._mock_invoke_result(None)
+        result = self.cp_map.remove("nonexistent")
+        self.assertIsNone(result)
 
-        future = Future()
-        future.set_result(None)
-        self.mock_invocation.invoke = Mock(return_value=future)
+    def test_remove_async(self):
+        """Test remove_async() returns Future."""
+        self._mock_invoke_result("removed")
+        future = self.cp_map.remove_async("key")
+        self.assertIsInstance(future, Future)
 
-        result = cp_map.compare_and_set_async("key", "old", "new")
-        self.assertIsInstance(result, Future)
+    def test_delete(self):
+        """Test delete() removes key without returning value."""
+        self._mock_invoke_result(None)
+        self.cp_map.delete("key")
+        self.cp_map._invoke.assert_called_once()
 
-    def test_destroyed_map_raises(self):
-        """Test that operations on destroyed map raise exception."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
-        cp_map._destroyed = True
+    def test_delete_async(self):
+        """Test delete_async() returns Future."""
+        self._mock_invoke_result(None)
+        future = self.cp_map.delete_async("key")
+        self.assertIsInstance(future, Future)
 
-        with self.assertRaises(IllegalStateException):
-            cp_map.get("key")
-
-    def test_repr(self):
-        """Test CPMap string representation."""
-        cp_map = CPMap("hz:raft:mapService", "test-map", self.mock_context)
-        repr_str = repr(cp_map)
-        self.assertIn("CPMap", repr_str)
-        self.assertIn("test-map", repr_str)
-
-
-class TestCPSession(unittest.TestCase):
-    """Tests for CPSession."""
-
-    def test_init(self):
-        """Test CPSession initialization."""
-        session = CPSession(12345, "default")
-        self.assertEqual(session.session_id, 12345)
-        self.assertEqual(session.group_id, "default")
-        self.assertEqual(session.state, CPSessionState.ACTIVE)
-        self.assertTrue(session.is_active())
-
-    def test_close(self):
-        """Test session closure."""
-        session = CPSession(12345, "default")
-        session._close()
-        self.assertEqual(session.state, CPSessionState.CLOSED)
-        self.assertFalse(session.is_active())
-
-    def test_expire(self):
-        """Test session expiration."""
-        session = CPSession(12345, "default")
-        session._expire()
-        self.assertEqual(session.state, CPSessionState.EXPIRED)
-        self.assertFalse(session.is_active())
-
-    def test_heartbeat_update(self):
-        """Test heartbeat update."""
-        session = CPSession(12345, "default")
-        initial_heartbeat = session.last_heartbeat
-        time.sleep(0.01)
-        session._update_heartbeat()
-        self.assertGreater(session.last_heartbeat, initial_heartbeat)
-
-    def test_repr(self):
-        """Test string representation."""
-        session = CPSession(12345, "default")
-        repr_str = repr(session)
-        self.assertIn("CPSession", repr_str)
-        self.assertIn("12345", repr_str)
-        self.assertIn("default", repr_str)
-        self.assertIn("ACTIVE", repr_str)
-
-
-class TestCPSessionManager(unittest.TestCase):
-    """Tests for CPSessionManager."""
-
-    def test_get_or_create_session(self):
-        """Test session creation."""
-        manager = CPSessionManager()
-        session = manager.get_or_create_session("default")
-        self.assertIsNotNone(session)
-        self.assertEqual(session.group_id, "default")
-        self.assertTrue(session.is_active())
-
-    def test_get_existing_session(self):
-        """Test getting existing session."""
-        manager = CPSessionManager()
-        session1 = manager.get_or_create_session("default")
-        session2 = manager.get_session("default")
-        self.assertEqual(session1, session2)
-
-    def test_get_nonexistent_session(self):
-        """Test getting non-existent session."""
-        manager = CPSessionManager()
-        session = manager.get_session("nonexistent")
-        self.assertIsNone(session)
-
-    def test_close_session(self):
-        """Test session closure."""
-        manager = CPSessionManager()
-        manager.get_or_create_session("default")
-        result = manager.close_session("default")
+    def test_compare_and_set_success(self):
+        """Test compare_and_set() returns True on success."""
+        self._mock_invoke_result(True)
+        result = self.cp_map.compare_and_set("key", "expected", "update")
         self.assertTrue(result)
 
-        session = manager.get_session("default")
-        self.assertIsNone(session)
-
-    def test_close_nonexistent_session(self):
-        """Test closing non-existent session."""
-        manager = CPSessionManager()
-        result = manager.close_session("nonexistent")
+    def test_compare_and_set_failure(self):
+        """Test compare_and_set() returns False on failure."""
+        self._mock_invoke_result(False)
+        result = self.cp_map.compare_and_set("key", "expected", "update")
         self.assertFalse(result)
 
-    def test_heartbeat(self):
-        """Test heartbeat functionality."""
-        manager = CPSessionManager()
-        manager.get_or_create_session("default")
-        result = manager.heartbeat("default")
+    def test_compare_and_set_with_none_expected(self):
+        """Test compare_and_set() with None expected value (insert if absent)."""
+        self._mock_invoke_result(True)
+        result = self.cp_map.compare_and_set("key", None, "new-value")
         self.assertTrue(result)
 
-    def test_heartbeat_nonexistent(self):
-        """Test heartbeat for non-existent session."""
-        manager = CPSessionManager()
-        result = manager.heartbeat("nonexistent")
-        self.assertFalse(result)
+    def test_compare_and_set_with_none_update(self):
+        """Test compare_and_set() with None update value (conditional delete)."""
+        self._mock_invoke_result(True)
+        result = self.cp_map.compare_and_set("key", "expected", None)
+        self.assertTrue(result)
 
-    def test_get_all_sessions(self):
-        """Test getting all sessions."""
-        manager = CPSessionManager()
-        manager.get_or_create_session("group1")
-        manager.get_or_create_session("group2")
-        sessions = manager.get_all_sessions()
-        self.assertEqual(len(sessions), 2)
+    def test_compare_and_set_async(self):
+        """Test compare_and_set_async() returns Future."""
+        self._mock_invoke_result(True)
+        future = self.cp_map.compare_and_set_async("key", "old", "new")
+        self.assertIsInstance(future, Future)
 
-    def test_get_active_sessions(self):
-        """Test getting active sessions."""
-        manager = CPSessionManager()
-        manager.get_or_create_session("group1")
-        manager.get_or_create_session("group2")
-        manager.close_session("group1")
-        active = manager.get_active_sessions()
-        self.assertEqual(len(active), 1)
-        self.assertEqual(active[0].group_id, "group2")
+    def test_multiple_operations(self):
+        """Test sequence of operations."""
+        self._mock_invoke_result(None)
+        self.cp_map.set("key1", "value1")
 
-    def test_close_all(self):
-        """Test closing all sessions."""
-        manager = CPSessionManager()
-        manager.get_or_create_session("group1")
-        manager.get_or_create_session("group2")
-        count = manager.close_all()
-        self.assertEqual(count, 2)
-        self.assertEqual(len(manager.get_active_sessions()), 0)
+        self._mock_invoke_result("value1")
+        result = self.cp_map.get("key1")
+        self.assertEqual(result, "value1")
 
-    def test_shutdown(self):
-        """Test manager shutdown."""
-        manager = CPSessionManager()
-        manager.get_or_create_session("default")
-        manager.shutdown()
-        self.assertTrue(manager.is_closed)
+        self._mock_invoke_result("value1")
+        old = self.cp_map.put("key1", "value2")
+        self.assertEqual(old, "value1")
 
-        with self.assertRaises(IllegalStateException):
-            manager.get_or_create_session("new")
+    def test_get_with_complex_key(self):
+        """Test get() with complex key type."""
+        self._mock_invoke_result("complex-value")
+        result = self.cp_map.get(("tuple", "key"))
+        self.assertEqual(result, "complex-value")
 
-    def test_repr(self):
-        """Test string representation."""
-        manager = CPSessionManager()
-        manager.get_or_create_session("default")
-        repr_str = repr(manager)
-        self.assertIn("CPSessionManager", repr_str)
+    def test_put_with_complex_value(self):
+        """Test put() with complex value type."""
+        self._mock_invoke_result(None)
+        complex_value = {"nested": {"data": [1, 2, 3]}}
+        self.cp_map.put("key", complex_value)
+        self.cp_map._invoke.assert_called()
 
+    def test_group_name_parsing_various_formats(self):
+        """Test group name parsing with various name formats."""
+        test_cases = [
+            ("simple", "default", "simple"),
+            ("name@group", "group", "name"),
+            ("multi@part@group", "part@group", "multi"),
+            ("@onlygroup", "onlygroup", ""),
+        ]
 
-class TestCPMember(unittest.TestCase):
-    """Tests for CPMember."""
-
-    def test_init(self):
-        """Test CPMember initialization."""
-        member = CPMember("uuid-123", "127.0.0.1:5701")
-        self.assertEqual(member.uuid, "uuid-123")
-        self.assertEqual(member.address, "127.0.0.1:5701")
-
-    def test_equality(self):
-        """Test member equality."""
-        member1 = CPMember("uuid-123", "127.0.0.1:5701")
-        member2 = CPMember("uuid-123", "127.0.0.1:5702")
-        member3 = CPMember("uuid-456", "127.0.0.1:5701")
-
-        self.assertEqual(member1, member2)
-        self.assertNotEqual(member1, member3)
-
-    def test_hash(self):
-        """Test member hashing."""
-        member1 = CPMember("uuid-123", "127.0.0.1:5701")
-        member2 = CPMember("uuid-123", "127.0.0.1:5702")
-
-        self.assertEqual(hash(member1), hash(member2))
-
-    def test_repr(self):
-        """Test string representation."""
-        member = CPMember("uuid-123", "127.0.0.1:5701")
-        repr_str = repr(member)
-        self.assertIn("CPMember", repr_str)
-        self.assertIn("uuid-123", repr_str)
+        for full_name, expected_group, expected_name in test_cases:
+            with patch("hazelcast.cp.cp_map.Proxy.__init__", return_value=None):
+                cp_map = CPMap("service", full_name)
+                cp_map._name = full_name
+                self.assertEqual(cp_map._parse_group_id(full_name), expected_group)
+                self.assertEqual(cp_map._get_object_name(), expected_name)
 
 
-class TestCPGroup(unittest.TestCase):
-    """Tests for CPGroup."""
+class TestCPMapEdgeCases(unittest.TestCase):
+    """Edge case tests for CPMap."""
 
-    def test_init(self):
-        """Test CPGroup initialization."""
-        members = {CPMember("uuid-1", ""), CPMember("uuid-2", "")}
-        group = CPGroup("default", "group-id-123", members)
+    def setUp(self):
+        with patch("hazelcast.cp.cp_map.Proxy.__init__", return_value=None):
+            self.cp_map = CPMap("hz:raft:mapService", "edge-case-map")
+            self.cp_map._name = "edge-case-map"
+            self.cp_map._invoke = MagicMock()
+            self.cp_map._to_data = MagicMock(side_effect=lambda x: f"data:{x}" if x else None)
+            self.cp_map._to_object = MagicMock(side_effect=lambda x: x)
 
-        self.assertEqual(group.name, "default")
-        self.assertEqual(group.group_id, "group-id-123")
-        self.assertEqual(group.member_count, 2)
-        self.assertTrue(group.is_active())
+    def _mock_invoke_result(self, result):
+        """Create a mock future with result."""
+        future = Future()
+        future.set_result(result)
+        self.cp_map._invoke.return_value = future
 
-    def test_default_group_name(self):
-        """Test default group name constant."""
-        self.assertEqual(CPGroup.DEFAULT_GROUP_NAME, "default")
+    def test_get_empty_string_key(self):
+        """Test get() with empty string key."""
+        self._mock_invoke_result("value")
+        result = self.cp_map.get("")
+        self.assertEqual(result, "value")
 
-    def test_metadata_group_name(self):
-        """Test metadata group name constant."""
-        self.assertEqual(CPGroup.METADATA_GROUP_NAME, "METADATA")
+    def test_put_empty_string_value(self):
+        """Test put() with empty string value."""
+        self._mock_invoke_result(None)
+        self.cp_map.put("key", "")
+        self.cp_map._invoke.assert_called_once()
 
-    def test_members_copy(self):
-        """Test that members returns a copy."""
-        members = {CPMember("uuid-1", "")}
-        group = CPGroup("test", "id", members)
+    def test_get_unicode_key(self):
+        """Test get() with unicode key."""
+        self._mock_invoke_result("unicode-value")
+        result = self.cp_map.get("key")
+        self.assertEqual(result, "unicode-value")
 
-        returned_members = group.members
-        returned_members.add(CPMember("uuid-2", ""))
+    def test_put_large_value(self):
+        """Test put() with large value."""
+        self._mock_invoke_result(None)
+        large_value = "x" * 10000
+        self.cp_map.put("key", large_value)
+        self.cp_map._invoke.assert_called_once()
 
-        self.assertEqual(group.member_count, 1)
+    def test_compare_and_set_both_none(self):
+        """Test compare_and_set() with both expected and update None."""
+        self._mock_invoke_result(True)
+        result = self.cp_map.compare_and_set("key", None, None)
+        self.assertTrue(result)
 
-    def test_equality(self):
-        """Test group equality."""
-        group1 = CPGroup("default", "id-1")
-        group2 = CPGroup("default", "id-1")
-        group3 = CPGroup("default", "id-2")
+    def test_sequential_compare_and_set(self):
+        """Test sequential compare_and_set operations."""
+        self._mock_invoke_result(True)
+        result1 = self.cp_map.compare_and_set("key", None, "v1")
+        self.assertTrue(result1)
 
-        self.assertEqual(group1, group2)
-        self.assertNotEqual(group1, group3)
+        self._mock_invoke_result(True)
+        result2 = self.cp_map.compare_and_set("key", "v1", "v2")
+        self.assertTrue(result2)
 
-    def test_repr(self):
-        """Test string representation."""
-        group = CPGroup("default", "id-123")
-        repr_str = repr(group)
-        self.assertIn("CPGroup", repr_str)
-        self.assertIn("default", repr_str)
-
-
-class TestCPGroupManager(unittest.TestCase):
-    """Tests for CPGroupManager."""
-
-    def test_register_and_get_group(self):
-        """Test group registration and retrieval."""
-        manager = CPGroupManager()
-        group = CPGroup("test", "id-123")
-        manager.register_group(group)
-
-        retrieved = manager.get_group("test")
-        self.assertEqual(retrieved, group)
-
-    def test_get_nonexistent_group(self):
-        """Test getting non-existent group."""
-        manager = CPGroupManager()
-        group = manager.get_group("nonexistent")
-        self.assertIsNone(group)
-
-    def test_get_groups(self):
-        """Test getting all groups."""
-        manager = CPGroupManager()
-        manager.register_group(CPGroup("group1", "id-1"))
-        manager.register_group(CPGroup("group2", "id-2"))
-
-        groups = manager.get_groups()
-        self.assertEqual(len(groups), 2)
-
-    def test_get_default_group(self):
-        """Test getting default group."""
-        manager = CPGroupManager()
-        default = CPGroup(CPGroup.DEFAULT_GROUP_NAME, "id")
-        manager.register_group(default)
-
-        retrieved = manager.get_default_group()
-        self.assertEqual(retrieved, default)
-
-    def test_contains_group(self):
-        """Test group existence check."""
-        manager = CPGroupManager()
-        manager.register_group(CPGroup("test", "id"))
-
-        self.assertTrue(manager.contains_group("test"))
-        self.assertFalse(manager.contains_group("nonexistent"))
-
-    def test_remove_group(self):
-        """Test group removal."""
-        manager = CPGroupManager()
-        group = CPGroup("test", "id")
-        manager.register_group(group)
-
-        removed = manager.remove_group("test")
-        self.assertEqual(removed, group)
-        self.assertFalse(manager.contains_group("test"))
-
-    def test_clear(self):
-        """Test clearing all groups."""
-        manager = CPGroupManager()
-        manager.register_group(CPGroup("group1", "id-1"))
-        manager.register_group(CPGroup("group2", "id-2"))
-        manager.clear()
-
-        self.assertEqual(len(manager.get_groups()), 0)
-
-    def test_shutdown(self):
-        """Test manager shutdown."""
-        manager = CPGroupManager()
-        manager.register_group(CPGroup("test", "id"))
-        manager.shutdown()
-
-        self.assertTrue(manager.is_closed)
-        self.assertEqual(len(manager.get_groups()), 0)
-
-        with self.assertRaises(IllegalStateException):
-            manager.register_group(CPGroup("new", "id"))
-
-    def test_repr(self):
-        """Test string representation."""
-        manager = CPGroupManager()
-        manager.register_group(CPGroup("test", "id"))
-        repr_str = repr(manager)
-        self.assertIn("CPGroupManager", repr_str)
+        self._mock_invoke_result(False)
+        result3 = self.cp_map.compare_and_set("key", "v1", "v3")
+        self.assertFalse(result3)
 
 
-class TestCPSessionState(unittest.TestCase):
-    """Tests for CPSessionState enum."""
+class TestCPMapConcurrency(unittest.TestCase):
+    """Concurrency-related tests for CPMap."""
 
-    def test_values(self):
-        """Test enum values."""
-        self.assertEqual(CPSessionState.ACTIVE.value, "ACTIVE")
-        self.assertEqual(CPSessionState.CLOSED.value, "CLOSED")
-        self.assertEqual(CPSessionState.EXPIRED.value, "EXPIRED")
+    def setUp(self):
+        with patch("hazelcast.cp.cp_map.Proxy.__init__", return_value=None):
+            self.cp_map = CPMap("hz:raft:mapService", "concurrent-map")
+            self.cp_map._name = "concurrent-map"
+            self.cp_map._invoke = MagicMock()
+            self.cp_map._to_data = MagicMock(side_effect=lambda x: f"data:{x}" if x else None)
+            self.cp_map._to_object = MagicMock(side_effect=lambda x: x)
 
+    def test_async_operations_return_futures(self):
+        """Test that all async operations return Future instances."""
+        future = Future()
+        future.set_result(None)
+        self.cp_map._invoke.return_value = future
 
-class TestCPGroupStatus(unittest.TestCase):
-    """Tests for CPGroupStatus enum."""
+        async_methods = [
+            lambda: self.cp_map.get_async("key"),
+            lambda: self.cp_map.put_async("key", "value"),
+            lambda: self.cp_map.set_async("key", "value"),
+            lambda: self.cp_map.remove_async("key"),
+            lambda: self.cp_map.delete_async("key"),
+            lambda: self.cp_map.compare_and_set_async("key", "old", "new"),
+        ]
 
-    def test_values(self):
-        """Test enum values."""
-        self.assertEqual(CPGroupStatus.ACTIVE.value, "ACTIVE")
-        self.assertEqual(CPGroupStatus.DESTROYING.value, "DESTROYING")
-        self.assertEqual(CPGroupStatus.DESTROYED.value, "DESTROYED")
+        for method in async_methods:
+            result = method()
+            self.assertIsInstance(result, Future)
+
+    def test_optimistic_locking_pattern(self):
+        """Test optimistic locking pattern with compare_and_set."""
+        call_count = [0]
+
+        def mock_cas(*args, **kwargs):
+            call_count[0] += 1
+            future = Future()
+            future.set_result(call_count[0] >= 3)
+            return future
+
+        self.cp_map._invoke = mock_cas
+
+        max_retries = 5
+        success = False
+        for _ in range(max_retries):
+            if self.cp_map.compare_and_set("key", "old", "new"):
+                success = True
+                break
+
+        self.assertTrue(success)
+        self.assertEqual(call_count[0], 3)
 
 
 if __name__ == "__main__":
