@@ -563,5 +563,329 @@ class TestTransactionalMapCodec(unittest.TestCase):
         self.assertEqual(message_type, TXN_MAP_REPLACE_IF_SAME)
 
 
+class TestTransactionalListCodec(unittest.TestCase):
+    """Tests for TransactionalListCodec encode/decode methods."""
+
+    def test_encode_add_request_message_type(self):
+        """Test that add request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalListCodec, TXN_LIST_ADD
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalListCodec.encode_add_request(
+            name="test-list",
+            txn_id=txn_id,
+            thread_id=12345,
+            value=b"item",
+        )
+
+        frame = msg.next_frame()
+        assert frame is not None
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_LIST_ADD)
+
+    def test_encode_remove_request_message_type(self):
+        """Test that remove request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalListCodec, TXN_LIST_REMOVE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalListCodec.encode_remove_request(
+            name="test-list",
+            txn_id=txn_id,
+            thread_id=12345,
+            value=b"item",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_LIST_REMOVE)
+
+    def test_encode_size_request_message_type(self):
+        """Test that size request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalListCodec, TXN_LIST_SIZE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalListCodec.encode_size_request(
+            name="test-list",
+            txn_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_LIST_SIZE)
+
+
+class TestTransactionalSetCodec(unittest.TestCase):
+    """Tests for TransactionalSetCodec encode/decode methods."""
+
+    def test_encode_add_request_message_type(self):
+        """Test that add request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalSetCodec, TXN_SET_ADD
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalSetCodec.encode_add_request(
+            name="test-set",
+            txn_id=txn_id,
+            thread_id=12345,
+            value=b"item",
+        )
+
+        frame = msg.next_frame()
+        assert frame is not None
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_SET_ADD)
+
+    def test_encode_remove_request_message_type(self):
+        """Test that remove request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalSetCodec, TXN_SET_REMOVE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalSetCodec.encode_remove_request(
+            name="test-set",
+            txn_id=txn_id,
+            thread_id=12345,
+            value=b"item",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_SET_REMOVE)
+
+    def test_encode_size_request_message_type(self):
+        """Test that size request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalSetCodec, TXN_SET_SIZE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalSetCodec.encode_size_request(
+            name="test-set",
+            txn_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_SET_SIZE)
+
+
+class TestTransactionalQueueCodec(unittest.TestCase):
+    """Tests for TransactionalQueueCodec encode/decode methods."""
+
+    def test_encode_offer_request_message_type(self):
+        """Test that offer request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalQueueCodec, TXN_QUEUE_OFFER
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalQueueCodec.encode_offer_request(
+            name="test-queue",
+            txn_id=txn_id,
+            thread_id=12345,
+            value=b"item",
+            timeout_millis=0,
+        )
+
+        frame = msg.next_frame()
+        assert frame is not None
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_QUEUE_OFFER)
+
+    def test_encode_poll_request_message_type(self):
+        """Test that poll request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalQueueCodec, TXN_QUEUE_POLL
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalQueueCodec.encode_poll_request(
+            name="test-queue",
+            txn_id=txn_id,
+            thread_id=12345,
+            timeout_millis=0,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_QUEUE_POLL)
+
+    def test_encode_take_request_message_type(self):
+        """Test that take request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalQueueCodec, TXN_QUEUE_TAKE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalQueueCodec.encode_take_request(
+            name="test-queue",
+            txn_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_QUEUE_TAKE)
+
+    def test_encode_peek_request_message_type(self):
+        """Test that peek request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalQueueCodec, TXN_QUEUE_PEEK
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalQueueCodec.encode_peek_request(
+            name="test-queue",
+            txn_id=txn_id,
+            thread_id=12345,
+            timeout_millis=0,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_QUEUE_PEEK)
+
+    def test_encode_size_request_message_type(self):
+        """Test that size request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalQueueCodec, TXN_QUEUE_SIZE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalQueueCodec.encode_size_request(
+            name="test-queue",
+            txn_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_QUEUE_SIZE)
+
+
+class TestTransactionalMultiMapCodec(unittest.TestCase):
+    """Tests for TransactionalMultiMapCodec encode/decode methods."""
+
+    def test_encode_put_request_message_type(self):
+        """Test that put request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMultiMapCodec, TXN_MULTI_MAP_PUT
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMultiMapCodec.encode_put_request(
+            name="test-multimap",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+            value=b"value",
+        )
+
+        frame = msg.next_frame()
+        assert frame is not None
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MULTI_MAP_PUT)
+
+    def test_encode_get_request_message_type(self):
+        """Test that get request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMultiMapCodec, TXN_MULTI_MAP_GET
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMultiMapCodec.encode_get_request(
+            name="test-multimap",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MULTI_MAP_GET)
+
+    def test_encode_remove_request_message_type(self):
+        """Test that remove request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMultiMapCodec, TXN_MULTI_MAP_REMOVE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMultiMapCodec.encode_remove_request(
+            name="test-multimap",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+            value=b"value",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MULTI_MAP_REMOVE)
+
+    def test_encode_remove_all_request_message_type(self):
+        """Test that removeAll request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMultiMapCodec, TXN_MULTI_MAP_REMOVE_ALL
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMultiMapCodec.encode_remove_all_request(
+            name="test-multimap",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MULTI_MAP_REMOVE_ALL)
+
+    def test_encode_value_count_request_message_type(self):
+        """Test that valueCount request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMultiMapCodec, TXN_MULTI_MAP_VALUE_COUNT
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMultiMapCodec.encode_value_count_request(
+            name="test-multimap",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MULTI_MAP_VALUE_COUNT)
+
+    def test_encode_size_request_message_type(self):
+        """Test that size request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMultiMapCodec, TXN_MULTI_MAP_SIZE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMultiMapCodec.encode_size_request(
+            name="test-multimap",
+            txn_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MULTI_MAP_SIZE)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7641,6 +7641,564 @@ class TransactionalMapCodec:
         return msg
 
 
+class TransactionalListCodec:
+    """Codec for Transactional List protocol messages."""
+
+    @staticmethod
+    def encode_add_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        value: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalList.add request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_LIST_ADD)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_add_response(msg: "ClientMessage") -> bool:
+        """Decode a TransactionalList.add response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_remove_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        value: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalList.remove request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_LIST_REMOVE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_remove_response(msg: "ClientMessage") -> bool:
+        """Decode a TransactionalList.remove response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_size_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalList.size request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_LIST_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a TransactionalList.size response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
+class TransactionalSetCodec:
+    """Codec for Transactional Set protocol messages."""
+
+    @staticmethod
+    def encode_add_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        value: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalSet.add request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_SET_ADD)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_add_response(msg: "ClientMessage") -> bool:
+        """Decode a TransactionalSet.add response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_remove_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        value: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalSet.remove request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_SET_REMOVE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_remove_response(msg: "ClientMessage") -> bool:
+        """Decode a TransactionalSet.remove response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_size_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalSet.size request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_SET_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a TransactionalSet.size response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
+class TransactionalQueueCodec:
+    """Codec for Transactional Queue protocol messages."""
+
+    @staticmethod
+    def encode_offer_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        value: bytes,
+        timeout_millis: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalQueue.offer request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_QUEUE_OFFER)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, timeout_millis)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_offer_response(msg: "ClientMessage") -> bool:
+        """Decode a TransactionalQueue.offer response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_poll_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        timeout_millis: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalQueue.poll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_QUEUE_POLL)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, timeout_millis)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_poll_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a TransactionalQueue.poll response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_take_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalQueue.take request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_QUEUE_TAKE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_take_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a TransactionalQueue.take response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_peek_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        timeout_millis: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalQueue.peek request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_QUEUE_PEEK)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, timeout_millis)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_peek_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a TransactionalQueue.peek response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_size_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalQueue.size request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_QUEUE_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a TransactionalQueue.size response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
+class TransactionalMultiMapCodec:
+    """Codec for Transactional MultiMap protocol messages."""
+
+    @staticmethod
+    def encode_put_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        key: bytes,
+        value: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalMultiMap.put request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_MULTI_MAP_PUT)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_put_response(msg: "ClientMessage") -> bool:
+        """Decode a TransactionalMultiMap.put response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_get_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        key: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalMultiMap.get request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_MULTI_MAP_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_get_response(msg: "ClientMessage") -> List[bytes]:
+        """Decode a TransactionalMultiMap.get response."""
+        msg.next_frame()
+        return _decode_data_list(msg)
+
+    @staticmethod
+    def encode_remove_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        key: bytes,
+        value: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalMultiMap.remove request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_MULTI_MAP_REMOVE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_remove_response(msg: "ClientMessage") -> bool:
+        """Decode a TransactionalMultiMap.remove response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_remove_all_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        key: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalMultiMap.removeAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_MULTI_MAP_REMOVE_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_remove_all_response(msg: "ClientMessage") -> List[bytes]:
+        """Decode a TransactionalMultiMap.removeAll response."""
+        msg.next_frame()
+        return _decode_data_list(msg)
+
+    @staticmethod
+    def encode_value_count_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+        key: bytes,
+    ) -> "ClientMessage":
+        """Encode a TransactionalMultiMap.valueCount request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_MULTI_MAP_VALUE_COUNT)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_value_count_response(msg: "ClientMessage") -> int:
+        """Decode a TransactionalMultiMap.valueCount response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_size_request(
+        name: str,
+        txn_id: uuid_module.UUID,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a TransactionalMultiMap.size request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_MULTI_MAP_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, txn_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a TransactionalMultiMap.size response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
 class ReplicatedMapCodec:
     """Codec for ReplicatedMap protocol messages."""
 
