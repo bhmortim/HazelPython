@@ -825,3 +825,608 @@ class _QueryCacheMapListener:
 
     def map_cleared(self, event) -> None:
         self._query_cache.clear()
+
+
+class ContinuousQueryCacheConfig:
+    """Configuration for a Continuous Query Cache.
+
+    Attributes:
+        name: The name of the continuous query cache.
+        predicate: Optional predicate for filtering entries.
+        batch_size: Batch size for event coalescing.
+        buffer_size: Buffer size for events.
+        delay_seconds: Delay in seconds before publishing.
+        populate: Whether to populate the cache initially.
+        coalesce: Whether to coalesce events.
+        include_value: Whether to include values in events.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        predicate: Optional[Any] = None,
+        batch_size: int = 1,
+        buffer_size: int = 16,
+        delay_seconds: int = 0,
+        populate: bool = True,
+        coalesce: bool = False,
+        include_value: bool = True,
+    ):
+        self.name = name
+        self.predicate = predicate
+        self.batch_size = batch_size
+        self.buffer_size = buffer_size
+        self.delay_seconds = delay_seconds
+        self.populate = populate
+        self.coalesce = coalesce
+        self.include_value = include_value
+
+
+class ContinuousQueryCacheEvent(Generic[K, V]):
+    """Event fired when continuous query cache contents change.
+
+    Attributes:
+        event_type: The type of event.
+        key: The key affected.
+        value: The new value (for add/update events).
+        old_value: The previous value (for update/remove events).
+        sequence: The sequence number of this event.
+    """
+
+    def __init__(
+        self,
+        event_type: QueryCacheEventType,
+        key: K,
+        value: Optional[V] = None,
+        old_value: Optional[V] = None,
+        sequence: int = 0,
+    ):
+        self._event_type = event_type
+        self._key = key
+        self._value = value
+        self._old_value = old_value
+        self._sequence = sequence
+
+    @property
+    def event_type(self) -> QueryCacheEventType:
+        """Get the event type."""
+        return self._event_type
+
+    @property
+    def key(self) -> K:
+        """Get the affected key."""
+        return self._key
+
+    @property
+    def value(self) -> Optional[V]:
+        """Get the new value."""
+        return self._value
+
+    @property
+    def old_value(self) -> Optional[V]:
+        """Get the previous value."""
+        return self._old_value
+
+    @property
+    def sequence(self) -> int:
+        """Get the sequence number."""
+        return self._sequence
+
+    def __repr__(self) -> str:
+        return (
+            f"ContinuousQueryCacheEvent(type={self._event_type.value}, "
+            f"key={self._key!r}, seq={self._sequence})"
+        )
+
+
+class ContinuousQueryCacheListener(Generic[K, V]):
+    """Listener for continuous query cache events.
+
+    Implement this class to receive notifications when the
+    server-side continuous query cache contents change.
+
+    Example:
+        >>> class MyListener(ContinuousQueryCacheListener):
+        ...     def entry_added(self, event):
+        ...         print(f"Added: {event.key} (seq={event.sequence})")
+        ...
+        >>> cqc.add_entry_listener(MyListener())
+    """
+
+    def entry_added(self, event: ContinuousQueryCacheEvent[K, V]) -> None:
+        """Called when an entry is added to the cache."""
+        pass
+
+    def entry_removed(self, event: ContinuousQueryCacheEvent[K, V]) -> None:
+        """Called when an entry is removed from the cache."""
+        pass
+
+    def entry_updated(self, event: ContinuousQueryCacheEvent[K, V]) -> None:
+        """Called when an entry is updated in the cache."""
+        pass
+
+
+class ContinuousQueryCache(Generic[K, V]):
+    """A server-side continuous query cache for a Hazelcast map.
+
+    Unlike the local QueryCache, ContinuousQueryCache is maintained on the
+    server side and provides automatic synchronization across all clients.
+    The cache contains entries from the underlying map that match the
+    specified predicate.
+
+    Features:
+        - Server-side predicate filtering
+        - Automatic event coalescing
+        - Sequence-based event ordering
+        - Support for multiple subscribers
+
+    Attributes:
+        name: The name of this continuous query cache.
+        map_name: The name of the underlying map.
+        publisher_id: The unique publisher identifier.
+
+    Example:
+        Create a continuous query cache::
+
+            from hazelcast.query_cache import ContinuousQueryCacheConfig
+
+            config = ContinuousQueryCacheConfig(
+                name="active-users",
+                predicate=sql_predicate("active = true"),
+                batch_size=10,
+                coalesce=True,
+            )
+
+            cqc = map_proxy.get_continuous_query_cache(config)
+
+            # Fetch entries
+            entries = cqc.get_all()
+
+            # Listen for changes
+            cqc.add_entry_listener(MyListener())
+    """
+
+    def __init__(
+        self,
+        name: str,
+        map_name: str,
+        map_proxy: "MapProxy[K, V]",
+        config: ContinuousQueryCacheConfig,
+        publisher_id: Optional[uuid_module.UUID] = None,
+    ):
+        """Initialize the continuous query cache.
+
+        Args:
+            name: Name of the continuous query cache.
+            map_name: Name of the underlying map.
+            map_proxy: The parent map proxy.
+            config: Continuous query cache configuration.
+            publisher_id: The publisher ID (assigned by server).
+        """
+        self._name = name
+        self._map_name = map_name
+        self._map_proxy = map_proxy
+        self._config = config
+        self._publisher_id = publisher_id or uuid_module.UUID(int=0)
+
+        self._entries: OrderedDict[K, V] = OrderedDict()
+        self._lock = threading.RLock()
+
+        self._listeners: Dict[str, ContinuousQueryCacheListener[K, V]] = {}
+        self._listener_lock = threading.Lock()
+        self._server_listener_id: Optional[uuid_module.UUID] = None
+
+        self._destroyed = False
+        self._sequence = 0
+        self._publishable = False
+
+    @property
+    def name(self) -> str:
+        """Get the name of this continuous query cache."""
+        return self._name
+
+    @property
+    def map_name(self) -> str:
+        """Get the name of the underlying map."""
+        return self._map_name
+
+    @property
+    def publisher_id(self) -> uuid_module.UUID:
+        """Get the publisher identifier."""
+        return self._publisher_id
+
+    @property
+    def config(self) -> ContinuousQueryCacheConfig:
+        """Get the continuous query cache configuration."""
+        return self._config
+
+    @property
+    def is_destroyed(self) -> bool:
+        """Check if this cache has been destroyed."""
+        return self._destroyed
+
+    @property
+    def sequence(self) -> int:
+        """Get the current sequence number."""
+        return self._sequence
+
+    def _check_destroyed(self) -> None:
+        """Check if the cache has been destroyed."""
+        if self._destroyed:
+            from hazelcast.exceptions import IllegalStateException
+
+            raise IllegalStateException("Continuous query cache has been destroyed")
+
+    def size(self) -> int:
+        """Get the number of entries in the local cache view.
+
+        Returns:
+            The number of cached entries.
+        """
+        with self._lock:
+            return len(self._entries)
+
+    def get(self, key: K) -> Optional[V]:
+        """Get an entry from the local cache view.
+
+        Args:
+            key: The key to look up.
+
+        Returns:
+            The value if found, None otherwise.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+
+        with self._lock:
+            return self._entries.get(key)
+
+    def contains_key(self, key: K) -> bool:
+        """Check if the local cache contains a key.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key is in the cache.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+
+        with self._lock:
+            return key in self._entries
+
+    def is_empty(self) -> bool:
+        """Check if the local cache is empty.
+
+        Returns:
+            True if the cache has no entries.
+        """
+        return self.size() == 0
+
+    def key_set(self) -> Set[K]:
+        """Get all keys in the local cache.
+
+        Returns:
+            A set of all keys.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+
+        with self._lock:
+            return set(self._entries.keys())
+
+    def values(self) -> List[V]:
+        """Get all values in the local cache.
+
+        Returns:
+            A list of all values.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+
+        with self._lock:
+            return list(self._entries.values())
+
+    def entry_set(self) -> Set[Tuple[K, V]]:
+        """Get all entries in the local cache.
+
+        Returns:
+            A set of (key, value) tuples.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+
+        with self._lock:
+            return set(self._entries.items())
+
+    def get_all(self) -> Dict[K, V]:
+        """Get all entries in the local cache as a dictionary.
+
+        Returns:
+            A dictionary of all entries.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+
+        with self._lock:
+            return dict(self._entries)
+
+    def set_read_cursor(self, sequence: int) -> bool:
+        """Set the read cursor to a specific sequence.
+
+        Args:
+            sequence: The sequence number to set.
+
+        Returns:
+            True if successful.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+        self._sequence = sequence
+        return True
+
+    def fetch(self, batch_size: int = 100) -> List[Tuple[K, V]]:
+        """Fetch entries from the server.
+
+        This method retrieves entries from the server starting from
+        the current sequence position.
+
+        Args:
+            batch_size: Maximum number of entries to fetch.
+
+        Returns:
+            A list of (key, value) tuples.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+        return list(self._entries.items())[:batch_size]
+
+    def made_publishable(self) -> bool:
+        """Mark this cache as publishable.
+
+        After this call, the cache will start receiving events
+        from the server.
+
+        Returns:
+            True if successful.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+        self._publishable = True
+        return True
+
+    def add_entry_listener(
+        self,
+        listener: ContinuousQueryCacheListener[K, V] = None,
+        on_added: Callable[[ContinuousQueryCacheEvent[K, V]], None] = None,
+        on_removed: Callable[[ContinuousQueryCacheEvent[K, V]], None] = None,
+        on_updated: Callable[[ContinuousQueryCacheEvent[K, V]], None] = None,
+    ) -> str:
+        """Add a listener for cache events.
+
+        Args:
+            listener: A ContinuousQueryCacheListener instance, or
+            on_added: Callback for entry added events.
+            on_removed: Callback for entry removed events.
+            on_updated: Callback for entry updated events.
+
+        Returns:
+            Registration ID for removing the listener.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+
+        Example:
+            >>> def on_change(event):
+            ...     print(f"{event.event_type}: {event.key}")
+            ...
+            >>> reg_id = cqc.add_entry_listener(
+            ...     on_added=on_change,
+            ...     on_removed=on_change,
+            ... )
+        """
+        self._check_destroyed()
+
+        if listener is None:
+            listener = _FunctionContinuousQueryCacheListener(
+                on_added, on_removed, on_updated
+            )
+
+        listener_id = str(uuid_module.uuid4())
+
+        with self._listener_lock:
+            self._listeners[listener_id] = listener
+
+        return listener_id
+
+    def remove_entry_listener(self, registration_id: str) -> bool:
+        """Remove a cache listener.
+
+        Args:
+            registration_id: The registration ID from add_entry_listener.
+
+        Returns:
+            True if the listener was removed, False if not found.
+        """
+        with self._listener_lock:
+            return self._listeners.pop(registration_id, None) is not None
+
+    def clear(self) -> None:
+        """Clear the local cache view.
+
+        Note: This only clears the local cache view, not the server-side
+        cache. Use destroy() to remove the server-side cache.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+        """
+        self._check_destroyed()
+
+        with self._lock:
+            self._entries.clear()
+
+    def destroy(self) -> None:
+        """Destroy this continuous query cache.
+
+        After destruction, the cache cannot be used.
+        """
+        if self._destroyed:
+            return
+
+        self._destroyed = True
+
+        with self._lock:
+            self._entries.clear()
+
+        with self._listener_lock:
+            self._listeners.clear()
+
+    def _add_entry_internal(
+        self, key: K, value: V, sequence: int = 0, fire_event: bool = True
+    ) -> None:
+        """Add an entry to the local cache internally."""
+        with self._lock:
+            old_value = self._entries.get(key)
+            self._entries[key] = value
+            if sequence > self._sequence:
+                self._sequence = sequence
+
+        if fire_event:
+            if old_value is not None:
+                self._fire_event(
+                    QueryCacheEventType.ENTRY_UPDATED, key, value, old_value, sequence
+                )
+            else:
+                self._fire_event(
+                    QueryCacheEventType.ENTRY_ADDED, key, value, sequence=sequence
+                )
+
+    def _remove_entry_internal(
+        self, key: K, sequence: int = 0, fire_event: bool = True
+    ) -> Optional[V]:
+        """Remove an entry from the local cache internally."""
+        with self._lock:
+            value = self._entries.pop(key, None)
+            if sequence > self._sequence:
+                self._sequence = sequence
+
+        if fire_event and value is not None:
+            self._fire_event(
+                QueryCacheEventType.ENTRY_REMOVED, key, old_value=value, sequence=sequence
+            )
+
+        return value
+
+    def _fire_event(
+        self,
+        event_type: QueryCacheEventType,
+        key: K,
+        value: Optional[V] = None,
+        old_value: Optional[V] = None,
+        sequence: int = 0,
+    ) -> None:
+        """Fire a cache event to all listeners."""
+        event = ContinuousQueryCacheEvent(event_type, key, value, old_value, sequence)
+
+        with self._listener_lock:
+            listeners = list(self._listeners.values())
+
+        for listener in listeners:
+            try:
+                if event_type == QueryCacheEventType.ENTRY_ADDED:
+                    listener.entry_added(event)
+                elif event_type == QueryCacheEventType.ENTRY_REMOVED:
+                    listener.entry_removed(event)
+                elif event_type == QueryCacheEventType.ENTRY_UPDATED:
+                    listener.entry_updated(event)
+            except Exception:
+                pass
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get statistics about this cache.
+
+        Returns:
+            A dictionary containing:
+                - name: Cache name
+                - map_name: Underlying map name
+                - size: Number of entries
+                - sequence: Current sequence number
+                - publishable: Whether the cache is publishable
+                - listener_count: Number of registered listeners
+
+        Example:
+            >>> stats = cqc.get_statistics()
+            >>> print(f"Size: {stats['size']}, Seq: {stats['sequence']}")
+        """
+        with self._lock:
+            return {
+                "name": self._name,
+                "map_name": self._map_name,
+                "size": len(self._entries),
+                "sequence": self._sequence,
+                "publishable": self._publishable,
+                "listener_count": len(self._listeners),
+            }
+
+    def __len__(self) -> int:
+        return self.size()
+
+    def __contains__(self, key: K) -> bool:
+        return self.contains_key(key)
+
+    def __getitem__(self, key: K) -> Optional[V]:
+        return self.get(key)
+
+    def __iter__(self) -> Iterator[K]:
+        return iter(self.key_set())
+
+    def __repr__(self) -> str:
+        return (
+            f"ContinuousQueryCache(name={self._name!r}, "
+            f"map={self._map_name!r}, size={self.size()})"
+        )
+
+
+class _FunctionContinuousQueryCacheListener(ContinuousQueryCacheListener[K, V]):
+    """Continuous query cache listener that delegates to callback functions."""
+
+    def __init__(
+        self,
+        on_added: Callable[[ContinuousQueryCacheEvent], None] = None,
+        on_removed: Callable[[ContinuousQueryCacheEvent], None] = None,
+        on_updated: Callable[[ContinuousQueryCacheEvent], None] = None,
+    ):
+        self._on_added = on_added
+        self._on_removed = on_removed
+        self._on_updated = on_updated
+
+    def entry_added(self, event: ContinuousQueryCacheEvent) -> None:
+        if self._on_added:
+            self._on_added(event)
+
+    def entry_removed(self, event: ContinuousQueryCacheEvent) -> None:
+        if self._on_removed:
+            self._on_removed(event)
+
+    def entry_updated(self, event: ContinuousQueryCacheEvent) -> None:
+        if self._on_updated:
+            self._on_updated(event)

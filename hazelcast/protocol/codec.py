@@ -9218,6 +9218,439 @@ class CacheEventJournalCodec:
         return read_count, next_seq, events, sequences
 
 
+# Continuous Query Cache protocol constants
+CQC_CREATE_WITH_VALUE = 0x016000
+CQC_CREATE = 0x016100
+CQC_SET_READ_CURSOR = 0x016200
+CQC_ADD_LISTENER = 0x016300
+CQC_DESTROY = 0x016400
+CQC_FETCH = 0x016500
+CQC_SIZE = 0x016600
+CQC_MADE_PUBLISHABLE = 0x016700
+
+
+class ContinuousQueryCacheCodec:
+    """Codec for Continuous Query Cache protocol messages."""
+
+    @staticmethod
+    def encode_create_with_value_request(
+        map_name: str,
+        cache_name: str,
+        predicate_data: Optional[bytes],
+        batch_size: int,
+        buffer_size: int,
+        delay_seconds: int,
+        populate: bool,
+        coalesce: bool,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.createWithValue request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+            predicate_data: Serialized predicate for filtering entries.
+            batch_size: The batch size for event coalescing.
+            buffer_size: The buffer size for events.
+            delay_seconds: Delay in seconds before publishing.
+            populate: Whether to populate the cache initially.
+            coalesce: Whether to coalesce events.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(
+            REQUEST_HEADER_SIZE + INT_SIZE + INT_SIZE + INT_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE
+        )
+        struct.pack_into("<I", buffer, 0, CQC_CREATE_WITH_VALUE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<i", buffer, offset, batch_size)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, buffer_size)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, delay_seconds)
+        offset += INT_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if populate else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if coalesce else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        if predicate_data is not None:
+            msg.add_frame(Frame(predicate_data))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_create_with_value_response(
+        msg: "ClientMessage",
+    ) -> Tuple[List[Tuple[bytes, bytes]], uuid_module.UUID]:
+        """Decode a ContinuousQueryCache.createWithValue response.
+
+        Returns:
+            Tuple of (entries, publisher_id).
+            entries is a list of (key_data, value_data) tuples.
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return [], uuid_module.UUID(int=0)
+
+        publisher_id = None
+        if len(frame.content) >= RESPONSE_HEADER_SIZE + UUID_SIZE:
+            publisher_id, _ = FixSizedTypesCodec.decode_uuid(
+                frame.content, RESPONSE_HEADER_SIZE
+            )
+
+        entries = _decode_entry_list(msg)
+
+        if publisher_id is None:
+            publisher_id = uuid_module.UUID(int=0)
+
+        return entries, publisher_id
+
+    @staticmethod
+    def encode_create_request(
+        map_name: str,
+        cache_name: str,
+        predicate_data: Optional[bytes],
+        batch_size: int,
+        buffer_size: int,
+        delay_seconds: int,
+        populate: bool,
+        coalesce: bool,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.create request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+            predicate_data: Serialized predicate for filtering entries.
+            batch_size: The batch size for event coalescing.
+            buffer_size: The buffer size for events.
+            delay_seconds: Delay in seconds before publishing.
+            populate: Whether to populate the cache initially.
+            coalesce: Whether to coalesce events.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(
+            REQUEST_HEADER_SIZE + INT_SIZE + INT_SIZE + INT_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE
+        )
+        struct.pack_into("<I", buffer, 0, CQC_CREATE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<i", buffer, offset, batch_size)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, buffer_size)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, delay_seconds)
+        offset += INT_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if populate else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if coalesce else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        if predicate_data is not None:
+            msg.add_frame(Frame(predicate_data))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_create_response(msg: "ClientMessage") -> uuid_module.UUID:
+        """Decode a ContinuousQueryCache.create response.
+
+        Returns:
+            The publisher ID (UUID).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + UUID_SIZE:
+            return uuid_module.UUID(int=0)
+
+        publisher_id, _ = FixSizedTypesCodec.decode_uuid(
+            frame.content, RESPONSE_HEADER_SIZE
+        )
+        return publisher_id if publisher_id else uuid_module.UUID(int=0)
+
+    @staticmethod
+    def encode_set_read_cursor_request(
+        map_name: str,
+        cache_name: str,
+        publisher_id: uuid_module.UUID,
+        sequence: int,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.setReadCursor request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+            publisher_id: The publisher ID.
+            sequence: The sequence number to set as cursor.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CQC_SET_READ_CURSOR)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, publisher_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, sequence)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        return msg
+
+    @staticmethod
+    def decode_set_read_cursor_response(msg: "ClientMessage") -> bool:
+        """Decode a ContinuousQueryCache.setReadCursor response.
+
+        Returns:
+            True if successful.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_add_listener_request(
+        map_name: str,
+        cache_name: str,
+        local_only: bool,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.addListener request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+            local_only: Whether to receive only local events.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, CQC_ADD_LISTENER)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE, 1 if local_only else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        return msg
+
+    @staticmethod
+    def decode_add_listener_response(msg: "ClientMessage") -> Optional[uuid_module.UUID]:
+        """Decode a ContinuousQueryCache.addListener response.
+
+        Returns:
+            The registration UUID.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + UUID_SIZE:
+            return None
+        uuid_val, _ = FixSizedTypesCodec.decode_uuid(frame.content, RESPONSE_HEADER_SIZE)
+        return uuid_val
+
+    @staticmethod
+    def encode_destroy_request(
+        map_name: str,
+        cache_name: str,
+        publisher_id: uuid_module.UUID,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.destroy request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+            publisher_id: The publisher ID.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, CQC_DESTROY)
+        struct.pack_into("<i", buffer, 12, -1)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE, publisher_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        return msg
+
+    @staticmethod
+    def decode_destroy_response(msg: "ClientMessage") -> bool:
+        """Decode a ContinuousQueryCache.destroy response.
+
+        Returns:
+            True if destroyed successfully.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_fetch_request(
+        map_name: str,
+        cache_name: str,
+        publisher_id: uuid_module.UUID,
+        sequence: int,
+        batch_size: int,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.fetch request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+            publisher_id: The publisher ID.
+            sequence: The sequence to start fetching from.
+            batch_size: Maximum number of entries to fetch.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, CQC_FETCH)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, publisher_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, sequence)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, batch_size)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        return msg
+
+    @staticmethod
+    def decode_fetch_response(
+        msg: "ClientMessage",
+    ) -> Tuple[List[Tuple[bytes, bytes]], int]:
+        """Decode a ContinuousQueryCache.fetch response.
+
+        Returns:
+            Tuple of (entries, next_sequence).
+            entries is a list of (key_data, value_data) tuples.
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return [], 0
+
+        next_sequence = 0
+        if len(frame.content) >= RESPONSE_HEADER_SIZE + LONG_SIZE:
+            next_sequence = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+        entries = _decode_entry_list(msg)
+        return entries, next_sequence
+
+    @staticmethod
+    def encode_size_request(
+        map_name: str,
+        cache_name: str,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.size request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CQC_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a ContinuousQueryCache.size response.
+
+        Returns:
+            The size of the cache.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_made_publishable_request(
+        map_name: str,
+        cache_name: str,
+        publisher_id: uuid_module.UUID,
+    ) -> "ClientMessage":
+        """Encode a ContinuousQueryCache.madePublishable request.
+
+        Args:
+            map_name: The name of the underlying map.
+            cache_name: The name of the continuous query cache.
+            publisher_id: The publisher ID.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, CQC_MADE_PUBLISHABLE)
+        struct.pack_into("<i", buffer, 12, -1)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE, publisher_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, map_name)
+        StringCodec.encode(msg, cache_name)
+        return msg
+
+    @staticmethod
+    def decode_made_publishable_response(msg: "ClientMessage") -> bool:
+        """Decode a ContinuousQueryCache.madePublishable response.
+
+        Returns:
+            True if successful.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+
 class ReplicatedMapCodec:
     """Codec for ReplicatedMap protocol messages."""
 
