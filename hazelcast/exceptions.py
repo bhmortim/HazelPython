@@ -57,3 +57,8 @@ class TargetDisconnectedException(HazelcastException):
 class HazelcastSerializationException(HazelcastException):
     """Raised when serialization fails."""
     pass
+
+
+class ClientOfflineException(HazelcastException):
+    """Raised when the client is not connected to the cluster."""
+    pass

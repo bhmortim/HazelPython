@@ -1055,8 +1055,7 @@ class HazelcastClient:
                 invocation_service=self._invocation_service,
                 serialization_service=self._serialization_service,
             )
-            if self.running:
-                self._jet_service.start()
+        return self._jet_service
 =======
         return self._jet_service
 

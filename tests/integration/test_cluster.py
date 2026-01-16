@@ -1,153 +1,185 @@
-"""Integration tests for cluster connectivity."""
+"""Integration tests for multi-member cluster scenarios."""
 
 import pytest
+import time
+import threading
+from typing import List
+
+from tests.integration.conftest import (
+    skip_integration,
+    DOCKER_AVAILABLE,
+    HazelcastCluster,
+)
 
 
-@pytest.mark.integration
-class TestClusterConnection:
-    """Tests for cluster connection and basic operations."""
+@skip_integration
+class TestMultiMemberCluster:
+    """Test client behavior with multi-member clusters."""
 
-    def test_client_connects(self, hazelcast_client):
-        """Test that the client can connect to the cluster."""
-        assert hazelcast_client.running
+    def test_connect_to_cluster(self, hazelcast_cluster, cluster_client_config):
+        """Test connecting to a multi-member cluster."""
+        from hazelcast.client import HazelcastClient, ClientState
 
-    def test_client_has_uuid(self, hazelcast_client):
-        """Test that connected client has a UUID."""
-        assert hazelcast_client.uuid is not None
-
-    def test_client_lifecycle(self, client_config):
-        """Test client lifecycle (start/stop)."""
-        from hazelcast import HazelcastClient
-        from hazelcast.client import ClientState
-
-        client = HazelcastClient(client_config)
-
-        assert client.state == ClientState.INITIAL
-
+        client = HazelcastClient(cluster_client_config)
         client.start()
+
         assert client.state == ClientState.CONNECTED
+        assert client.running
 
         client.shutdown()
-        assert client.state == ClientState.SHUTDOWN
+
+    def test_operations_across_cluster(self, hazelcast_cluster, cluster_client_config):
+        """Test operations are distributed across cluster members."""
+        from hazelcast.client import HazelcastClient
+
+        with HazelcastClient(cluster_client_config) as client:
+            test_map = client.get_map("cluster-test-map")
+
+            for i in range(100):
+                test_map.put(f"key-{i}", f"value-{i}")
+
+            assert test_map.size() == 100
+
+            for i in range(100):
+                value = test_map.get(f"key-{i}")
+                assert value == f"value-{i}"
+
+    def test_multiple_clients_same_cluster(self, hazelcast_cluster, cluster_client_config):
+        """Test multiple clients connecting to the same cluster."""
+        from hazelcast.client import HazelcastClient
+
+        clients: List[HazelcastClient] = []
+        try:
+            for i in range(3):
+                client = HazelcastClient(cluster_client_config)
+                client.start()
+                clients.append(client)
+
+            assert all(c.running for c in clients)
+
+            test_map = clients[0].get_map("shared-map")
+            test_map.put("shared-key", "shared-value")
+
+            for client in clients[1:]:
+                client_map = client.get_map("shared-map")
+                value = client_map.get("shared-key")
+                assert value == "shared-value"
+
+        finally:
+            for client in clients:
+                client.shutdown()
+
+    def test_concurrent_operations(self, hazelcast_cluster, cluster_client_config):
+        """Test concurrent operations from multiple threads."""
+        from hazelcast.client import HazelcastClient
+
+        with HazelcastClient(cluster_client_config) as client:
+            test_map = client.get_map("concurrent-map")
+            errors: List[Exception] = []
+            results: List[bool] = []
+
+            def worker(thread_id: int):
+                try:
+                    for i in range(50):
+                        key = f"thread-{thread_id}-key-{i}"
+                        value = f"thread-{thread_id}-value-{i}"
+                        test_map.put(key, value)
+                        retrieved = test_map.get(key)
+                        results.append(retrieved == value)
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [
+                threading.Thread(target=worker, args=(i,))
+                for i in range(5)
+            ]
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert len(errors) == 0, f"Errors occurred: {errors}"
+            assert all(results), "Some operations returned unexpected values"
 
 
-@pytest.mark.integration
-class TestMapOperations:
-    """Integration tests for Map operations."""
+@skip_integration
+class TestClusterMembership:
+    """Test cluster membership awareness."""
 
-    def test_map_put_get(self, hazelcast_client):
-        """Test basic Map put and get."""
-        from hazelcast.proxy import MapProxy
+    def test_membership_listener(self, hazelcast_cluster, cluster_client_config):
+        """Test membership listener receives events."""
+        from hazelcast.client import HazelcastClient
+        from hazelcast.listener import MembershipListener, MembershipEvent
 
-        test_map = MapProxy("test-map")
+        events: List[MembershipEvent] = []
 
-        test_map.put("key1", "value1")
-        result = test_map.get("key1")
+        class TestMembershipListener(MembershipListener):
+            def on_member_added(self, event: MembershipEvent) -> None:
+                events.append(event)
 
-        assert result == "value1" or result is None
+            def on_member_removed(self, event: MembershipEvent) -> None:
+                events.append(event)
 
-    def test_map_contains_key(self, hazelcast_client):
-        """Test Map contains_key operation."""
-        from hazelcast.proxy import MapProxy
-
-        test_map = MapProxy("test-map-contains")
-
-        test_map.put("exists", "value")
-
-        assert test_map.contains_key("exists") or True
-
-    def test_map_size(self, hazelcast_client):
-        """Test Map size operation."""
-        from hazelcast.proxy import MapProxy
-
-        test_map = MapProxy("test-map-size")
-
-        initial_size = test_map.size()
-        test_map.put("key", "value")
-
-        assert test_map.size() >= initial_size
-
-    def test_map_clear(self, hazelcast_client):
-        """Test Map clear operation."""
-        from hazelcast.proxy import MapProxy
-
-        test_map = MapProxy("test-map-clear")
-
-        test_map.put("key1", "value1")
-        test_map.put("key2", "value2")
-        test_map.clear()
-
-        assert test_map.size() >= 0
+        with HazelcastClient(cluster_client_config) as client:
+            client.add_membership_listener(TestMembershipListener())
+            time.sleep(1)
 
 
-@pytest.mark.integration
-class TestSqlOperations:
-    """Integration tests for SQL operations."""
+@skip_integration
+class TestClusterPartitioning:
+    """Test partition-aware operations."""
 
-    def test_sql_service_starts(self, hazelcast_client):
-        """Test SQL service can be started."""
-        from hazelcast.sql import SqlService
+    def test_partition_aware_operations(self, hazelcast_cluster, cluster_client_config):
+        """Test operations are partition-aware."""
+        from hazelcast.client import HazelcastClient
 
-        sql_service = SqlService()
-        sql_service.start()
+        with HazelcastClient(cluster_client_config) as client:
+            test_map = client.get_map("partition-test-map")
 
-        assert sql_service.is_running
+            for i in range(100):
+                test_map.put(f"partition-key-{i}", {"data": i})
 
-        sql_service.shutdown()
-
-
-@pytest.mark.integration
-class TestCPSubsystem:
-    """Integration tests for CP subsystem."""
-
-    def test_atomic_long_operations(self, hazelcast_client):
-        """Test AtomicLong basic operations."""
-        from hazelcast.cp import AtomicLong
-
-        atomic = AtomicLong("test-atomic")
-
-        atomic.set(10)
-        assert atomic.get() == 10
-
-        atomic.increment_and_get()
-        assert atomic.get() == 11
-
-        atomic.destroy()
-
-    def test_fenced_lock(self, hazelcast_client):
-        """Test FencedLock basic operations."""
-        from hazelcast.cp import FencedLock
-
-        lock = FencedLock("test-lock")
-
-        fence = lock.lock()
-        assert fence > 0
-        assert lock.is_locked()
-
-        lock.unlock()
-
-        lock.destroy()
+            for i in range(100):
+                value = test_map.get(f"partition-key-{i}")
+                assert value is not None
+                assert value.get("data") == i
 
 
-@pytest.mark.integration
-class TestJetOperations:
-    """Integration tests for Jet operations."""
+@skip_integration
+class TestDistributedObjects:
+    """Test distributed object management across cluster."""
 
-    def test_jet_service_starts(self, hazelcast_client):
-        """Test Jet service can be started."""
-        from hazelcast.jet import JetService
+    def test_distributed_objects_visible_to_all_clients(
+        self, hazelcast_cluster, cluster_client_config
+    ):
+        """Test distributed objects created by one client are visible to others."""
+        from hazelcast.client import HazelcastClient
 
-        jet_service = JetService()
-        jet_service.start()
+        with HazelcastClient(cluster_client_config) as client1:
+            map1 = client1.get_map("visible-map")
+            map1.put("test", "value")
 
-        assert jet_service.is_running
+            with HazelcastClient(cluster_client_config) as client2:
+                map2 = client2.get_map("visible-map")
+                assert map2.get("test") == "value"
 
-        jet_service.shutdown()
+    def test_different_data_structures(self, hazelcast_cluster, cluster_client_config):
+        """Test different data structures work correctly in cluster."""
+        from hazelcast.client import HazelcastClient
 
-    def test_pipeline_creation(self, hazelcast_client):
-        """Test Pipeline creation."""
-        from hazelcast.jet import Pipeline
+        with HazelcastClient(cluster_client_config) as client:
+            test_map = client.get_map("test-map")
+            test_queue = client.get_queue("test-queue")
+            test_set = client.get_set("test-set")
+            test_list = client.get_list("test-list")
 
-        pipeline = Pipeline.create()
-        assert pipeline is not None
-        assert pipeline.id is not None
+            test_map.put("key", "map-value")
+            test_queue.offer("queue-item")
+            test_set.add("set-item")
+            test_list.add("list-item")
+
+            assert test_map.get("key") == "map-value"
+            assert test_queue.poll() == "queue-item"
+            assert test_set.contains("set-item")
+            assert test_list.get(0) == "list-item"

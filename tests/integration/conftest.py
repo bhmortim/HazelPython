@@ -1,211 +1,266 @@
-"""Pytest configuration for integration tests."""
+"""Integration test fixtures using testcontainers."""
 
 import os
-import pytest
-import subprocess
 import time
-from typing import Generator, Optional
+import pytest
+from typing import Generator, List, Optional
 
-HAZELCAST_IMAGE = "hazelcast/hazelcast:5.3"
+# Check if testcontainers is available
+try:
+    from testcontainers.core.container import DockerContainer
+    from testcontainers.core.waiting_utils import wait_for_logs
+    TESTCONTAINERS_AVAILABLE = True
+except ImportError:
+    TESTCONTAINERS_AVAILABLE = False
+    DockerContainer = None
+
+# Check if Docker is available
+DOCKER_AVAILABLE = False
+if TESTCONTAINERS_AVAILABLE:
+    try:
+        import docker
+        client = docker.from_env()
+        client.ping()
+        DOCKER_AVAILABLE = True
+    except Exception:
+        pass
+
+# CI environment detection
+CI_ENVIRONMENT = os.environ.get("CI", "false").lower() == "true"
+SKIP_INTEGRATION = os.environ.get("SKIP_INTEGRATION_TESTS", "false").lower() == "true"
+
+# Hazelcast image configuration
+HAZELCAST_IMAGE = os.environ.get("HAZELCAST_IMAGE", "hazelcast/hazelcast:5.3")
 HAZELCAST_PORT = 5701
-CONTAINER_NAME = "hazelcast-test"
 
 
-def pytest_addoption(parser):
-    """Add custom command line options."""
-    parser.addoption(
-        "--integration",
-        action="store_true",
-        default=False,
-        help="Run integration tests (requires Docker)",
-    )
-    parser.addoption(
-        "--hazelcast-host",
-        action="store",
-        default="localhost",
-        help="Hazelcast host for integration tests",
-    )
-    parser.addoption(
-        "--hazelcast-port",
-        action="store",
-        default="5701",
-        help="Hazelcast port for integration tests",
-    )
+def requires_docker(func):
+    """Decorator to skip tests when Docker is not available."""
+    return pytest.mark.skipif(
+        not DOCKER_AVAILABLE,
+        reason="Docker is not available"
+    )(func)
 
 
-def pytest_configure(config):
-    """Configure pytest markers."""
-    config.addinivalue_line(
-        "markers",
-        "integration: mark test as integration test (requires Hazelcast cluster)",
-    )
+def requires_testcontainers(func):
+    """Decorator to skip tests when testcontainers is not installed."""
+    return pytest.mark.skipif(
+        not TESTCONTAINERS_AVAILABLE,
+        reason="testcontainers package is not installed"
+    )(func)
 
 
-def pytest_collection_modifyitems(config, items):
-    """Skip integration tests unless --integration flag is provided."""
-    if config.getoption("--integration"):
-        return
-
-    skip_integration = pytest.mark.skip(
-        reason="Need --integration option to run integration tests"
-    )
-    for item in items:
-        if "integration" in item.keywords:
-            item.add_marker(skip_integration)
+skip_integration = pytest.mark.skipif(
+    SKIP_INTEGRATION or not DOCKER_AVAILABLE,
+    reason="Integration tests disabled or Docker unavailable"
+)
 
 
 class HazelcastContainer:
-    """Manages a Hazelcast Docker container for testing."""
+    """Wrapper for Hazelcast Docker container."""
 
     def __init__(
         self,
         image: str = HAZELCAST_IMAGE,
+        cluster_name: str = "dev",
         port: int = HAZELCAST_PORT,
-        container_name: str = CONTAINER_NAME,
     ):
-        self.image = image
-        self.port = port
-        self.container_name = container_name
-        self._running = False
+        self._image = image
+        self._cluster_name = cluster_name
+        self._port = port
+        self._container: Optional[DockerContainer] = None
+        self._host: Optional[str] = None
+        self._mapped_port: Optional[int] = None
 
-    def start(self, timeout: float = 60.0) -> bool:
-        """Start the Hazelcast container.
+    def start(self) -> "HazelcastContainer":
+        """Start the Hazelcast container."""
+        if not TESTCONTAINERS_AVAILABLE:
+            raise RuntimeError("testcontainers package is not installed")
 
-        Args:
-            timeout: Maximum time to wait for startup.
+        self._container = (
+            DockerContainer(self._image)
+            .with_exposed_ports(self._port)
+            .with_env("HZ_CLUSTERNAME", self._cluster_name)
+            .with_env("JAVA_OPTS", "-Dhazelcast.phone.home.enabled=false")
+        )
+        self._container.start()
 
-        Returns:
-            True if started successfully.
-        """
-        if self._running:
-            return True
+        wait_for_logs(self._container, "is STARTED", timeout=60)
+        time.sleep(2)
 
-        try:
-            subprocess.run(
-                ["docker", "rm", "-f", self.container_name],
-                capture_output=True,
-            )
+        self._host = self._container.get_container_host_ip()
+        self._mapped_port = int(self._container.get_exposed_port(self._port))
 
-            result = subprocess.run(
-                [
-                    "docker", "run", "-d",
-                    "--name", self.container_name,
-                    "-p", f"{self.port}:5701",
-                    "-e", "HZ_CLUSTERNAME=dev",
-                    self.image,
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            if result.returncode != 0:
-                print(f"Failed to start container: {result.stderr}")
-                return False
-
-            if self._wait_for_ready(timeout):
-                self._running = True
-                return True
-
-            return False
-
-        except FileNotFoundError:
-            print("Docker not found. Please install Docker to run integration tests.")
-            return False
+        return self
 
     def stop(self) -> None:
-        """Stop and remove the container."""
-        if not self._running:
-            return
-
-        subprocess.run(
-            ["docker", "rm", "-f", self.container_name],
-            capture_output=True,
-        )
-        self._running = False
-
-    def _wait_for_ready(self, timeout: float) -> bool:
-        """Wait for Hazelcast to be ready."""
-        import socket
-
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1.0)
-                result = sock.connect_ex(("localhost", self.port))
-                sock.close()
-
-                if result == 0:
-                    time.sleep(2.0)
-                    return True
-            except Exception:
-                pass
-
-            time.sleep(1.0)
-
-        return False
+        """Stop the Hazelcast container."""
+        if self._container:
+            self._container.stop()
+            self._container = None
 
     @property
     def host(self) -> str:
         """Get the container host."""
-        return "localhost"
+        return self._host or "localhost"
+
+    @property
+    def port(self) -> int:
+        """Get the mapped port."""
+        return self._mapped_port or self._port
 
     @property
     def address(self) -> str:
         """Get the full address string."""
         return f"{self.host}:{self.port}"
 
+    @property
+    def cluster_name(self) -> str:
+        """Get the cluster name."""
+        return self._cluster_name
+
+    def __enter__(self) -> "HazelcastContainer":
+        return self.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.stop()
+
+
+class HazelcastCluster:
+    """Multi-node Hazelcast cluster for testing."""
+
+    def __init__(
+        self,
+        size: int = 3,
+        image: str = HAZELCAST_IMAGE,
+        cluster_name: str = "test-cluster",
+    ):
+        self._size = size
+        self._image = image
+        self._cluster_name = cluster_name
+        self._containers: List[HazelcastContainer] = []
+        self._network_name: Optional[str] = None
+
+    def start(self) -> "HazelcastCluster":
+        """Start the cluster with multiple nodes."""
+        if not TESTCONTAINERS_AVAILABLE:
+            raise RuntimeError("testcontainers package is not installed")
+
+        for i in range(self._size):
+            container = HazelcastContainer(
+                image=self._image,
+                cluster_name=self._cluster_name,
+                port=HAZELCAST_PORT,
+            )
+            container.start()
+            self._containers.append(container)
+            time.sleep(1)
+
+        time.sleep(3)
+        return self
+
+    def stop(self) -> None:
+        """Stop all cluster nodes."""
+        for container in self._containers:
+            try:
+                container.stop()
+            except Exception:
+                pass
+        self._containers.clear()
+
+    @property
+    def addresses(self) -> List[str]:
+        """Get all cluster member addresses."""
+        return [c.address for c in self._containers]
+
+    @property
+    def cluster_name(self) -> str:
+        """Get the cluster name."""
+        return self._cluster_name
+
+    @property
+    def size(self) -> int:
+        """Get the current cluster size."""
+        return len(self._containers)
+
+    def stop_node(self, index: int) -> None:
+        """Stop a specific node by index."""
+        if 0 <= index < len(self._containers):
+            self._containers[index].stop()
+
+    def __enter__(self) -> "HazelcastCluster":
+        return self.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.stop()
+
 
 @pytest.fixture(scope="session")
-def hazelcast_container(request) -> Generator[Optional[HazelcastContainer], None, None]:
-    """Provide a Hazelcast container for integration tests.
+def hazelcast_container() -> Generator[HazelcastContainer, None, None]:
+    """Session-scoped fixture for a single Hazelcast container."""
+    if not DOCKER_AVAILABLE:
+        pytest.skip("Docker is not available")
 
-    This fixture starts a Hazelcast container at the beginning of
-    the test session and stops it at the end.
-    """
-    if not request.config.getoption("--integration"):
-        yield None
-        return
+    container = HazelcastContainer(cluster_name="integration-test")
+    container.start()
+    yield container
+    container.stop()
 
-    container = HazelcastContainer()
 
-    if container.start():
-        yield container
-        container.stop()
-    else:
-        yield None
+@pytest.fixture(scope="function")
+def hazelcast_container_per_test() -> Generator[HazelcastContainer, None, None]:
+    """Function-scoped fixture for isolated Hazelcast container per test."""
+    if not DOCKER_AVAILABLE:
+        pytest.skip("Docker is not available")
+
+    container = HazelcastContainer(cluster_name="test-isolated")
+    container.start()
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="module")
+def hazelcast_cluster() -> Generator[HazelcastCluster, None, None]:
+    """Module-scoped fixture for a multi-node Hazelcast cluster."""
+    if not DOCKER_AVAILABLE:
+        pytest.skip("Docker is not available")
+
+    cluster = HazelcastCluster(size=3, cluster_name="multi-node-test")
+    cluster.start()
+    yield cluster
+    cluster.stop()
 
 
 @pytest.fixture
-def hazelcast_address(request, hazelcast_container) -> str:
-    """Get the Hazelcast address for tests."""
-    host = request.config.getoption("--hazelcast-host")
-    port = request.config.getoption("--hazelcast-port")
-    return f"{host}:{port}"
-
-
-@pytest.fixture
-def client_config(hazelcast_address):
-    """Provide a configured ClientConfig for tests."""
+def client_config(hazelcast_container: HazelcastContainer):
+    """Create a ClientConfig configured for the test container."""
     from hazelcast.config import ClientConfig
 
     config = ClientConfig()
-    config.cluster_name = "dev"
-    config.cluster_members = [hazelcast_address]
+    config.cluster_name = hazelcast_container.cluster_name
+    config.cluster_members = [hazelcast_container.address]
     config.connection_timeout = 10.0
-
     return config
 
 
 @pytest.fixture
-def hazelcast_client(client_config):
-    """Provide a connected HazelcastClient for tests."""
-    from hazelcast import HazelcastClient
+def cluster_client_config(hazelcast_cluster: HazelcastCluster):
+    """Create a ClientConfig configured for the test cluster."""
+    from hazelcast.config import ClientConfig
+
+    config = ClientConfig()
+    config.cluster_name = hazelcast_cluster.cluster_name
+    config.cluster_members = hazelcast_cluster.addresses
+    config.connection_timeout = 10.0
+    return config
+
+
+@pytest.fixture
+def connected_client(client_config):
+    """Fixture providing a connected HazelcastClient."""
+    from hazelcast.client import HazelcastClient
 
     client = HazelcastClient(client_config)
-
-    try:
-        client.start()
-        yield client
-    finally:
-        client.shutdown()
+    client.start()
+    yield client
+    client.shutdown()
