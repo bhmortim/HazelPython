@@ -21,6 +21,12 @@ from hazelcast.processor import EntryProcessor
 from hazelcast.protocol.codec import MapCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
 from hazelcast.projection import Projection
+from hazelcast.event_journal import (
+    EventJournalReader,
+    EventJournalEvent,
+    EventType,
+    ReadResultSet,
+)
 try:
     from hazelcast.predicate import Predicate
 except ImportError:
@@ -1919,6 +1925,84 @@ class MapProxy(Proxy, Generic[K, V]):
             return MapCodec.decode_remove_interceptor_response(response)
 
         return self._invoke(request, handle_response)
+
+    def get_event_journal_reader(self) -> EventJournalReader[K, V]:
+        """Get an event journal reader for this map.
+
+        Creates and returns a new EventJournalReader that can be used
+        to read events from this map's event journal.
+
+        Returns:
+            A new EventJournalReader instance for this map.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> reader = my_map.get_event_journal_reader()
+            >>> state = reader.subscribe()
+            >>> result = reader.read_many(100)
+        """
+        self._check_not_destroyed()
+        return EventJournalReader[K, V](self)
+
+    def read_from_event_journal(
+        self,
+        start_sequence: int,
+        min_size: int = 1,
+        max_size: int = 100,
+    ) -> ReadResultSet[K, V]:
+        """Read events from the map's event journal.
+
+        Reads a batch of events starting from the given sequence number.
+        This is a convenience method that creates a reader internally.
+
+        Args:
+            start_sequence: The sequence number to start reading from.
+            min_size: Minimum number of events to read.
+            max_size: Maximum number of events to read.
+
+        Returns:
+            A ReadResultSet containing the events read.
+
+        Raises:
+            ValueError: If parameters are invalid.
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> result = my_map.read_from_event_journal(
+            ...     start_sequence=0,
+            ...     max_size=100
+            ... )
+            >>> for event in result:
+            ...     if event.is_added:
+            ...         print(f"Added: {event.key} = {event.new_value}")
+        """
+        return self.read_from_event_journal_async(
+            start_sequence, min_size, max_size
+        ).result()
+
+    def read_from_event_journal_async(
+        self,
+        start_sequence: int,
+        min_size: int = 1,
+        max_size: int = 100,
+    ) -> Future:
+        """Read events from the map's event journal asynchronously.
+
+        Args:
+            start_sequence: The sequence number to start reading from.
+            min_size: Minimum number of events to read.
+            max_size: Maximum number of events to read.
+
+        Returns:
+            A Future that will contain a ReadResultSet.
+        """
+        self._check_not_destroyed()
+        reader = EventJournalReader[K, V](self)
+        return reader.read_from_event_journal_async(
+            start_sequence, min_size, max_size
+        )
 
     def __len__(self) -> int:
         return self.size()

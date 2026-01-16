@@ -1021,6 +1021,82 @@ class ClientUserCodeDeploymentConfig:
         )
 
 
+class EventJournalConfig:
+    """Configuration for event journal.
+
+    Event journals store a history of changes to maps and caches,
+    allowing clients to read past events and track changes over time.
+
+    Attributes:
+        enabled: Whether event journal is enabled.
+        capacity: Maximum number of events to store.
+        time_to_live_seconds: How long events are kept (0 = forever).
+
+    Example:
+        Enable event journal for a map::
+
+            config = EventJournalConfig()
+            config.enabled = True
+            config.capacity = 100000
+            config.time_to_live_seconds = 3600
+    """
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        capacity: int = 10000,
+        time_to_live_seconds: int = 0,
+    ):
+        self._enabled = enabled
+        self._capacity = capacity
+        self._time_to_live_seconds = time_to_live_seconds
+        self._validate()
+
+    def _validate(self) -> None:
+        if self._capacity <= 0:
+            raise ConfigurationException("capacity must be positive")
+        if self._time_to_live_seconds < 0:
+            raise ConfigurationException("time_to_live_seconds cannot be negative")
+
+    @property
+    def enabled(self) -> bool:
+        """Get whether event journal is enabled."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    @property
+    def capacity(self) -> int:
+        """Get the maximum number of events to store."""
+        return self._capacity
+
+    @capacity.setter
+    def capacity(self, value: int) -> None:
+        self._capacity = value
+        self._validate()
+
+    @property
+    def time_to_live_seconds(self) -> int:
+        """Get the time to live for events in seconds."""
+        return self._time_to_live_seconds
+
+    @time_to_live_seconds.setter
+    def time_to_live_seconds(self, value: int) -> None:
+        self._time_to_live_seconds = value
+        self._validate()
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "EventJournalConfig":
+        """Create EventJournalConfig from a dictionary."""
+        return cls(
+            enabled=data.get("enabled", False),
+            capacity=data.get("capacity", 10000),
+            time_to_live_seconds=data.get("time_to_live_seconds", 0),
+        )
+
+
 class NearCacheConfig:
     """Configuration for near cache."""
 
