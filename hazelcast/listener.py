@@ -269,6 +269,208 @@ class FunctionDistributedObjectListener(DistributedObjectListener):
             self._on_destroyed(event)
 
 
+class PartitionLostEvent:
+    """Event fired when a partition loses data."""
+
+    def __init__(
+        self,
+        partition_id: int,
+        lost_backup_count: int,
+        source: Optional[MemberInfo] = None,
+    ):
+        self._partition_id = partition_id
+        self._lost_backup_count = lost_backup_count
+        self._source = source
+
+    @property
+    def partition_id(self) -> int:
+        return self._partition_id
+
+    @property
+    def lost_backup_count(self) -> int:
+        return self._lost_backup_count
+
+    @property
+    def source(self) -> Optional[MemberInfo]:
+        return self._source
+
+    def __str__(self) -> str:
+        return f"PartitionLostEvent(partition_id={self._partition_id}, lost_backup_count={self._lost_backup_count})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+class PartitionLostListener(ABC):
+    """Listener for partition lost events."""
+
+    @abstractmethod
+    def on_partition_lost(self, event: PartitionLostEvent) -> None:
+        """Called when a partition loses data."""
+        pass
+
+
+class FunctionPartitionLostListener(PartitionLostListener):
+    """Partition lost listener that delegates to a function."""
+
+    def __init__(self, callback: Callable[[PartitionLostEvent], None]):
+        self._callback = callback
+
+    def on_partition_lost(self, event: PartitionLostEvent) -> None:
+        self._callback(event)
+
+
+class MigrationState(Enum):
+    """State of a partition migration."""
+
+    STARTED = "STARTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class MigrationEvent:
+    """Event fired during partition migration."""
+
+    def __init__(
+        self,
+        partition_id: int,
+        old_owner: Optional[MemberInfo],
+        new_owner: Optional[MemberInfo],
+        migration_state: MigrationState,
+    ):
+        self._partition_id = partition_id
+        self._old_owner = old_owner
+        self._new_owner = new_owner
+        self._migration_state = migration_state
+
+    @property
+    def partition_id(self) -> int:
+        return self._partition_id
+
+    @property
+    def old_owner(self) -> Optional[MemberInfo]:
+        return self._old_owner
+
+    @property
+    def new_owner(self) -> Optional[MemberInfo]:
+        return self._new_owner
+
+    @property
+    def migration_state(self) -> MigrationState:
+        return self._migration_state
+
+    def __str__(self) -> str:
+        return (
+            f"MigrationEvent(partition_id={self._partition_id}, "
+            f"state={self._migration_state.value}, "
+            f"old_owner={self._old_owner}, new_owner={self._new_owner})"
+        )
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+class MigrationListener(ABC):
+    """Listener for partition migration events."""
+
+    @abstractmethod
+    def on_migration_started(self, event: MigrationEvent) -> None:
+        """Called when a partition migration starts."""
+        pass
+
+    @abstractmethod
+    def on_migration_completed(self, event: MigrationEvent) -> None:
+        """Called when a partition migration completes successfully."""
+        pass
+
+    @abstractmethod
+    def on_migration_failed(self, event: MigrationEvent) -> None:
+        """Called when a partition migration fails."""
+        pass
+
+
+class FunctionMigrationListener(MigrationListener):
+    """Migration listener that delegates to functions."""
+
+    def __init__(
+        self,
+        on_started: Optional[Callable[[MigrationEvent], None]] = None,
+        on_completed: Optional[Callable[[MigrationEvent], None]] = None,
+        on_failed: Optional[Callable[[MigrationEvent], None]] = None,
+    ):
+        self._on_started = on_started
+        self._on_completed = on_completed
+        self._on_failed = on_failed
+
+    def on_migration_started(self, event: MigrationEvent) -> None:
+        if self._on_started:
+            self._on_started(event)
+
+    def on_migration_completed(self, event: MigrationEvent) -> None:
+        if self._on_completed:
+            self._on_completed(event)
+
+    def on_migration_failed(self, event: MigrationEvent) -> None:
+        if self._on_failed:
+            self._on_failed(event)
+
+
+class InitialMembershipEvent:
+    """Event containing the initial set of cluster members."""
+
+    def __init__(self, members: List[MemberInfo]):
+        self._members = list(members)
+
+    @property
+    def members(self) -> List[MemberInfo]:
+        return list(self._members)
+
+    def __str__(self) -> str:
+        return f"InitialMembershipEvent(members={len(self._members)})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+class InitialMembershipListener(MembershipListener):
+    """Membership listener that receives initial members on registration.
+
+    When registered, the init() method is immediately called with the
+    current set of cluster members before any membership events are fired.
+    """
+
+    @abstractmethod
+    def init(self, event: InitialMembershipEvent) -> None:
+        """Called with the initial set of members when listener is registered."""
+        pass
+
+
+class FunctionInitialMembershipListener(InitialMembershipListener):
+    """Initial membership listener that delegates to functions."""
+
+    def __init__(
+        self,
+        on_init: Optional[Callable[[InitialMembershipEvent], None]] = None,
+        on_added: Optional[Callable[[MembershipEvent], None]] = None,
+        on_removed: Optional[Callable[[MembershipEvent], None]] = None,
+    ):
+        self._on_init = on_init
+        self._on_added = on_added
+        self._on_removed = on_removed
+
+    def init(self, event: InitialMembershipEvent) -> None:
+        if self._on_init:
+            self._on_init(event)
+
+    def on_member_added(self, event: MembershipEvent) -> None:
+        if self._on_added:
+            self._on_added(event)
+
+    def on_member_removed(self, event: MembershipEvent) -> None:
+        if self._on_removed:
+            self._on_removed(event)
+
+
 class ListenerRegistration:
     """Holds registration information for a listener."""
 
@@ -301,12 +503,17 @@ class ListenerService:
     LIFECYCLE_LISTENER = "lifecycle"
     MEMBERSHIP_LISTENER = "membership"
     DISTRIBUTED_OBJECT_LISTENER = "distributed_object"
+    PARTITION_LOST_LISTENER = "partition_lost"
+    MIGRATION_LISTENER = "migration"
 
     def __init__(self):
         self._registrations: Dict[str, ListenerRegistration] = {}
         self._lifecycle_listeners: Dict[str, LifecycleListener] = {}
         self._membership_listeners: Dict[str, MembershipListener] = {}
         self._distributed_object_listeners: Dict[str, DistributedObjectListener] = {}
+        self._partition_lost_listeners: Dict[str, PartitionLostListener] = {}
+        self._migration_listeners: Dict[str, MigrationListener] = {}
+        self._current_members: List[MemberInfo] = []
         self._lock = threading.Lock()
 
     def add_lifecycle_listener(
@@ -369,6 +576,82 @@ class ListenerService:
             )
         return registration_id
 
+    def set_current_members(self, members: List[MemberInfo]) -> None:
+        """Set the current cluster members for initial membership listeners."""
+        with self._lock:
+            self._current_members = list(members)
+
+    def add_partition_lost_listener(
+        self,
+        listener: PartitionLostListener,
+    ) -> str:
+        """Register a partition lost listener.
+
+        Args:
+            listener: The listener to register.
+
+        Returns:
+            Registration ID for removing the listener.
+        """
+        registration_id = str(uuid.uuid4())
+        with self._lock:
+            self._partition_lost_listeners[registration_id] = listener
+            self._registrations[registration_id] = ListenerRegistration(
+                registration_id, listener, self.PARTITION_LOST_LISTENER
+            )
+        return registration_id
+
+    def add_migration_listener(
+        self,
+        listener: MigrationListener,
+    ) -> str:
+        """Register a migration listener.
+
+        Args:
+            listener: The listener to register.
+
+        Returns:
+            Registration ID for removing the listener.
+        """
+        registration_id = str(uuid.uuid4())
+        with self._lock:
+            self._migration_listeners[registration_id] = listener
+            self._registrations[registration_id] = ListenerRegistration(
+                registration_id, listener, self.MIGRATION_LISTENER
+            )
+        return registration_id
+
+    def add_initial_membership_listener(
+        self,
+        listener: InitialMembershipListener,
+    ) -> str:
+        """Register an initial membership listener.
+
+        The listener's init() method is called immediately with current members,
+        then on_member_added/on_member_removed are called for future changes.
+
+        Args:
+            listener: The listener to register.
+
+        Returns:
+            Registration ID for removing the listener.
+        """
+        registration_id = str(uuid.uuid4())
+        with self._lock:
+            self._membership_listeners[registration_id] = listener
+            self._registrations[registration_id] = ListenerRegistration(
+                registration_id, listener, self.MEMBERSHIP_LISTENER
+            )
+            current_members = list(self._current_members)
+
+        try:
+            event = InitialMembershipEvent(current_members)
+            listener.init(event)
+        except Exception:
+            pass
+
+        return registration_id
+
     def remove_listener(self, registration_id: str) -> bool:
         """Remove a registered listener.
 
@@ -389,6 +672,10 @@ class ListenerService:
                 self._membership_listeners.pop(registration_id, None)
             elif registration.listener_type == self.DISTRIBUTED_OBJECT_LISTENER:
                 self._distributed_object_listeners.pop(registration_id, None)
+            elif registration.listener_type == self.PARTITION_LOST_LISTENER:
+                self._partition_lost_listeners.pop(registration_id, None)
+            elif registration.listener_type == self.MIGRATION_LISTENER:
+                self._migration_listeners.pop(registration_id, None)
 
             return True
 
@@ -431,6 +718,33 @@ class ListenerService:
             except Exception:
                 pass
 
+    def fire_partition_lost_event(self, event: PartitionLostEvent) -> None:
+        """Fire a partition lost event to all registered listeners."""
+        with self._lock:
+            listeners = list(self._partition_lost_listeners.values())
+
+        for listener in listeners:
+            try:
+                listener.on_partition_lost(event)
+            except Exception:
+                pass
+
+    def fire_migration_event(self, event: MigrationEvent) -> None:
+        """Fire a migration event to all registered listeners."""
+        with self._lock:
+            listeners = list(self._migration_listeners.values())
+
+        for listener in listeners:
+            try:
+                if event.migration_state == MigrationState.STARTED:
+                    listener.on_migration_started(event)
+                elif event.migration_state == MigrationState.COMPLETED:
+                    listener.on_migration_completed(event)
+                elif event.migration_state == MigrationState.FAILED:
+                    listener.on_migration_failed(event)
+            except Exception:
+                pass
+
     def clear(self) -> None:
         """Remove all registered listeners."""
         with self._lock:
@@ -438,3 +752,6 @@ class ListenerService:
             self._lifecycle_listeners.clear()
             self._membership_listeners.clear()
             self._distributed_object_listeners.clear()
+            self._partition_lost_listeners.clear()
+            self._migration_listeners.clear()
+            self._current_members.clear()

@@ -28,6 +28,16 @@ from hazelcast.listener import (
     DistributedObjectEvent,
     DistributedObjectEventType,
     ListenerService,
+    PartitionLostListener,
+    PartitionLostEvent,
+    FunctionPartitionLostListener,
+    MigrationListener,
+    MigrationEvent,
+    FunctionMigrationListener,
+    MigrationState,
+    InitialMembershipListener,
+    InitialMembershipEvent,
+    FunctionInitialMembershipListener,
 )
 from hazelcast.auth import AuthenticationService
 from hazelcast.proxy.base import DistributedObject, Proxy, ProxyContext
@@ -340,6 +350,84 @@ class HazelcastClient:
             Registration ID for removing the listener.
         """
         return self._listener_service.add_distributed_object_listener(listener)
+
+    def add_partition_lost_listener(
+        self,
+        listener: PartitionLostListener = None,
+        on_partition_lost: Callable[[PartitionLostEvent], None] = None,
+    ) -> str:
+        """Add a partition lost listener.
+
+        Args:
+            listener: A PartitionLostListener instance, or
+            on_partition_lost: A callback function for partition lost events.
+
+        Returns:
+            Registration ID for removing the listener.
+        """
+        if listener is None and on_partition_lost is not None:
+            listener = FunctionPartitionLostListener(on_partition_lost)
+        elif listener is None:
+            raise ValueError("Either listener or on_partition_lost must be provided")
+
+        return self._listener_service.add_partition_lost_listener(listener)
+
+    def add_migration_listener(
+        self,
+        listener: MigrationListener = None,
+        on_migration_started: Callable[[MigrationEvent], None] = None,
+        on_migration_completed: Callable[[MigrationEvent], None] = None,
+        on_migration_failed: Callable[[MigrationEvent], None] = None,
+    ) -> str:
+        """Add a migration listener.
+
+        Args:
+            listener: A MigrationListener instance, or
+            on_migration_started: Callback for migration started events.
+            on_migration_completed: Callback for migration completed events.
+            on_migration_failed: Callback for migration failed events.
+
+        Returns:
+            Registration ID for removing the listener.
+        """
+        if listener is None:
+            listener = FunctionMigrationListener(
+                on_started=on_migration_started,
+                on_completed=on_migration_completed,
+                on_failed=on_migration_failed,
+            )
+
+        return self._listener_service.add_migration_listener(listener)
+
+    def add_initial_membership_listener(
+        self,
+        listener: InitialMembershipListener = None,
+        on_init: Callable[[InitialMembershipEvent], None] = None,
+        on_member_added: Callable[[MembershipEvent], None] = None,
+        on_member_removed: Callable[[MembershipEvent], None] = None,
+    ) -> str:
+        """Add an initial membership listener.
+
+        The listener receives the current set of members immediately upon
+        registration, then receives events for subsequent membership changes.
+
+        Args:
+            listener: An InitialMembershipListener instance, or
+            on_init: Callback for initial members (called immediately).
+            on_member_added: Callback for member added events.
+            on_member_removed: Callback for member removed events.
+
+        Returns:
+            Registration ID for removing the listener.
+        """
+        if listener is None:
+            listener = FunctionInitialMembershipListener(
+                on_init=on_init,
+                on_added=on_member_added,
+                on_removed=on_member_removed,
+            )
+
+        return self._listener_service.add_initial_membership_listener(listener)
 
     def remove_listener(self, registration_id: str) -> bool:
         """Remove a registered listener.

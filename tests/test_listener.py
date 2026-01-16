@@ -18,7 +18,22 @@ from hazelcast.listener import (
     FunctionDistributedObjectListener,
     ListenerRegistration,
     ListenerService,
+    PartitionLostEvent,
+    PartitionLostListener,
+    FunctionPartitionLostListener,
+    MigrationState,
+    MigrationEvent,
+    MigrationListener,
+    FunctionMigrationListener,
+    InitialMembershipEvent,
+    InitialMembershipListener,
+    FunctionInitialMembershipListener,
 )
+
+
+@pytest.fixture
+def listener_service():
+    return ListenerService()
 
 
 class TestLifecycleState:
@@ -358,3 +373,327 @@ class TestListenerService:
         listener_service.add_lifecycle_listener(listener)
         event = LifecycleEvent(LifecycleState.CONNECTED)
         listener_service.fire_lifecycle_event(event)
+
+
+class TestPartitionLostEvent:
+    """Tests for PartitionLostEvent class."""
+
+    def test_init(self):
+        event = PartitionLostEvent(partition_id=5, lost_backup_count=2)
+        assert event.partition_id == 5
+        assert event.lost_backup_count == 2
+        assert event.source is None
+
+    def test_with_source(self):
+        member = MemberInfo("uuid-1", "addr1")
+        event = PartitionLostEvent(partition_id=10, lost_backup_count=1, source=member)
+        assert event.partition_id == 10
+        assert event.source is member
+
+    def test_str(self):
+        event = PartitionLostEvent(partition_id=5, lost_backup_count=2)
+        s = str(event)
+        assert "5" in s
+        assert "2" in s
+
+    def test_repr(self):
+        event = PartitionLostEvent(partition_id=5, lost_backup_count=2)
+        assert repr(event) == str(event)
+
+
+class TestFunctionPartitionLostListener:
+    """Tests for FunctionPartitionLostListener."""
+
+    def test_callback_called(self):
+        events = []
+        listener = FunctionPartitionLostListener(lambda e: events.append(e))
+        event = PartitionLostEvent(partition_id=5, lost_backup_count=2)
+        listener.on_partition_lost(event)
+        assert len(events) == 1
+        assert events[0] is event
+
+
+class TestMigrationState:
+    """Tests for MigrationState enum."""
+
+    def test_values(self):
+        assert MigrationState.STARTED.value == "STARTED"
+        assert MigrationState.COMPLETED.value == "COMPLETED"
+        assert MigrationState.FAILED.value == "FAILED"
+
+
+class TestMigrationEvent:
+    """Tests for MigrationEvent class."""
+
+    def test_init(self):
+        old_owner = MemberInfo("uuid-1", "addr1")
+        new_owner = MemberInfo("uuid-2", "addr2")
+        event = MigrationEvent(
+            partition_id=5,
+            old_owner=old_owner,
+            new_owner=new_owner,
+            migration_state=MigrationState.STARTED,
+        )
+        assert event.partition_id == 5
+        assert event.old_owner is old_owner
+        assert event.new_owner is new_owner
+        assert event.migration_state == MigrationState.STARTED
+
+    def test_with_none_owners(self):
+        event = MigrationEvent(
+            partition_id=10,
+            old_owner=None,
+            new_owner=None,
+            migration_state=MigrationState.COMPLETED,
+        )
+        assert event.old_owner is None
+        assert event.new_owner is None
+
+    def test_str(self):
+        event = MigrationEvent(
+            partition_id=5,
+            old_owner=None,
+            new_owner=None,
+            migration_state=MigrationState.FAILED,
+        )
+        s = str(event)
+        assert "5" in s
+        assert "FAILED" in s
+
+    def test_repr(self):
+        event = MigrationEvent(
+            partition_id=5,
+            old_owner=None,
+            new_owner=None,
+            migration_state=MigrationState.STARTED,
+        )
+        assert repr(event) == str(event)
+
+
+class TestFunctionMigrationListener:
+    """Tests for FunctionMigrationListener."""
+
+    def test_on_started(self):
+        events = []
+        listener = FunctionMigrationListener(on_started=lambda e: events.append(("started", e)))
+        event = MigrationEvent(5, None, None, MigrationState.STARTED)
+        listener.on_migration_started(event)
+        assert len(events) == 1
+        assert events[0][0] == "started"
+
+    def test_on_completed(self):
+        events = []
+        listener = FunctionMigrationListener(on_completed=lambda e: events.append(("completed", e)))
+        event = MigrationEvent(5, None, None, MigrationState.COMPLETED)
+        listener.on_migration_completed(event)
+        assert len(events) == 1
+        assert events[0][0] == "completed"
+
+    def test_on_failed(self):
+        events = []
+        listener = FunctionMigrationListener(on_failed=lambda e: events.append(("failed", e)))
+        event = MigrationEvent(5, None, None, MigrationState.FAILED)
+        listener.on_migration_failed(event)
+        assert len(events) == 1
+        assert events[0][0] == "failed"
+
+    def test_none_callbacks(self):
+        listener = FunctionMigrationListener()
+        event = MigrationEvent(5, None, None, MigrationState.STARTED)
+        listener.on_migration_started(event)
+        listener.on_migration_completed(event)
+        listener.on_migration_failed(event)
+
+
+class TestInitialMembershipEvent:
+    """Tests for InitialMembershipEvent class."""
+
+    def test_init(self):
+        members = [MemberInfo("uuid-1", "addr1"), MemberInfo("uuid-2", "addr2")]
+        event = InitialMembershipEvent(members)
+        assert len(event.members) == 2
+
+    def test_members_copy(self):
+        members = [MemberInfo("uuid-1", "addr1")]
+        event = InitialMembershipEvent(members)
+        returned = event.members
+        returned.append(MemberInfo("uuid-2", "addr2"))
+        assert len(event.members) == 1
+
+    def test_str(self):
+        members = [MemberInfo("uuid-1", "addr1"), MemberInfo("uuid-2", "addr2")]
+        event = InitialMembershipEvent(members)
+        s = str(event)
+        assert "2" in s
+
+    def test_repr(self):
+        event = InitialMembershipEvent([])
+        assert repr(event) == str(event)
+
+
+class TestFunctionInitialMembershipListener:
+    """Tests for FunctionInitialMembershipListener."""
+
+    def test_on_init(self):
+        events = []
+        listener = FunctionInitialMembershipListener(on_init=lambda e: events.append(e))
+        event = InitialMembershipEvent([MemberInfo("uuid-1", "addr1")])
+        listener.init(event)
+        assert len(events) == 1
+        assert len(events[0].members) == 1
+
+    def test_on_added(self):
+        events = []
+        listener = FunctionInitialMembershipListener(on_added=lambda e: events.append(e))
+        member = MemberInfo("uuid-1", "addr1")
+        event = MembershipEvent(MembershipEventType.MEMBER_ADDED, member, [member])
+        listener.on_member_added(event)
+        assert len(events) == 1
+
+    def test_on_removed(self):
+        events = []
+        listener = FunctionInitialMembershipListener(on_removed=lambda e: events.append(e))
+        member = MemberInfo("uuid-1", "addr1")
+        event = MembershipEvent(MembershipEventType.MEMBER_REMOVED, member, [])
+        listener.on_member_removed(event)
+        assert len(events) == 1
+
+    def test_none_callbacks(self):
+        listener = FunctionInitialMembershipListener()
+        listener.init(InitialMembershipEvent([]))
+        member = MemberInfo("uuid-1", "addr1")
+        listener.on_member_added(MembershipEvent(MembershipEventType.MEMBER_ADDED, member, [member]))
+        listener.on_member_removed(MembershipEvent(MembershipEventType.MEMBER_REMOVED, member, []))
+
+
+class TestListenerServicePartitionLost:
+    """Tests for ListenerService partition lost listener support."""
+
+    def test_add_partition_lost_listener(self, listener_service):
+        events = []
+        listener = FunctionPartitionLostListener(lambda e: events.append(e))
+        reg_id = listener_service.add_partition_lost_listener(listener)
+        assert reg_id is not None
+        assert len(reg_id) > 0
+
+    def test_fire_partition_lost_event(self, listener_service):
+        events = []
+        listener = FunctionPartitionLostListener(lambda e: events.append(e))
+        listener_service.add_partition_lost_listener(listener)
+        event = PartitionLostEvent(partition_id=5, lost_backup_count=2)
+        listener_service.fire_partition_lost_event(event)
+        assert len(events) == 1
+        assert events[0].partition_id == 5
+
+    def test_remove_partition_lost_listener(self, listener_service):
+        listener = FunctionPartitionLostListener(lambda e: None)
+        reg_id = listener_service.add_partition_lost_listener(listener)
+        assert listener_service.remove_listener(reg_id) is True
+        assert listener_service.remove_listener(reg_id) is False
+
+
+class TestListenerServiceMigration:
+    """Tests for ListenerService migration listener support."""
+
+    def test_add_migration_listener(self, listener_service):
+        listener = FunctionMigrationListener()
+        reg_id = listener_service.add_migration_listener(listener)
+        assert reg_id is not None
+
+    def test_fire_migration_started(self, listener_service):
+        events = []
+        listener = FunctionMigrationListener(on_started=lambda e: events.append(e))
+        listener_service.add_migration_listener(listener)
+        event = MigrationEvent(5, None, None, MigrationState.STARTED)
+        listener_service.fire_migration_event(event)
+        assert len(events) == 1
+
+    def test_fire_migration_completed(self, listener_service):
+        events = []
+        listener = FunctionMigrationListener(on_completed=lambda e: events.append(e))
+        listener_service.add_migration_listener(listener)
+        event = MigrationEvent(5, None, None, MigrationState.COMPLETED)
+        listener_service.fire_migration_event(event)
+        assert len(events) == 1
+
+    def test_fire_migration_failed(self, listener_service):
+        events = []
+        listener = FunctionMigrationListener(on_failed=lambda e: events.append(e))
+        listener_service.add_migration_listener(listener)
+        event = MigrationEvent(5, None, None, MigrationState.FAILED)
+        listener_service.fire_migration_event(event)
+        assert len(events) == 1
+
+    def test_remove_migration_listener(self, listener_service):
+        listener = FunctionMigrationListener()
+        reg_id = listener_service.add_migration_listener(listener)
+        assert listener_service.remove_listener(reg_id) is True
+        assert listener_service.remove_listener(reg_id) is False
+
+
+class TestListenerServiceInitialMembership:
+    """Tests for ListenerService initial membership listener support."""
+
+    def test_add_initial_membership_listener(self, listener_service):
+        init_events = []
+        listener = FunctionInitialMembershipListener(on_init=lambda e: init_events.append(e))
+        reg_id = listener_service.add_initial_membership_listener(listener)
+        assert reg_id is not None
+        assert len(init_events) == 1
+        assert len(init_events[0].members) == 0
+
+    def test_add_initial_membership_listener_with_current_members(self, listener_service):
+        members = [MemberInfo("uuid-1", "addr1"), MemberInfo("uuid-2", "addr2")]
+        listener_service.set_current_members(members)
+
+        init_events = []
+        listener = FunctionInitialMembershipListener(on_init=lambda e: init_events.append(e))
+        listener_service.add_initial_membership_listener(listener)
+
+        assert len(init_events) == 1
+        assert len(init_events[0].members) == 2
+
+    def test_initial_membership_listener_receives_membership_events(self, listener_service):
+        added_events = []
+        removed_events = []
+        listener = FunctionInitialMembershipListener(
+            on_added=lambda e: added_events.append(e),
+            on_removed=lambda e: removed_events.append(e),
+        )
+        listener_service.add_initial_membership_listener(listener)
+
+        member = MemberInfo("uuid-1", "addr1")
+        add_event = MembershipEvent(MembershipEventType.MEMBER_ADDED, member, [member])
+        listener_service.fire_membership_event(add_event)
+        assert len(added_events) == 1
+
+        remove_event = MembershipEvent(MembershipEventType.MEMBER_REMOVED, member, [])
+        listener_service.fire_membership_event(remove_event)
+        assert len(removed_events) == 1
+
+    def test_set_current_members(self, listener_service):
+        members = [MemberInfo("uuid-1", "addr1")]
+        listener_service.set_current_members(members)
+
+        init_events = []
+        listener = FunctionInitialMembershipListener(on_init=lambda e: init_events.append(e))
+        listener_service.add_initial_membership_listener(listener)
+
+        assert len(init_events[0].members) == 1
+        assert init_events[0].members[0].uuid == "uuid-1"
+
+
+class TestListenerServiceClearWithNewListeners:
+    """Tests for ListenerService clear including new listener types."""
+
+    def test_clear_removes_partition_lost_listeners(self, listener_service):
+        listener = FunctionPartitionLostListener(lambda e: None)
+        reg_id = listener_service.add_partition_lost_listener(listener)
+        listener_service.clear()
+        assert listener_service.remove_listener(reg_id) is False
+
+    def test_clear_removes_migration_listeners(self, listener_service):
+        listener = FunctionMigrationListener()
+        reg_id = listener_service.add_migration_listener(listener)
+        listener_service.clear()
+        assert listener_service.remove_listener(reg_id) is False
