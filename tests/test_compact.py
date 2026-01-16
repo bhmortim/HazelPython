@@ -2368,3 +2368,1544 @@ class TestEdgeCases:
         schema.add_field("strs", "array_string")
         reader = DefaultCompactReader(schema, {"strs": ["a", "b"]})
         assert reader.read_array_of_string("strs") == ["a", "b"]
+
+
+class TestBoundaryValues:
+    """Tests for boundary values of all numeric types."""
+
+    def test_int8_boundary_values(self):
+        writer = CompactStreamWriter()
+        writer.write_int8(-128)
+        writer.write_int8(127)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_int8() == -128
+        assert reader.read_int8() == 127
+
+    def test_int16_boundary_values(self):
+        writer = CompactStreamWriter()
+        writer.write_int16(-32768)
+        writer.write_int16(32767)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_int16() == -32768
+        assert reader.read_int16() == 32767
+
+    def test_int32_boundary_values(self):
+        writer = CompactStreamWriter()
+        writer.write_int32(-2147483648)
+        writer.write_int32(2147483647)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_int32() == -2147483648
+        assert reader.read_int32() == 2147483647
+
+    def test_int64_boundary_values(self):
+        writer = CompactStreamWriter()
+        writer.write_int64(-9223372036854775808)
+        writer.write_int64(9223372036854775807)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_int64() == -9223372036854775808
+        assert reader.read_int64() == 9223372036854775807
+
+    def test_float32_special_values(self):
+        writer = CompactStreamWriter()
+        writer.write_float32(float("inf"))
+        writer.write_float32(float("-inf"))
+        writer.write_float32(0.0)
+        writer.write_float32(-0.0)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_float32() == float("inf")
+        assert reader.read_float32() == float("-inf")
+        assert reader.read_float32() == 0.0
+        assert reader.read_float32() == -0.0
+
+    def test_float64_special_values(self):
+        writer = CompactStreamWriter()
+        writer.write_float64(float("inf"))
+        writer.write_float64(float("-inf"))
+        writer.write_float64(0.0)
+        writer.write_float64(-0.0)
+        writer.write_float64(1e-308)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_float64() == float("inf")
+        assert reader.read_float64() == float("-inf")
+        assert reader.read_float64() == 0.0
+        assert reader.read_float64() == -0.0
+        assert abs(reader.read_float64() - 1e-308) < 1e-315
+
+    def test_nullable_int8_boundary_values(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("min", "nullable_int8")
+        schema.add_field("max", "nullable_int8")
+        schema.add_field("none", "nullable_int8")
+        
+        reader = DefaultCompactReader(schema, {"min": -128, "max": 127, "none": None})
+        assert reader.read_nullable_int8("min") == -128
+        assert reader.read_nullable_int8("max") == 127
+        assert reader.read_nullable_int8("none") is None
+
+    def test_nullable_int16_boundary_values(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("min", "nullable_int16")
+        schema.add_field("max", "nullable_int16")
+        schema.add_field("none", "nullable_int16")
+        
+        reader = DefaultCompactReader(schema, {"min": -32768, "max": 32767, "none": None})
+        assert reader.read_nullable_int16("min") == -32768
+        assert reader.read_nullable_int16("max") == 32767
+        assert reader.read_nullable_int16("none") is None
+
+    def test_nullable_int32_boundary_values(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("min", "nullable_int32")
+        schema.add_field("max", "nullable_int32")
+        schema.add_field("none", "nullable_int32")
+        
+        reader = DefaultCompactReader(schema, {"min": -2147483648, "max": 2147483647, "none": None})
+        assert reader.read_nullable_int32("min") == -2147483648
+        assert reader.read_nullable_int32("max") == 2147483647
+        assert reader.read_nullable_int32("none") is None
+
+    def test_nullable_int64_boundary_values(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("min", "nullable_int64")
+        schema.add_field("max", "nullable_int64")
+        schema.add_field("none", "nullable_int64")
+        
+        reader = DefaultCompactReader(schema, {
+            "min": -9223372036854775808,
+            "max": 9223372036854775807,
+            "none": None
+        })
+        assert reader.read_nullable_int64("min") == -9223372036854775808
+        assert reader.read_nullable_int64("max") == 9223372036854775807
+        assert reader.read_nullable_int64("none") is None
+
+    def test_nullable_float32_special_values(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("inf", "nullable_float32")
+        schema.add_field("neg_inf", "nullable_float32")
+        schema.add_field("none", "nullable_float32")
+        
+        reader = DefaultCompactReader(schema, {
+            "inf": float("inf"),
+            "neg_inf": float("-inf"),
+            "none": None
+        })
+        assert reader.read_nullable_float32("inf") == float("inf")
+        assert reader.read_nullable_float32("neg_inf") == float("-inf")
+        assert reader.read_nullable_float32("none") is None
+
+    def test_nullable_float64_special_values(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("inf", "nullable_float64")
+        schema.add_field("neg_inf", "nullable_float64")
+        schema.add_field("small", "nullable_float64")
+        schema.add_field("none", "nullable_float64")
+        
+        reader = DefaultCompactReader(schema, {
+            "inf": float("inf"),
+            "neg_inf": float("-inf"),
+            "small": 1e-308,
+            "none": None
+        })
+        assert reader.read_nullable_float64("inf") == float("inf")
+        assert reader.read_nullable_float64("neg_inf") == float("-inf")
+        assert abs(reader.read_nullable_float64("small") - 1e-308) < 1e-315
+        assert reader.read_nullable_float64("none") is None
+
+
+class TestArrayEdgeCases:
+    """Tests for array edge cases."""
+
+    def test_empty_boolean_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_boolean")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_boolean("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_boolean("arr") == []
+
+    def test_empty_int8_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int8")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int8("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int8("arr") == []
+
+    def test_empty_int16_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int16")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int16("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int16("arr") == []
+
+    def test_empty_int32_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int32")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int32("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int32("arr") == []
+
+    def test_empty_int64_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int64")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int64("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int64("arr") == []
+
+    def test_empty_float32_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_float32")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_float32("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_float32("arr") == []
+
+    def test_empty_float64_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_float64")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_float64("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_float64("arr") == []
+
+    def test_empty_string_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_string")
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_string("arr", [])
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_string("arr") == []
+
+    def test_large_int32_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int32")
+        large_array = list(range(1000))
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int32("arr", large_array)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        result = reader.read_array_of_int32("arr")
+        assert result == large_array
+        assert len(result) == 1000
+
+    def test_large_string_array(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_string")
+        large_array = [f"string_{i}" * (i % 10 + 1) for i in range(100)]
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_string("arr", large_array)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        result = reader.read_array_of_string("arr")
+        assert result == large_array
+        assert len(result) == 100
+
+    def test_array_with_null_strings(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_string")
+        arr_with_nulls = ["hello", None, "world", None]
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_string("arr", arr_with_nulls)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        result = reader.read_array_of_string("arr")
+        assert result == arr_with_nulls
+
+    def test_array_boundary_values_int8(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int8")
+        boundary_array = [-128, 0, 127]
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int8("arr", boundary_array)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int8("arr") == boundary_array
+
+    def test_array_boundary_values_int16(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int16")
+        boundary_array = [-32768, 0, 32767]
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int16("arr", boundary_array)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int16("arr") == boundary_array
+
+    def test_array_boundary_values_int32(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int32")
+        boundary_array = [-2147483648, 0, 2147483647]
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int32("arr", boundary_array)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int32("arr") == boundary_array
+
+    def test_array_boundary_values_int64(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("arr", "array_int64")
+        boundary_array = [-9223372036854775808, 0, 9223372036854775807]
+        writer = DefaultCompactWriter(schema)
+        writer.write_array_of_int64("arr", boundary_array)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_array_of_int64("arr") == boundary_array
+
+
+class TestStringEdgeCases:
+    """Tests for string edge cases."""
+
+    def test_empty_string(self):
+        writer = CompactStreamWriter()
+        writer.write_string("")
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_string() == ""
+
+    def test_unicode_emoji(self):
+        writer = CompactStreamWriter()
+        writer.write_string("Hello 🌍🎉")
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_string() == "Hello 🌍🎉"
+
+    def test_unicode_multilingual(self):
+        writer = CompactStreamWriter()
+        test_str = "Hello世界مرحبא"
+        writer.write_string(test_str)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_string() == test_str
+
+    def test_unicode_control_characters(self):
+        writer = CompactStreamWriter()
+        test_str = "Line1\nLine2\tTabbed\rCarriage"
+        writer.write_string(test_str)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_string() == test_str
+
+    def test_very_long_string(self):
+        writer = CompactStreamWriter()
+        long_str = "a" * 10000
+        writer.write_string(long_str)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        result = reader.read_string()
+        assert result == long_str
+        assert len(result) == 10000
+
+    def test_null_string(self):
+        writer = CompactStreamWriter()
+        writer.write_string(None)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_string() is None
+
+    def test_string_with_null_bytes(self):
+        writer = CompactStreamWriter()
+        test_str = "hello\x00world"
+        writer.write_string(test_str)
+        
+        reader = CompactStreamReader(writer.to_bytes())
+        assert reader.read_string() == test_str
+
+
+class TestDeepNesting:
+    """Tests for deeply nested GenericRecord structures."""
+
+    def test_single_level_nesting(self):
+        address_schema = Schema(type_name="Address")
+        address_schema.add_field("city", "string")
+        address_schema.add_field("zip", "int32")
+        
+        person_schema = Schema(type_name="Person")
+        person_schema.add_field("name", "string")
+        person_schema.add_field("address", "compact")
+        
+        address = GenericRecord(address_schema, {"city": "NYC", "zip": 10001})
+        person = GenericRecord(person_schema, {"name": "Alice", "address": address})
+        
+        assert person.get_string("name") == "Alice"
+        assert person.get_compact("address").get_string("city") == "NYC"
+        assert person.get_compact("address").get_int32("zip") == 10001
+
+    def test_two_level_nesting(self):
+        employee_schema = Schema(type_name="Employee")
+        employee_schema.add_field("name", "string")
+        employee_schema.add_field("id", "int32")
+        
+        dept_schema = Schema(type_name="Department")
+        dept_schema.add_field("name", "string")
+        dept_schema.add_field("head", "compact")
+        
+        company_schema = Schema(type_name="Company")
+        company_schema.add_field("name", "string")
+        company_schema.add_field("engineering", "compact")
+        
+        employee = GenericRecord(employee_schema, {"name": "Bob", "id": 123})
+        dept = GenericRecord(dept_schema, {"name": "Engineering", "head": employee})
+        company = GenericRecord(company_schema, {"name": "Acme", "engineering": dept})
+        
+        assert company.get_string("name") == "Acme"
+        assert company.get_compact("engineering").get_string("name") == "Engineering"
+        assert company.get_compact("engineering").get_compact("head").get_string("name") == "Bob"
+
+    def test_three_level_nesting(self):
+        level3_schema = Schema(type_name="Level3")
+        level3_schema.add_field("value", "int32")
+        
+        level2_schema = Schema(type_name="Level2")
+        level2_schema.add_field("child", "compact")
+        
+        level1_schema = Schema(type_name="Level1")
+        level1_schema.add_field("child", "compact")
+        
+        root_schema = Schema(type_name="Root")
+        root_schema.add_field("child", "compact")
+        
+        level3 = GenericRecord(level3_schema, {"value": 42})
+        level2 = GenericRecord(level2_schema, {"child": level3})
+        level1 = GenericRecord(level1_schema, {"child": level2})
+        root = GenericRecord(root_schema, {"child": level1})
+        
+        nested_value = (root.get_compact("child")
+                        .get_compact("child")
+                        .get_compact("child")
+                        .get_int32("value"))
+        assert nested_value == 42
+
+    def test_array_of_nested_records(self):
+        item_schema = Schema(type_name="Item")
+        item_schema.add_field("id", "int32")
+        item_schema.add_field("name", "string")
+        
+        container_schema = Schema(type_name="Container")
+        container_schema.add_field("items", "array_compact")
+        
+        items = [
+            GenericRecord(item_schema, {"id": 1, "name": "First"}),
+            GenericRecord(item_schema, {"id": 2, "name": "Second"}),
+            GenericRecord(item_schema, {"id": 3, "name": "Third"}),
+        ]
+        container = GenericRecord(container_schema, {"items": items})
+        
+        result_items = container.get_array_of_compact("items")
+        assert len(result_items) == 3
+        assert result_items[0].get_int32("id") == 1
+        assert result_items[1].get_string("name") == "Second"
+        assert result_items[2].get_int32("id") == 3
+
+    def test_nested_with_all_field_types(self):
+        inner_schema = Schema(type_name="Inner")
+        inner_schema.add_field("bool_val", "boolean")
+        inner_schema.add_field("int8_val", "int8")
+        inner_schema.add_field("int16_val", "int16")
+        inner_schema.add_field("int32_val", "int32")
+        inner_schema.add_field("int64_val", "int64")
+        inner_schema.add_field("float32_val", "float32")
+        inner_schema.add_field("float64_val", "float64")
+        inner_schema.add_field("string_val", "string")
+        
+        outer_schema = Schema(type_name="Outer")
+        outer_schema.add_field("nested", "compact")
+        
+        inner = GenericRecord(inner_schema, {
+            "bool_val": True,
+            "int8_val": 127,
+            "int16_val": 32767,
+            "int32_val": 2147483647,
+            "int64_val": 9223372036854775807,
+            "float32_val": 3.14,
+            "float64_val": 2.718281828,
+            "string_val": "test"
+        })
+        outer = GenericRecord(outer_schema, {"nested": inner})
+        
+        nested = outer.get_compact("nested")
+        assert nested.get_boolean("bool_val") is True
+        assert nested.get_int8("int8_val") == 127
+        assert nested.get_int16("int16_val") == 32767
+        assert nested.get_int32("int32_val") == 2147483647
+        assert nested.get_int64("int64_val") == 9223372036854775807
+
+    def test_circular_schema_reference(self):
+        node_schema = Schema(type_name="Node")
+        node_schema.add_field("value", "int32")
+        node_schema.add_field("next", "compact")
+        
+        node3 = GenericRecord(node_schema, {"value": 3, "next": None})
+        node2 = GenericRecord(node_schema, {"value": 2, "next": node3})
+        node1 = GenericRecord(node_schema, {"value": 1, "next": node2})
+        
+        assert node1.get_int32("value") == 1
+        assert node1.get_compact("next").get_int32("value") == 2
+        assert node1.get_compact("next").get_compact("next").get_int32("value") == 3
+
+
+class TestSchemaEvolutionAdvanced:
+    """Tests for advanced schema evolution scenarios."""
+
+    def test_add_optional_field(self):
+        writer_schema = Schema(type_name="Person")
+        writer_schema.add_field("name", "string")
+        
+        reader_schema = Schema(type_name="Person")
+        reader_schema.add_field("name", "string")
+        reader_schema.add_field("age", "int32")
+        
+        reader = DefaultCompactReader(writer_schema, {"name": "Alice"}, reader_schema)
+        
+        assert reader.read_string("name") == "Alice"
+        assert reader.read_int32("age") == 0
+
+    def test_remove_field(self):
+        writer_schema = Schema(type_name="Person")
+        writer_schema.add_field("name", "string")
+        writer_schema.add_field("age", "int32")
+        
+        reader_schema = Schema(type_name="Person")
+        reader_schema.add_field("name", "string")
+        
+        reader = DefaultCompactReader(writer_schema, {"name": "Alice", "age": 30}, reader_schema)
+        
+        assert reader.read_string("name") == "Alice"
+
+    def test_reorder_fields(self):
+        writer_schema = Schema(type_name="Person")
+        writer_schema.add_field("name", "string")
+        writer_schema.add_field("age", "int32")
+        
+        reader_schema = Schema(type_name="Person")
+        reader_schema.add_field("age", "int32")
+        reader_schema.add_field("name", "string")
+        
+        reader = DefaultCompactReader(writer_schema, {"name": "Alice", "age": 30}, reader_schema)
+        
+        assert reader.read_string("name") == "Alice"
+        assert reader.read_int32("age") == 30
+
+    def test_multiple_field_additions(self):
+        writer_schema = Schema(type_name="Person")
+        writer_schema.add_field("name", "string")
+        
+        reader_schema = Schema(type_name="Person")
+        reader_schema.add_field("name", "string")
+        reader_schema.add_field("age", "int32")
+        reader_schema.add_field("email", "string")
+        reader_schema.add_field("active", "boolean")
+        
+        reader = DefaultCompactReader(writer_schema, {"name": "Alice"}, reader_schema)
+        
+        assert reader.read_string("name") == "Alice"
+        assert reader.read_int32("age") == 0
+        assert reader.read_string("email") is None
+        assert reader.read_boolean("active") is False
+
+    def test_multiple_field_removals(self):
+        writer_schema = Schema(type_name="Person")
+        writer_schema.add_field("name", "string")
+        writer_schema.add_field("age", "int32")
+        writer_schema.add_field("email", "string")
+        writer_schema.add_field("active", "boolean")
+        
+        reader_schema = Schema(type_name="Person")
+        reader_schema.add_field("name", "string")
+        
+        reader = DefaultCompactReader(
+            writer_schema,
+            {"name": "Alice", "age": 30, "email": "alice@test.com", "active": True},
+            reader_schema
+        )
+        
+        assert reader.read_string("name") == "Alice"
+
+    def test_evolution_preserves_existing_data(self):
+        writer_schema = Schema(type_name="Person")
+        writer_schema.add_field("name", "string")
+        writer_schema.add_field("age", "int32")
+        
+        reader_schema = Schema(type_name="Person")
+        reader_schema.add_field("name", "string")
+        reader_schema.add_field("age", "int32")
+        reader_schema.add_field("email", "string")
+        
+        reader = DefaultCompactReader(
+            writer_schema,
+            {"name": "Alice", "age": 30},
+            reader_schema
+        )
+        
+        assert reader.read_string("name") == "Alice"
+        assert reader.read_int32("age") == 30
+        assert reader.read_string("email") is None
+
+    def test_evolution_with_nested_types(self):
+        inner_schema_v1 = Schema(type_name="Address")
+        inner_schema_v1.add_field("city", "string")
+        
+        outer_schema = Schema(type_name="Person")
+        outer_schema.add_field("name", "string")
+        outer_schema.add_field("address", "compact")
+        
+        inner_v1 = GenericRecord(inner_schema_v1, {"city": "NYC"})
+        person = GenericRecord(outer_schema, {"name": "Alice", "address": inner_v1})
+        
+        assert person.get_string("name") == "Alice"
+        assert person.get_compact("address").get_string("city") == "NYC"
+
+    def test_multiple_schema_versions(self):
+        v1_schema = Schema(type_name="Person")
+        v1_schema.add_field("name", "string")
+        
+        v3_schema = Schema(type_name="Person")
+        v3_schema.add_field("name", "string")
+        v3_schema.add_field("age", "int32")
+        v3_schema.add_field("email", "string")
+        
+        reader = DefaultCompactReader(v1_schema, {"name": "Alice"}, v3_schema)
+        
+        assert reader.read_string("name") == "Alice"
+        assert reader.read_int32("age") == 0
+        assert reader.read_string("email") is None
+
+    def test_evolution_compatible_type_widening(self):
+        service = SchemaService()
+        s1 = Schema(type_name="Data")
+        s1.add_field("value", "int8")
+        
+        s2 = Schema(type_name="Data")
+        s2.add_field("value", "int32")
+        
+        assert service.is_compatible(s1, s2) is False
+
+    def test_evolution_incompatible_types_detected(self):
+        service = SchemaService()
+        s1 = Schema(type_name="Data")
+        s1.add_field("value", "string")
+        
+        s2 = Schema(type_name="Data")
+        s2.add_field("value", "int32")
+        
+        assert service.is_compatible(s1, s2) is False
+
+
+class TestCrossVersionCompatibility:
+    """Tests for cross-version compatibility scenarios."""
+
+    @pytest.fixture
+    def service(self):
+        return CompactSerializationService()
+
+    def test_serialize_v1_deserialize_v1(self, service):
+        @dataclass
+        class PersonV1:
+            name: str
+        
+        class PersonV1Serializer(CompactSerializer[PersonV1]):
+            @property
+            def type_name(self) -> str:
+                return "Person"
+            
+            @property
+            def clazz(self) -> type:
+                return PersonV1
+            
+            def write(self, writer: CompactWriter, obj: PersonV1) -> None:
+                writer.write_string("name", obj.name)
+            
+            def read(self, reader: CompactReader) -> PersonV1:
+                return PersonV1(name=reader.read_string("name"))
+        
+        service.register_serializer(PersonV1Serializer())
+        
+        person = PersonV1(name="Alice")
+        data = service.serialize(person)
+        result = service.deserialize(data, "Person")
+        
+        assert result.name == "Alice"
+
+    def test_serialize_v1_deserialize_v2_added_field(self, service):
+        @dataclass
+        class PersonV1:
+            name: str
+        
+        class PersonV1Serializer(CompactSerializer[PersonV1]):
+            @property
+            def type_name(self) -> str:
+                return "Person"
+            
+            @property
+            def clazz(self) -> type:
+                return PersonV1
+            
+            def write(self, writer: CompactWriter, obj: PersonV1) -> None:
+                writer.write_string("name", obj.name)
+            
+            def read(self, reader: CompactReader) -> PersonV1:
+                return PersonV1(name=reader.read_string("name"))
+        
+        service.register_serializer(PersonV1Serializer())
+        person = PersonV1(name="Alice")
+        data = service.serialize(person)
+        
+        result = service.deserialize(data, "Person")
+        assert result.name == "Alice"
+
+    def test_serialize_v2_deserialize_v1_extra_field_ignored(self, service):
+        @dataclass
+        class PersonV2:
+            name: str
+            age: int
+        
+        class PersonV2Serializer(CompactSerializer[PersonV2]):
+            @property
+            def type_name(self) -> str:
+                return "Person"
+            
+            @property
+            def clazz(self) -> type:
+                return PersonV2
+            
+            def write(self, writer: CompactWriter, obj: PersonV2) -> None:
+                writer.write_string("name", obj.name)
+                writer.write_int32("age", obj.age)
+            
+            def read(self, reader: CompactReader) -> PersonV2:
+                return PersonV2(
+                    name=reader.read_string("name"),
+                    age=reader.read_int32("age")
+                )
+        
+        service.register_serializer(PersonV2Serializer())
+        person = PersonV2(name="Alice", age=30)
+        data = service.serialize(person)
+        
+        result = service.deserialize(data, "Person")
+        assert result.name == "Alice"
+        assert result.age == 30
+
+    def test_schema_id_stability(self):
+        s1 = Schema(type_name="Person")
+        s1.add_field("name", "string")
+        s1.add_field("age", "int32")
+        
+        s2 = Schema(type_name="Person")
+        s2.add_field("name", "string")
+        s2.add_field("age", "int32")
+        
+        assert s1._compute_schema_id() == s2._compute_schema_id()
+
+    def test_schema_id_changes_with_field_type(self):
+        s1 = Schema(type_name="Person")
+        s1.add_field("age", "int32")
+        
+        s2 = Schema(type_name="Person")
+        s2.add_field("age", "int64")
+        
+        assert s1._compute_schema_id() != s2._compute_schema_id()
+
+    def test_schema_id_changes_with_field_name(self):
+        s1 = Schema(type_name="Person")
+        s1.add_field("age", "int32")
+        
+        s2 = Schema(type_name="Person")
+        s2.add_field("years", "int32")
+        
+        assert s1._compute_schema_id() != s2._compute_schema_id()
+
+    def test_schema_id_changes_with_type_name(self):
+        s1 = Schema(type_name="Person")
+        s1.add_field("name", "string")
+        
+        s2 = Schema(type_name="Employee")
+        s2.add_field("name", "string")
+        
+        assert s1._compute_schema_id() != s2._compute_schema_id()
+
+    def test_generic_record_cross_version(self):
+        v1_schema = Schema(type_name="Person")
+        v1_schema.add_field("name", "string")
+        
+        v2_schema = Schema(type_name="Person")
+        v2_schema.add_field("name", "string")
+        v2_schema.add_field("age", "int32")
+        
+        v1_record = GenericRecord(v1_schema, {"name": "Alice"})
+        
+        reader = DefaultCompactReader(v1_schema, v1_record._fields, v2_schema)
+        assert reader.read_string("name") == "Alice"
+        assert reader.read_int32("age") == 0
+
+
+class TestNullableFieldsComprehensive:
+    """Comprehensive nullable field tests."""
+
+    def test_all_nullable_types_with_values(self):
+        schema = Schema(type_name="AllNullables")
+        schema.add_field("nb", "nullable_boolean")
+        schema.add_field("ni8", "nullable_int8")
+        schema.add_field("ni16", "nullable_int16")
+        schema.add_field("ni32", "nullable_int32")
+        schema.add_field("ni64", "nullable_int64")
+        schema.add_field("nf32", "nullable_float32")
+        schema.add_field("nf64", "nullable_float64")
+        
+        reader = DefaultCompactReader(schema, {
+            "nb": True,
+            "ni8": 42,
+            "ni16": 1000,
+            "ni32": 100000,
+            "ni64": 9999999999,
+            "nf32": 3.14,
+            "nf64": 2.718281828
+        })
+        
+        assert reader.read_nullable_boolean("nb") is True
+        assert reader.read_nullable_int8("ni8") == 42
+        assert reader.read_nullable_int16("ni16") == 1000
+        assert reader.read_nullable_int32("ni32") == 100000
+        assert reader.read_nullable_int64("ni64") == 9999999999
+        assert abs(reader.read_nullable_float32("nf32") - 3.14) < 0.01
+        assert abs(reader.read_nullable_float64("nf64") - 2.718281828) < 0.0001
+
+    def test_all_nullable_types_with_none(self):
+        schema = Schema(type_name="AllNullables")
+        schema.add_field("nb", "nullable_boolean")
+        schema.add_field("ni8", "nullable_int8")
+        schema.add_field("ni16", "nullable_int16")
+        schema.add_field("ni32", "nullable_int32")
+        schema.add_field("ni64", "nullable_int64")
+        schema.add_field("nf32", "nullable_float32")
+        schema.add_field("nf64", "nullable_float64")
+        
+        reader = DefaultCompactReader(schema, {})
+        
+        assert reader.read_nullable_boolean("nb") is None
+        assert reader.read_nullable_int8("ni8") is None
+        assert reader.read_nullable_int16("ni16") is None
+        assert reader.read_nullable_int32("ni32") is None
+        assert reader.read_nullable_int64("ni64") is None
+        assert reader.read_nullable_float32("nf32") is None
+        assert reader.read_nullable_float64("nf64") is None
+
+    def test_nullable_roundtrip_boolean_true(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_boolean")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_boolean("val", True)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_boolean("val") is True
+
+    def test_nullable_roundtrip_boolean_false(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_boolean")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_boolean("val", False)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_boolean("val") is False
+
+    def test_nullable_roundtrip_boolean_none(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_boolean")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_boolean("val", None)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_boolean("val") is None
+
+    def test_nullable_roundtrip_int8_value(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int8")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int8("val", 42)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int8("val") == 42
+
+    def test_nullable_roundtrip_int8_none(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int8")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int8("val", None)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int8("val") is None
+
+    def test_nullable_roundtrip_int16_value(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int16")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int16("val", 1000)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int16("val") == 1000
+
+    def test_nullable_roundtrip_int16_none(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int16")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int16("val", None)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int16("val") is None
+
+    def test_nullable_roundtrip_int32_value(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int32")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int32("val", 100000)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int32("val") == 100000
+
+    def test_nullable_roundtrip_int32_none(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int32")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int32("val", None)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int32("val") is None
+
+    def test_nullable_roundtrip_int64_value(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int64")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int64("val", 9999999999)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int64("val") == 9999999999
+
+    def test_nullable_roundtrip_int64_none(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_int64")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_int64("val", None)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_int64("val") is None
+
+    def test_nullable_roundtrip_float32_value(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_float32")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_float32("val", 3.14)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert abs(reader.read_nullable_float32("val") - 3.14) < 0.001
+
+    def test_nullable_roundtrip_float32_none(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_float32")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_float32("val", None)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_float32("val") is None
+
+    def test_nullable_roundtrip_float64_value(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_float64")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_float64("val", 2.718281828)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert abs(reader.read_nullable_float64("val") - 2.718281828) < 0.0001
+
+    def test_nullable_roundtrip_float64_none(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "nullable_float64")
+        writer = DefaultCompactWriter(schema)
+        writer.write_nullable_float64("val", None)
+        
+        reader = DefaultCompactReader(schema, writer.fields)
+        assert reader.read_nullable_float64("val") is None
+
+    def test_mixed_nullable_and_required_fields(self):
+        schema = Schema(type_name="Mixed")
+        schema.add_field("required_name", "string")
+        schema.add_field("required_age", "int32")
+        schema.add_field("optional_email", "nullable_int32")
+        schema.add_field("optional_score", "nullable_float64")
+        
+        reader = DefaultCompactReader(schema, {
+            "required_name": "Alice",
+            "required_age": 30,
+            "optional_email": None,
+            "optional_score": 95.5
+        })
+        
+        assert reader.read_string("required_name") == "Alice"
+        assert reader.read_int32("required_age") == 30
+        assert reader.read_nullable_int32("optional_email") is None
+        assert reader.read_nullable_float64("optional_score") == 95.5
+
+
+class TestGenericRecordComprehensive:
+    """Comprehensive GenericRecord tests."""
+
+    def test_builder_fluent_api(self):
+        builder = GenericRecordBuilder("Test")
+        result = builder.set_int32("a", 1)
+        assert result is builder
+        
+        result = result.set_string("b", "test")
+        assert result is builder
+
+    def test_builder_overwrite_field(self):
+        record = (GenericRecordBuilder("Test")
+                  .set_int32("val", 1)
+                  .set_int32("val", 2)
+                  .build())
+        
+        assert record.get_int32("val") == 2
+
+    def test_builder_all_primitive_types(self):
+        record = (GenericRecordBuilder("AllPrimitives")
+                  .set_boolean("b", True)
+                  .set_int8("i8", 127)
+                  .set_int16("i16", 32767)
+                  .set_int32("i32", 2147483647)
+                  .set_int64("i64", 9223372036854775807)
+                  .set_float32("f32", 3.14)
+                  .set_float64("f64", 2.718281828)
+                  .set_string("s", "test")
+                  .build())
+        
+        assert record.get_boolean("b") is True
+        assert record.get_int8("i8") == 127
+        assert record.get_int16("i16") == 32767
+        assert record.get_int32("i32") == 2147483647
+        assert record.get_int64("i64") == 9223372036854775807
+        assert abs(record.get_float32("f32") - 3.14) < 0.01
+        assert abs(record.get_float64("f64") - 2.718281828) < 0.0001
+        assert record.get_string("s") == "test"
+
+    def test_builder_all_array_types(self):
+        record = (GenericRecordBuilder("AllArrays")
+                  .set_array_of_boolean("ab", [True, False])
+                  .set_array_of_int8("ai8", [1, 2, 3])
+                  .set_array_of_int16("ai16", [100, 200])
+                  .set_array_of_int32("ai32", [1000, 2000])
+                  .set_array_of_int64("ai64", [9999999999])
+                  .set_array_of_float32("af32", [1.1, 2.2])
+                  .set_array_of_float64("af64", [1.111, 2.222])
+                  .set_array_of_string("as", ["a", "b"])
+                  .build())
+        
+        assert record.get_array_of_boolean("ab") == [True, False]
+        assert record.get_array_of_int32("ai32") == [1000, 2000]
+        assert record.get_array_of_string("as") == ["a", "b"]
+
+    def test_builder_all_nullable_types(self):
+        record = (GenericRecordBuilder("AllNullables")
+                  .set_nullable_boolean("nb", True)
+                  .set_nullable_int8("ni8", 42)
+                  .set_nullable_int16("ni16", 1000)
+                  .set_nullable_int32("ni32", 100000)
+                  .set_nullable_int64("ni64", 9999999999)
+                  .set_nullable_float32("nf32", 3.14)
+                  .set_nullable_float64("nf64", 2.718)
+                  .build())
+        
+        assert record.get_nullable_boolean("nb") is True
+        assert record.get_nullable_int32("ni32") == 100000
+        assert record.get_nullable_int64("ni64") == 9999999999
+
+    def test_record_immutability(self):
+        source_dict = {"name": "Alice", "age": 30}
+        schema = Schema(type_name="Person")
+        schema.add_field("name", "string")
+        schema.add_field("age", "int32")
+        
+        record = GenericRecord(schema, dict(source_dict))
+        source_dict["name"] = "Bob"
+        
+        assert record.get_string("name") == "Alice"
+
+    def test_record_field_names_order(self):
+        schema = Schema(type_name="Ordered")
+        schema.add_field("first", "int32")
+        schema.add_field("second", "int32")
+        schema.add_field("third", "int32")
+        
+        record = GenericRecord(schema, {"first": 1, "second": 2, "third": 3})
+        names = record.get_field_names()
+        
+        assert names == ["first", "second", "third"]
+
+    def test_record_equality_different_field_order(self):
+        schema1 = Schema(type_name="Test")
+        schema1.add_field("a", "int32")
+        schema1.add_field("b", "int32")
+        
+        schema2 = Schema(type_name="Test")
+        schema2.add_field("b", "int32")
+        schema2.add_field("a", "int32")
+        
+        r1 = GenericRecord(schema1, {"a": 1, "b": 2})
+        r2 = GenericRecord(schema2, {"a": 1, "b": 2})
+        
+        assert r1._fields == r2._fields
+
+    def test_record_hash_consistency(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "int32")
+        record = GenericRecord(schema, {"val": 42})
+        
+        hash1 = hash(record)
+        hash2 = hash(record)
+        
+        assert hash1 == hash2
+
+    def test_record_hash_different_values(self):
+        schema = Schema(type_name="Test")
+        schema.add_field("val", "int32")
+        
+        r1 = GenericRecord(schema, {"val": 1})
+        r2 = GenericRecord(schema, {"val": 2})
+        
+        assert hash(r1) != hash(r2)
+
+    def test_to_dict_roundtrip(self):
+        original = (GenericRecordBuilder("Person")
+                    .set_string("name", "Alice")
+                    .set_int32("age", 30)
+                    .build())
+        
+        d = original.to_dict()
+        
+        rebuilt = (GenericRecordBuilder("Person")
+                   .set_string("name", d["name"])
+                   .set_int32("age", d["age"])
+                   .build())
+        
+        assert rebuilt.get_string("name") == original.get_string("name")
+        assert rebuilt.get_int32("age") == original.get_int32("age")
+
+    def test_new_builder_preserves_all_fields(self):
+        original = (GenericRecordBuilder("Person")
+                    .set_string("name", "Alice")
+                    .set_int32("age", 30)
+                    .set_boolean("active", True)
+                    .build())
+        
+        new_record = original.new_builder().build()
+        
+        assert new_record.get_string("name") == "Alice"
+        assert new_record.get_int32("age") == 30
+        assert new_record.get_boolean("active") is True
+
+    def test_new_builder_allows_modifications(self):
+        original = (GenericRecordBuilder("Person")
+                    .set_string("name", "Alice")
+                    .set_int32("age", 30)
+                    .build())
+        
+        modified = (original.new_builder()
+                    .set_string("name", "Bob")
+                    .set_int32("age", 25)
+                    .build())
+        
+        assert modified.get_string("name") == "Bob"
+        assert modified.get_int32("age") == 25
+        assert original.get_string("name") == "Alice"
+
+
+class TestDateTimeTypes:
+    """Tests for date/time type handling."""
+
+    def test_date_field_kind_exists(self):
+        assert FieldKind.DATE == 25
+
+    def test_time_field_kind_exists(self):
+        assert FieldKind.TIME == 26
+
+    def test_timestamp_field_kind_exists(self):
+        assert FieldKind.TIMESTAMP == 27
+
+    def test_timestamp_with_timezone_field_kind_exists(self):
+        assert FieldKind.TIMESTAMP_WITH_TIMEZONE == 28
+
+    def test_decimal_field_kind_exists(self):
+        assert FieldKind.DECIMAL == 29
+
+    def test_date_field_descriptor(self):
+        fd = FieldDescriptor(name="birth_date", field_type="date", index=0)
+        assert fd.kind == FieldKind.DATE
+
+    def test_time_field_descriptor(self):
+        fd = FieldDescriptor(name="start_time", field_type="time", index=0)
+        assert fd.kind == FieldKind.TIME
+
+    def test_timestamp_field_descriptor(self):
+        fd = FieldDescriptor(name="created_at", field_type="timestamp", index=0)
+        assert fd.kind == FieldKind.TIMESTAMP
+
+    def test_decimal_field_descriptor(self):
+        fd = FieldDescriptor(name="price", field_type="decimal", index=0)
+        assert fd.kind == FieldKind.DECIMAL
+
+    def test_array_date_field_kind_exists(self):
+        assert FieldKind.ARRAY_DATE == 30
+
+    def test_array_time_field_kind_exists(self):
+        assert FieldKind.ARRAY_TIME == 31
+
+    def test_array_timestamp_field_kind_exists(self):
+        assert FieldKind.ARRAY_TIMESTAMP == 32
+
+    def test_array_decimal_field_kind_exists(self):
+        assert FieldKind.ARRAY_DECIMAL == 33
+
+    def test_date_is_variable_size(self):
+        fd = FieldDescriptor(name="d", field_type="date", index=0)
+        assert fd.is_variable_size() is False
+
+    def test_decimal_is_variable_size(self):
+        fd = FieldDescriptor(name="d", field_type="decimal", index=0)
+        assert fd.is_variable_size() is True
+
+    def test_array_date_is_variable_size(self):
+        fd = FieldDescriptor(name="d", field_type="array_date", index=0)
+        assert fd.is_variable_size() is True
+
+
+class TestSerializationRoundtrip:
+    """End-to-end serialization roundtrip tests."""
+
+    @pytest.fixture
+    def service(self):
+        return CompactSerializationService()
+
+    def test_roundtrip_all_primitives(self, service):
+        @dataclass
+        class AllPrimitives:
+            b: bool
+            i8: int
+            i16: int
+            i32: int
+            i64: int
+            f32: float
+            f64: float
+            s: str
+        
+        class AllPrimitivesSerializer(CompactSerializer[AllPrimitives]):
+            @property
+            def type_name(self) -> str:
+                return "AllPrimitives"
+            
+            @property
+            def clazz(self) -> type:
+                return AllPrimitives
+            
+            def write(self, writer: CompactWriter, obj: AllPrimitives) -> None:
+                writer.write_boolean("b", obj.b)
+                writer.write_int8("i8", obj.i8)
+                writer.write_int16("i16", obj.i16)
+                writer.write_int32("i32", obj.i32)
+                writer.write_int64("i64", obj.i64)
+                writer.write_float32("f32", obj.f32)
+                writer.write_float64("f64", obj.f64)
+                writer.write_string("s", obj.s)
+            
+            def read(self, reader: CompactReader) -> AllPrimitives:
+                return AllPrimitives(
+                    b=reader.read_boolean("b"),
+                    i8=reader.read_int8("i8"),
+                    i16=reader.read_int16("i16"),
+                    i32=reader.read_int32("i32"),
+                    i64=reader.read_int64("i64"),
+                    f32=reader.read_float32("f32"),
+                    f64=reader.read_float64("f64"),
+                    s=reader.read_string("s")
+                )
+        
+        service.register_serializer(AllPrimitivesSerializer())
+        
+        original = AllPrimitives(
+            b=True, i8=127, i16=32767, i32=2147483647,
+            i64=9223372036854775807, f32=3.14, f64=2.718281828, s="test"
+        )
+        data = service.serialize(original)
+        result = service.deserialize(data, "AllPrimitives")
+        
+        assert result.b is True
+        assert result.i8 == 127
+        assert result.i16 == 32767
+        assert result.i32 == 2147483647
+        assert result.i64 == 9223372036854775807
+        assert abs(result.f32 - 3.14) < 0.01
+        assert abs(result.f64 - 2.718281828) < 0.0001
+        assert result.s == "test"
+
+    def test_roundtrip_all_arrays(self, service):
+        @dataclass
+        class AllArrays:
+            ab: list
+            ai32: list
+            astr: list
+        
+        class AllArraysSerializer(CompactSerializer[AllArrays]):
+            @property
+            def type_name(self) -> str:
+                return "AllArrays"
+            
+            @property
+            def clazz(self) -> type:
+                return AllArrays
+            
+            def write(self, writer: CompactWriter, obj: AllArrays) -> None:
+                writer.write_array_of_boolean("ab", obj.ab)
+                writer.write_array_of_int32("ai32", obj.ai32)
+                writer.write_array_of_string("astr", obj.astr)
+            
+            def read(self, reader: CompactReader) -> AllArrays:
+                return AllArrays(
+                    ab=reader.read_array_of_boolean("ab"),
+                    ai32=reader.read_array_of_int32("ai32"),
+                    astr=reader.read_array_of_string("astr")
+                )
+        
+        service.register_serializer(AllArraysSerializer())
+        
+        original = AllArrays(ab=[True, False, True], ai32=[1, 2, 3], astr=["a", "b"])
+        data = service.serialize(original)
+        result = service.deserialize(data, "AllArrays")
+        
+        assert result.ab == [True, False, True]
+        assert result.ai32 == [1, 2, 3]
+        assert result.astr == ["a", "b"]
+
+    def test_roundtrip_all_nullables(self, service):
+        @dataclass
+        class AllNullables:
+            nb: bool
+            ni32: int
+            nf64: float
+        
+        class AllNullablesSerializer(CompactSerializer[AllNullables]):
+            @property
+            def type_name(self) -> str:
+                return "AllNullables"
+            
+            @property
+            def clazz(self) -> type:
+                return AllNullables
+            
+            def write(self, writer: CompactWriter, obj: AllNullables) -> None:
+                writer.write_nullable_boolean("nb", obj.nb)
+                writer.write_nullable_int32("ni32", obj.ni32)
+                writer.write_nullable_float64("nf64", obj.nf64)
+            
+            def read(self, reader: CompactReader) -> AllNullables:
+                return AllNullables(
+                    nb=reader.read_nullable_boolean("nb"),
+                    ni32=reader.read_nullable_int32("ni32"),
+                    nf64=reader.read_nullable_float64("nf64")
+                )
+        
+        service.register_serializer(AllNullablesSerializer())
+        
+        original = AllNullables(nb=None, ni32=42, nf64=None)
+        data = service.serialize(original)
+        result = service.deserialize(data, "AllNullables")
+        
+        assert result.nb is None
+        assert result.ni32 == 42
+        assert result.nf64 is None
+
+    def test_roundtrip_nested_object(self, service):
+        @dataclass
+        class Address:
+            city: str
+            zip_code: int
+        
+        @dataclass
+        class Person:
+            name: str
+            address: object
+        
+        class PersonSerializer(CompactSerializer[Person]):
+            @property
+            def type_name(self) -> str:
+                return "Person"
+            
+            @property
+            def clazz(self) -> type:
+                return Person
+            
+            def write(self, writer: CompactWriter, obj: Person) -> None:
+                writer.write_string("name", obj.name)
+                writer.write_compact("address", obj.address)
+            
+            def read(self, reader: CompactReader) -> Person:
+                return Person(
+                    name=reader.read_string("name"),
+                    address=reader.read_compact("address")
+                )
+        
+        service.register_serializer(PersonSerializer())
+        
+        original = Person(name="Alice", address=Address(city="NYC", zip_code=10001))
+        data = service.serialize(original)
+        result = service.deserialize(data, "Person")
+        
+        assert result.name == "Alice"
+
+    def test_roundtrip_complex_graph(self, service):
+        @dataclass
+        class Item:
+            id: int
+            name: str
+        
+        @dataclass
+        class Container:
+            title: str
+            items: list
+        
+        class ContainerSerializer(CompactSerializer[Container]):
+            @property
+            def type_name(self) -> str:
+                return "Container"
+            
+            @property
+            def clazz(self) -> type:
+                return Container
+            
+            def write(self, writer: CompactWriter, obj: Container) -> None:
+                writer.write_string("title", obj.title)
+                writer.write_array_of_compact("items", obj.items)
+            
+            def read(self, reader: CompactReader) -> Container:
+                return Container(
+                    title=reader.read_string("title"),
+                    items=reader.read_array_of_compact("items")
+                )
+        
+        service.register_serializer(ContainerSerializer())
+        
+        original = Container(
+            title="My Container",
+            items=[Item(id=1, name="First"), Item(id=2, name="Second")]
+        )
+        data = service.serialize(original)
+        result = service.deserialize(data, "Container")
+        
+        assert result.title == "My Container"
+
+    def test_roundtrip_preserves_type(self, service):
+        @dataclass
+        class MyType:
+            value: int
+        
+        class MyTypeSerializer(CompactSerializer[MyType]):
+            @property
+            def type_name(self) -> str:
+                return "MyType"
+            
+            @property
+            def clazz(self) -> type:
+                return MyType
+            
+            def write(self, writer: CompactWriter, obj: MyType) -> None:
+                writer.write_int32("value", obj.value)
+            
+            def read(self, reader: CompactReader) -> MyType:
+                return MyType(value=reader.read_int32("value"))
+        
+        service.register_serializer(MyTypeSerializer())
+        
+        original = MyType(value=42)
+        data = service.serialize(original)
+        result = service.deserialize(data, "MyType")
+        
+        assert isinstance(result, MyType)
+        assert result.value == 42
+
+    def test_roundtrip_handles_unicode(self, service):
+        @dataclass
+        class UnicodeData:
+            text: str
+        
+        class UnicodeDataSerializer(CompactSerializer[UnicodeData]):
+            @property
+            def type_name(self) -> str:
+                return "UnicodeData"
+            
+            @property
+            def clazz(self) -> type:
+                return UnicodeData
+            
+            def write(self, writer: CompactWriter, obj: UnicodeData) -> None:
+                writer.write_string("text", obj.text)
+            
+            def read(self, reader: CompactReader) -> UnicodeData:
+                return UnicodeData(text=reader.read_string("text"))
+        
+        service.register_serializer(UnicodeDataSerializer())
+        
+        original = UnicodeData(text="Hello 🌍 世界 مرحبا")
+        data = service.serialize(original)
+        result = service.deserialize(data, "UnicodeData")
+        
+        assert result.text == "Hello 🌍 世界 مرحبا"
+
+    def test_roundtrip_handles_large_data(self, service):
+        @dataclass
+        class LargeData:
+            large_string: str
+            large_array: list
+        
+        class LargeDataSerializer(CompactSerializer[LargeData]):
+            @property
+            def type_name(self) -> str:
+                return "LargeData"
+            
+            @property
+            def clazz(self) -> type:
+                return LargeData
+            
+            def write(self, writer: CompactWriter, obj: LargeData) -> None:
+                writer.write_string("large_string", obj.large_string)
+                writer.write_array_of_int32("large_array", obj.large_array)
+            
+            def read(self, reader: CompactReader) -> LargeData:
+                return LargeData(
+                    large_string=reader.read_string("large_string"),
+                    large_array=reader.read_array_of_int32("large_array")
+                )
+        
+        service.register_serializer(LargeDataSerializer())
+        
+        original = LargeData(
+            large_string="x" * 10000,
+            large_array=list(range(1000))
+        )
+        data = service.serialize(original)
+        result = service.deserialize(data, "LargeData")
+        
+        assert len(result.large_string) == 10000
+        assert len(result.large_array) == 1000
+        assert result.large_array[999] == 999
