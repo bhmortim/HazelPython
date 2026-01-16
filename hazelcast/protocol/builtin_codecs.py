@@ -1,6 +1,7 @@
 """Builtin codecs for Hazelcast protocol types."""
 
-from typing import Callable, List, Optional, TypeVar
+import uuid as uuid_module
+from typing import Callable, Dict, List, Optional, Tuple, TypeVar
 
 from hazelcast.protocol.client_message import (
     ClientMessage,
@@ -13,6 +14,8 @@ from hazelcast.protocol.codec import (
     FixSizedTypesCodec,
     INT_SIZE,
     LONG_SIZE,
+    UUID_SIZE,
+    BOOLEAN_SIZE,
 )
 
 T = TypeVar("T")
@@ -141,6 +144,109 @@ class IntegerCodec:
         if frame is None or len(frame.content) < INT_SIZE:
             return 0
         return FixSizedTypesCodec.decode_int(frame.content, 0)[0]
+
+
+class BooleanCodec:
+    """Codec for boolean values in a frame."""
+
+    @staticmethod
+    def encode(message: ClientMessage, value: bool) -> None:
+        buffer = bytearray(BOOLEAN_SIZE)
+        FixSizedTypesCodec.encode_boolean(buffer, 0, value)
+        message.add_frame(Frame(bytes(buffer)))
+
+    @staticmethod
+    def decode(message: ClientMessage) -> bool:
+        frame = message.next_frame()
+        if frame is None or len(frame.content) < BOOLEAN_SIZE:
+            return False
+        return FixSizedTypesCodec.decode_boolean(frame.content, 0)[0]
+
+
+class UUIDCodec:
+    """Codec for UUID values in a frame."""
+
+    @staticmethod
+    def encode(message: ClientMessage, value: Optional[uuid_module.UUID]) -> None:
+        buffer = bytearray(UUID_SIZE)
+        FixSizedTypesCodec.encode_uuid(buffer, 0, value)
+        message.add_frame(Frame(bytes(buffer)))
+
+    @staticmethod
+    def decode(message: ClientMessage) -> Optional[uuid_module.UUID]:
+        frame = message.next_frame()
+        if frame is None or len(frame.content) < UUID_SIZE:
+            return None
+        return FixSizedTypesCodec.decode_uuid(frame.content, 0)[0]
+
+    @staticmethod
+    def encode_nullable(message: ClientMessage, value: Optional[uuid_module.UUID]) -> None:
+        CodecUtil.encode_nullable(message, value, UUIDCodec.encode)
+
+    @staticmethod
+    def decode_nullable(message: ClientMessage) -> Optional[uuid_module.UUID]:
+        return CodecUtil.decode_nullable(message, UUIDCodec.decode)
+
+
+class MapCodec:
+    """Codec for map (dictionary) values spread across multiple frames."""
+
+    @staticmethod
+    def encode(
+        message: ClientMessage,
+        items: Dict,
+        key_encoder: Callable[[ClientMessage, any], None],
+        value_encoder: Callable[[ClientMessage, any], None],
+    ) -> None:
+        message.add_frame(BEGIN_FRAME)
+        for key, value in items.items():
+            key_encoder(message, key)
+            value_encoder(message, value)
+        message.add_frame(END_FRAME)
+
+    @staticmethod
+    def decode(
+        message: ClientMessage,
+        key_decoder: Callable[[ClientMessage], any],
+        value_decoder: Callable[[ClientMessage], any],
+    ) -> Dict:
+        result = {}
+        message.next_frame()
+
+        while message.has_next_frame():
+            frame = message.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                message.next_frame()
+                break
+            key = key_decoder(message)
+            value = value_decoder(message)
+            result[key] = value
+
+        return result
+
+    @staticmethod
+    def encode_nullable(
+        message: ClientMessage,
+        items: Optional[Dict],
+        key_encoder: Callable[[ClientMessage, any], None],
+        value_encoder: Callable[[ClientMessage, any], None],
+    ) -> None:
+        if items is None:
+            message.add_frame(NULL_FRAME)
+        else:
+            MapCodec.encode(message, items, key_encoder, value_encoder)
+
+    @staticmethod
+    def decode_nullable(
+        message: ClientMessage,
+        key_decoder: Callable[[ClientMessage], any],
+        value_decoder: Callable[[ClientMessage], any],
+    ) -> Optional[Dict]:
+        frame = message.peek_next_frame()
+        if frame is None or frame.is_null_frame:
+            message.skip_frame()
+            return None
+        return MapCodec.decode(message, key_decoder, value_decoder)
 
 
 class ListMultiFrameCodec:

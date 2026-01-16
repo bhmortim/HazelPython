@@ -1,7 +1,7 @@
 """Hazelcast protocol client message implementation."""
 
 import struct
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 BEGIN_FLAG = 1 << 15
 END_FLAG = 1 << 14
@@ -20,7 +20,11 @@ INITIAL_FRAME_SIZE = 22
 TYPE_OFFSET = 0
 CORRELATION_ID_OFFSET = 4
 PARTITION_ID_OFFSET = 12
+RESPONSE_BACKUP_ACKS_OFFSET = 16
 INITIAL_FRAME_HEADER_SIZE = 16
+RESPONSE_HEADER_SIZE = 22
+
+FRAGMENTATION_ID_OFFSET = 0
 
 
 class Frame:
@@ -57,6 +61,9 @@ class Frame:
     def copy_with_new_flags(self, flags: int) -> "Frame":
         return Frame(self.content, flags)
 
+    def size(self) -> int:
+        return len(self.content) + SIZE_OF_FRAME_LENGTH_AND_FLAGS
+
     def __len__(self) -> int:
         return len(self.content)
 
@@ -64,6 +71,9 @@ class Frame:
         if not isinstance(other, Frame):
             return False
         return self.content == other.content and self.flags == other.flags
+
+    def __repr__(self) -> str:
+        return f"Frame(content_len={len(self.content)}, flags=0x{self.flags:04x})"
 
 
 NULL_FRAME = Frame(b"", IS_NULL_FLAG)
@@ -221,5 +231,127 @@ class ClientMessage:
         content = bytearray(total_size)
         return Frame(bytes(content), flags)
 
+    def get_number_of_backup_acks(self) -> int:
+        if not self._frames:
+            return 0
+        content = self._frames[0].content
+        if len(content) < RESPONSE_HEADER_SIZE:
+            return 0
+        return struct.unpack_from("<B", content, RESPONSE_BACKUP_ACKS_OFFSET)[0]
+
+    def is_retryable(self) -> bool:
+        return (self._frames[0].flags & BACKUP_AWARE_FLAG) != 0 if self._frames else False
+
+    def is_event(self) -> bool:
+        return (self._frames[0].flags & IS_EVENT_FLAG) != 0 if self._frames else False
+
+    def is_backup_event(self) -> bool:
+        return (self._frames[0].flags & BACKUP_EVENT_FLAG) != 0 if self._frames else False
+
+    def get_fragmentation_id(self) -> int:
+        if not self._frames:
+            return 0
+        content = self._frames[0].content
+        if len(content) < 8:
+            return 0
+        return struct.unpack_from("<q", content, FRAGMENTATION_ID_OFFSET)[0]
+
+    def merge(self, fragment: "ClientMessage") -> None:
+        self._frames.extend(fragment._frames[1:])
+
+    def drop_fragmentation_frame(self) -> None:
+        if self._frames:
+            self._frames.pop(0)
+
+    def copy(self) -> "ClientMessage":
+        return ClientMessage([Frame(f.content, f.flags) for f in self._frames])
+
     def __len__(self) -> int:
         return len(self._frames)
+
+    def __repr__(self) -> str:
+        msg_type = self.get_message_type()
+        corr_id = self.get_correlation_id()
+        return f"ClientMessage(type=0x{msg_type:06x}, correlation_id={corr_id}, frames={len(self._frames)})"
+
+
+class MessageAccumulator:
+    """Accumulates fragmented messages until complete."""
+
+    def __init__(self):
+        self._fragments: Dict[int, ClientMessage] = {}
+
+    def add(self, message: ClientMessage) -> Optional[ClientMessage]:
+        """Add a message fragment.
+
+        Args:
+            message: The message fragment to add.
+
+        Returns:
+            The complete message if all fragments received, None otherwise.
+        """
+        start_frame = message.start_frame
+        if start_frame is None:
+            return None
+
+        if start_frame.is_begin_frame and start_frame.is_end_frame:
+            return message
+
+        fragmentation_id = message.get_fragmentation_id()
+
+        if start_frame.is_begin_frame:
+            self._fragments[fragmentation_id] = message
+            return None
+
+        existing = self._fragments.get(fragmentation_id)
+        if existing is None:
+            return None
+
+        existing.merge(message)
+
+        if start_frame.is_end_frame:
+            del self._fragments[fragmentation_id]
+            existing.drop_fragmentation_frame()
+            return existing
+
+        return None
+
+    def clear(self) -> None:
+        self._fragments.clear()
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._fragments)
+
+
+class InboundMessage:
+    """Reader for extracting data from an inbound message."""
+
+    def __init__(self, message: ClientMessage):
+        self._message = message
+        self._message.reset_read_index()
+
+    def read_initial_frame(self) -> Frame:
+        frame = self._message.next_frame()
+        if frame is None:
+            raise ValueError("No initial frame")
+        return frame
+
+    def skip_initial_frame(self) -> None:
+        self._message.skip_frame()
+
+    def next_frame(self) -> Optional[Frame]:
+        return self._message.next_frame()
+
+    def peek_next_frame(self) -> Optional[Frame]:
+        return self._message.peek_next_frame()
+
+    def has_next_frame(self) -> bool:
+        return self._message.has_next_frame()
+
+    def skip_frame(self) -> None:
+        self._message.skip_frame()
+
+    @property
+    def message(self) -> ClientMessage:
+        return self._message
