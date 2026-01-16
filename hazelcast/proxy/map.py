@@ -21,6 +21,7 @@ from hazelcast.processor import EntryProcessor
 from hazelcast.protocol.codec import MapCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
 from hazelcast.projection import Projection
+from hazelcast.wan import WanReplicationRef
 from hazelcast.event_journal import (
     EventJournalReader,
     EventJournalEvent,
@@ -2112,6 +2113,183 @@ class MapProxy(Proxy, Generic[K, V]):
         return reader.read_from_event_journal_async(
             start_sequence, min_size, max_size
         )
+
+    def put_wan(
+        self,
+        key: K,
+        value: V,
+        wan_ref: WanReplicationRef,
+        ttl: float = -1,
+    ) -> Optional[V]:
+        """Put a key-value pair with WAN replication awareness.
+
+        Associates the specified value with the specified key and ensures
+        the operation is tracked for WAN replication according to the
+        specified WAN replication reference configuration.
+
+        Args:
+            key: The key to set. Must be serializable.
+            value: The value to associate with the key. Must be serializable.
+            wan_ref: WAN replication reference specifying replication config.
+            ttl: Time to live in seconds. -1 means infinite (default).
+
+        Returns:
+            The previous value associated with the key, or None if there
+            was no mapping.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> wan_ref = WanReplicationRef("my-wan-config")
+            >>> old_value = my_map.put_wan("key", "value", wan_ref)
+        """
+        return self.put_wan_async(key, value, wan_ref, ttl).result()
+
+    def put_wan_async(
+        self,
+        key: K,
+        value: V,
+        wan_ref: WanReplicationRef,
+        ttl: float = -1,
+    ) -> Future:
+        """Put a key-value pair with WAN replication asynchronously.
+
+        Args:
+            key: The key to set.
+            value: The value to associate with the key.
+            wan_ref: WAN replication reference specifying replication config.
+            ttl: Time to live in seconds. -1 means infinite.
+
+        Returns:
+            A Future that will contain the previous value.
+        """
+        self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
+        key_data = self._to_data(key)
+        value_data = self._to_data(value)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+
+        request = MapCodec.encode_put_wan_request(
+            self._name, key_data, value_data, 0, ttl_millis, wan_ref.name
+        )
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_put_wan_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
+
+    def remove_wan(
+        self,
+        key: K,
+        wan_ref: WanReplicationRef,
+    ) -> Optional[V]:
+        """Remove a key-value pair with WAN replication awareness.
+
+        Removes the mapping for a key and ensures the removal is tracked
+        for WAN replication according to the specified reference.
+
+        Args:
+            key: The key whose mapping is to be removed.
+            wan_ref: WAN replication reference specifying replication config.
+
+        Returns:
+            The previous value associated with the key, or None if there
+            was no mapping.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> wan_ref = WanReplicationRef("my-wan-config")
+            >>> removed = my_map.remove_wan("key", wan_ref)
+        """
+        return self.remove_wan_async(key, wan_ref).result()
+
+    def remove_wan_async(
+        self,
+        key: K,
+        wan_ref: WanReplicationRef,
+    ) -> Future:
+        """Remove a key-value pair with WAN replication asynchronously.
+
+        Args:
+            key: The key to remove.
+            wan_ref: WAN replication reference specifying replication config.
+
+        Returns:
+            A Future that will contain the removed value.
+        """
+        self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
+        key_data = self._to_data(key)
+
+        request = MapCodec.encode_remove_wan_request(
+            self._name, key_data, 0, wan_ref.name
+        )
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_remove_wan_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
+
+    def wan_sync(self, wan_ref: WanReplicationRef) -> "WanSyncResult":
+        """Trigger WAN synchronization for this map.
+
+        Initiates a full synchronization of this map's data to the
+        WAN replication target specified by the reference.
+
+        Args:
+            wan_ref: WAN replication reference specifying the target.
+
+        Returns:
+            A WanSyncResult with the synchronization state.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> wan_ref = WanReplicationRef("my-wan-config")
+            >>> result = my_map.wan_sync(wan_ref)
+            >>> if result.is_completed:
+            ...     print(f"Synced {result.entries_synced} entries")
+        """
+        return self.wan_sync_async(wan_ref).result()
+
+    def wan_sync_async(self, wan_ref: WanReplicationRef) -> Future:
+        """Trigger WAN synchronization asynchronously.
+
+        Args:
+            wan_ref: WAN replication reference specifying the target.
+
+        Returns:
+            A Future that will contain a WanSyncResult.
+        """
+        from hazelcast.wan import WanSyncResult, WanSyncState
+
+        self._check_not_destroyed()
+
+        request = MapCodec.encode_wan_sync_request(self._name, wan_ref.name)
+
+        def handle_response(response: "ClientMessage") -> "WanSyncResult":
+            data = MapCodec.decode_wan_sync_response(response)
+            if data is None:
+                return WanSyncResult(state=WanSyncState.COMPLETED)
+            return WanSyncResult(
+                state=WanSyncState(data.get("state", "COMPLETED")),
+                partition_id=data.get("partition_id", -1),
+                entries_synced=data.get("entries_synced", 0),
+            )
+
+        return self._invoke(request, handle_response)
 
     def __len__(self) -> int:
         return self.size()
