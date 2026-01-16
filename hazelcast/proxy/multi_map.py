@@ -40,6 +40,25 @@ class MultiMapProxy(Proxy, Generic[K, V]):
     """Proxy for Hazelcast MultiMap distributed data structure.
 
     A MultiMap allows multiple values to be associated with a single key.
+    Unlike a regular Map where each key maps to exactly one value, a
+    MultiMap can store multiple values per key.
+
+    Type Parameters:
+        K: The key type.
+        V: The value type.
+
+    Attributes:
+        name: The name of this distributed multi-map.
+
+    Example:
+        Basic multi-map operations::
+
+            mm = client.get_multi_map("tags")
+            mm.put("article1", "python")
+            mm.put("article1", "hazelcast")
+            mm.put("article1", "distributed")
+            values = mm.get("article1")  # Returns all 3 tags
+            print(f"Tags: {list(values)}")
     """
 
     SERVICE_NAME = "hz:impl:multiMapService"
@@ -52,11 +71,18 @@ class MultiMapProxy(Proxy, Generic[K, V]):
         """Add a value to the collection associated with a key.
 
         Args:
-            key: The key.
-            value: The value to add.
+            key: The key to associate the value with.
+            value: The value to add to the key's collection.
 
         Returns:
-            True if the value was added (not a duplicate).
+            True if the value was added, False if it was a duplicate.
+
+        Raises:
+            IllegalStateException: If the multi-map has been destroyed.
+
+        Example:
+            >>> mm.put("user:1", "role:admin")
+            >>> mm.put("user:1", "role:editor")
         """
         return self.put_async(key, value).result()
 
@@ -82,7 +108,16 @@ class MultiMapProxy(Proxy, Generic[K, V]):
             key: The key to look up.
 
         Returns:
-            A collection of values, or empty if key not found.
+            A collection of all values associated with the key,
+            or an empty collection if the key is not found.
+
+        Raises:
+            IllegalStateException: If the multi-map has been destroyed.
+
+        Example:
+            >>> roles = mm.get("user:1")
+            >>> for role in roles:
+            ...     print(role)
         """
         return self.get_async(key).result()
 
@@ -103,12 +138,21 @@ class MultiMapProxy(Proxy, Generic[K, V]):
     def remove(self, key: K, value: V) -> bool:
         """Remove a specific value from a key.
 
+        Removes only the specified value from the key's collection,
+        leaving other values intact.
+
         Args:
             key: The key.
-            value: The value to remove.
+            value: The specific value to remove.
 
         Returns:
-            True if the value was removed.
+            True if the value was removed, False if not found.
+
+        Raises:
+            IllegalStateException: If the multi-map has been destroyed.
+
+        Example:
+            >>> mm.remove("user:1", "role:editor")
         """
         return self.remove_async(key, value).result()
 
@@ -130,11 +174,21 @@ class MultiMapProxy(Proxy, Generic[K, V]):
     def remove_all(self, key: K) -> Collection[V]:
         """Remove all values associated with a key.
 
+        Removes the entire entry for the key, returning all values
+        that were associated with it.
+
         Args:
-            key: The key.
+            key: The key whose values should be removed.
 
         Returns:
-            The removed values.
+            A collection of all removed values.
+
+        Raises:
+            IllegalStateException: If the multi-map has been destroyed.
+
+        Example:
+            >>> removed = mm.remove_all("user:1")
+            >>> print(f"Removed {len(removed)} values")
         """
         return self.remove_all_async(key).result()
 
@@ -252,10 +306,17 @@ class MultiMapProxy(Proxy, Generic[K, V]):
         """Get the number of values for a specific key.
 
         Args:
-            key: The key.
+            key: The key to count values for.
 
         Returns:
-            The number of values for the key.
+            The number of values associated with the key, or 0 if not found.
+
+        Raises:
+            IllegalStateException: If the multi-map has been destroyed.
+
+        Example:
+            >>> count = mm.value_count("user:1")
+            >>> print(f"User has {count} roles")
         """
         return self.value_count_async(key).result()
 

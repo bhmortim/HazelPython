@@ -53,6 +53,13 @@ class DistributedObject(ABC):
     Attributes:
         name: The unique name of this distributed object within its service.
         service_name: The service identifier (e.g., "hz:impl:mapService").
+
+    Example:
+        Checking distributed object identity::
+
+            obj = client.get_map("my-map")
+            print(f"Name: {obj.name}")
+            print(f"Service: {obj.service_name}")
     """
 
     @property
@@ -117,19 +124,21 @@ class ProxyContext:
     This class is typically created by the HazelcastClient and passed
     to proxies during their creation.
 
-    Args:
-        invocation_service: Service for sending requests to the cluster.
-        serialization_service: Service for object serialization.
-        partition_service: Service for partition routing.
+    Attributes:
+        invocation_service: Service for sending requests to cluster members.
+        serialization_service: Service for serializing and deserializing objects.
+        partition_service: Service for determining partition ownership.
         listener_service: Service for managing event listeners.
 
     Example:
-        >>> context = ProxyContext(
-        ...     invocation_service=inv_service,
-        ...     serialization_service=ser_service,
-        ...     partition_service=part_service,
-        ...     listener_service=listener_service,
-        ... )
+        Creating a context for proxies::
+
+            context = ProxyContext(
+                invocation_service=inv_service,
+                serialization_service=ser_service,
+                partition_service=part_service,
+                listener_service=listener_service,
+            )
     """
 
     def __init__(
@@ -146,6 +155,9 @@ class ProxyContext:
             serialization_service: Service for object serialization.
             partition_service: Service for partition routing.
             listener_service: Service for managing event listeners.
+
+        Example:
+            >>> ctx = ProxyContext(invocation_service=inv_svc)
         """
         self._invocation_service = invocation_service
         self._serialization_service = serialization_service

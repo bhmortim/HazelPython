@@ -11,20 +11,56 @@ E = TypeVar("E")
 
 
 class StaleSequenceException(Exception):
-    """Raised when the sequence is behind the head of the ringbuffer."""
+    """Raised when the sequence is behind the head of the ringbuffer.
+
+    This exception indicates that the requested sequence number is no
+    longer available because newer data has overwritten it.
+
+    Attributes:
+        head_sequence: The current head sequence of the ringbuffer.
+
+    Example:
+        >>> try:
+        ...     topic.read_from(old_sequence)
+        ... except StaleSequenceException as e:
+        ...     print(f"Data lost, head is now: {e.head_sequence}")
+    """
 
     def __init__(self, message: str, head_sequence: int = -1):
+        """Initialize the exception.
+
+        Args:
+            message: The error message.
+            head_sequence: The current head sequence of the ringbuffer.
+        """
         super().__init__(message)
         self._head_sequence = head_sequence
 
     @property
     def head_sequence(self) -> int:
-        """Get the current head sequence of the ringbuffer."""
+        """Get the current head sequence of the ringbuffer.
+
+        Returns:
+            The sequence number of the oldest available item.
+        """
         return self._head_sequence
 
 
 class TopicOverloadPolicy(Enum):
-    """Policy for handling topic overload."""
+    """Policy for handling topic overload.
+
+    Determines behavior when the backing ringbuffer is full and a
+    new message is published.
+
+    Attributes:
+        DISCARD_OLDEST: Discard the oldest message to make room.
+        DISCARD_NEWEST: Discard the new message being published.
+        BLOCK: Block until space becomes available.
+        ERROR: Raise an error when the buffer is full.
+
+    Example:
+        >>> config = ReliableTopicConfig(overload_policy=TopicOverloadPolicy.BLOCK)
+    """
 
     DISCARD_OLDEST = "DISCARD_OLDEST"
     DISCARD_NEWEST = "DISCARD_NEWEST"
@@ -33,7 +69,21 @@ class TopicOverloadPolicy(Enum):
 
 
 class ReliableTopicConfig:
-    """Configuration for reliable topic."""
+    """Configuration for reliable topic.
+
+    Configures the behavior of a ReliableTopic including batch sizes
+    and overload handling.
+
+    Attributes:
+        read_batch_size: Number of messages to read in each batch.
+        overload_policy: Policy for handling buffer overflow.
+
+    Example:
+        >>> config = ReliableTopicConfig(
+        ...     read_batch_size=50,
+        ...     overload_policy=TopicOverloadPolicy.DISCARD_OLDEST
+        ... )
+    """
 
     def __init__(
         self,
@@ -73,10 +123,34 @@ class ReliableTopicConfig:
 
 
 class ReliableMessageListener(MessageListener[E], Generic[E]):
-    """Listener for reliable topic messages with additional callbacks."""
+    """Listener for reliable topic messages with additional callbacks.
+
+    Extends MessageListener with methods for sequence tracking and
+    loss tolerance, enabling reliable message delivery.
+
+    Type Parameters:
+        E: The type of messages this listener handles.
+
+    Example:
+        >>> class MyListener(ReliableMessageListener[str]):
+        ...     def __init__(self):
+        ...         self._seq = -1
+        ...
+        ...     def on_message(self, msg):
+        ...         print(f"Received: {msg.message}")
+        ...
+        ...     def store_sequence(self, seq):
+        ...         self._seq = seq
+        ...
+        ...     def retrieve_initial_sequence(self):
+        ...         return self._seq
+    """
 
     def store_sequence(self, sequence: int) -> None:
-        """Called to store the current sequence for later retrieval.
+        """Store the current sequence for later retrieval.
+
+        Called after each message is processed to allow the listener
+        to persist its position for recovery.
 
         Args:
             sequence: The sequence number to store.
@@ -126,6 +200,26 @@ class ReliableTopicProxy(Proxy, Generic[E]):
     """Proxy for Hazelcast Reliable Topic distributed data structure.
 
     A reliable publish-subscribe messaging structure backed by a ringbuffer.
+    Unlike regular Topic, ReliableTopic guarantees message ordering and
+    provides at-least-once delivery semantics.
+
+    Type Parameters:
+        E: The type of messages in this topic.
+
+    Attributes:
+        name: The name of this reliable topic.
+        config: The configuration for this topic.
+
+    Example:
+        Basic publish-subscribe::
+
+            topic = client.get_reliable_topic("events")
+
+            def handler(msg):
+                print(f"Received: {msg.message}")
+
+            topic.add_message_listener(on_message=handler)
+            topic.publish("Hello, reliable world!")
     """
 
     SERVICE_NAME = "hz:impl:reliableTopicService"

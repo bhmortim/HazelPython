@@ -41,7 +41,23 @@ class _CallbackItemListener(ItemListener[Any]):
 class SetProxy(Proxy, Generic[E]):
     """Proxy for Hazelcast ISet distributed data structure.
 
-    A distributed, non-duplicating collection.
+    A distributed, non-duplicating collection that provides set semantics
+    across the cluster. Items are stored without duplicates.
+
+    Type Parameters:
+        E: The element type stored in the set.
+
+    Attributes:
+        name: The name of this distributed set.
+
+    Example:
+        Basic set operations::
+
+            my_set = client.get_set("unique-items")
+            my_set.add("item1")
+            my_set.add("item2")
+            my_set.add("item1")  # Ignored, already exists
+            print(my_set.size())  # Output: 2
     """
 
     SERVICE_NAME = "hz:impl:setService"
@@ -54,10 +70,17 @@ class SetProxy(Proxy, Generic[E]):
         """Add an item to the set.
 
         Args:
-            item: The item to add.
+            item: The item to add. Must be serializable.
 
         Returns:
-            True if the item was added (not a duplicate).
+            True if the item was added, False if it was a duplicate.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> added = my_set.add("new_item")
+            >>> print(f"Was added: {added}")
         """
         return self.add_async(item).result()
 
@@ -82,7 +105,13 @@ class SetProxy(Proxy, Generic[E]):
             item: The item to remove.
 
         Returns:
-            True if the item was removed.
+            True if the item was removed, False if not found.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> removed = my_set.remove("old_item")
         """
         return self.remove_async(item).result()
 
@@ -107,7 +136,14 @@ class SetProxy(Proxy, Generic[E]):
             item: The item to check.
 
         Returns:
-            True if the item is in the set.
+            True if the item is in the set, False otherwise.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> if my_set.contains("item"):
+            ...     print("Found!")
         """
         return self.contains_async(item).result()
 
@@ -130,6 +166,13 @@ class SetProxy(Proxy, Generic[E]):
 
         Returns:
             The number of items in the set.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> count = my_set.size()
+            >>> print(f"Set has {count} items")
         """
         return self.size_async().result()
 
@@ -164,7 +207,17 @@ class SetProxy(Proxy, Generic[E]):
         return future
 
     def clear(self) -> None:
-        """Clear the set."""
+        """Clear the set.
+
+        Removes all items from the set.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> my_set.clear()
+            >>> assert my_set.size() == 0
+        """
         self.clear_async().result()
 
     def clear_async(self) -> Future:
@@ -182,7 +235,15 @@ class SetProxy(Proxy, Generic[E]):
         """Get all items in the set.
 
         Returns:
-            A list of all items.
+            A list containing all items in the set.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> items = my_set.get_all()
+            >>> for item in items:
+            ...     print(item)
         """
         return self.get_all_async().result()
 
@@ -283,7 +344,23 @@ class SetProxy(Proxy, Generic[E]):
 class ListProxy(Proxy, Generic[E]):
     """Proxy for Hazelcast IList distributed data structure.
 
-    A distributed, ordered collection that allows duplicates.
+    A distributed, ordered collection that allows duplicates. Items
+    are stored in insertion order and can be accessed by index.
+
+    Type Parameters:
+        E: The element type stored in the list.
+
+    Attributes:
+        name: The name of this distributed list.
+
+    Example:
+        Basic list operations::
+
+            my_list = client.get_list("items")
+            my_list.add("first")
+            my_list.add("second")
+            my_list.add_at(1, "inserted")
+            print(my_list.get(0))  # Output: first
     """
 
     SERVICE_NAME = "hz:impl:listService"
@@ -320,9 +397,19 @@ class ListProxy(Proxy, Generic[E]):
     def add_at(self, index: int, item: E) -> None:
         """Add an item at a specific index.
 
+        Inserts the item at the specified index, shifting subsequent
+        elements to the right.
+
         Args:
-            index: The index to add at.
+            index: The index to add at (0-based).
             item: The item to add.
+
+        Raises:
+            IllegalStateException: If the list has been destroyed.
+            IndexError: If the index is out of range.
+
+        Example:
+            >>> my_list.add_at(0, "new_first")
         """
         self.add_at_async(index, item).result()
 
@@ -345,10 +432,18 @@ class ListProxy(Proxy, Generic[E]):
         """Get the item at a specific index.
 
         Args:
-            index: The index.
+            index: The index (0-based).
 
         Returns:
-            The item at the index.
+            The item at the specified index.
+
+        Raises:
+            IllegalStateException: If the list has been destroyed.
+            IndexError: If the index is out of range.
+
+        Example:
+            >>> item = my_list.get(0)
+            >>> print(f"First item: {item}")
         """
         return self.get_async(index).result()
 
@@ -369,12 +464,22 @@ class ListProxy(Proxy, Generic[E]):
     def set(self, index: int, item: E) -> E:
         """Set the item at a specific index.
 
+        Replaces the element at the specified position with the new item.
+
         Args:
-            index: The index.
-            item: The new item.
+            index: The index (0-based).
+            item: The new item to set.
 
         Returns:
-            The old item at the index.
+            The old item previously at the index.
+
+        Raises:
+            IllegalStateException: If the list has been destroyed.
+            IndexError: If the index is out of range.
+
+        Example:
+            >>> old = my_list.set(0, "replacement")
+            >>> print(f"Replaced: {old}")
         """
         return self.set_async(index, item).result()
 
@@ -421,11 +526,21 @@ class ListProxy(Proxy, Generic[E]):
     def remove_at(self, index: int) -> E:
         """Remove the item at a specific index.
 
+        Removes and returns the element at the specified position,
+        shifting subsequent elements to the left.
+
         Args:
-            index: The index.
+            index: The index (0-based).
 
         Returns:
             The removed item.
+
+        Raises:
+            IllegalStateException: If the list has been destroyed.
+            IndexError: If the index is out of range.
+
+        Example:
+            >>> removed = my_list.remove_at(0)
         """
         return self.remove_at_async(index).result()
 
@@ -475,7 +590,15 @@ class ListProxy(Proxy, Generic[E]):
             item: The item to find.
 
         Returns:
-            The index, or -1 if not found.
+            The index of the first occurrence, or -1 if not found.
+
+        Raises:
+            IllegalStateException: If the list has been destroyed.
+
+        Example:
+            >>> idx = my_list.index_of("target")
+            >>> if idx >= 0:
+            ...     print(f"Found at index {idx}")
         """
         return self.index_of_async(item).result()
 
@@ -496,12 +619,23 @@ class ListProxy(Proxy, Generic[E]):
     def sub_list(self, from_index: int, to_index: int) -> ListType[E]:
         """Get a sublist.
 
+        Returns a view of the portion of this list between the specified
+        indices.
+
         Args:
-            from_index: Starting index (inclusive).
+            from_index: Starting index (inclusive, 0-based).
             to_index: Ending index (exclusive).
 
         Returns:
-            The sublist.
+            A list containing elements from from_index to to_index-1.
+
+        Raises:
+            IllegalStateException: If the list has been destroyed.
+            IndexError: If indices are out of range.
+
+        Example:
+            >>> sub = my_list.sub_list(1, 4)
+            >>> print(f"Elements 1-3: {sub}")
         """
         return self.sub_list_async(from_index, to_index).result()
 

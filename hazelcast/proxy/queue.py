@@ -15,14 +15,39 @@ E = TypeVar("E")
 
 
 class ItemEventType(Enum):
-    """Type of item event."""
+    """Type of item event.
+
+    Indicates whether an item was added to or removed from a collection.
+
+    Attributes:
+        ADDED: An item was added to the collection.
+        REMOVED: An item was removed from the collection.
+    """
 
     ADDED = 1
     REMOVED = 2
 
 
 class ItemEvent(Generic[E]):
-    """Event fired when an item is added or removed from a queue."""
+    """Event fired when an item is added or removed from a queue.
+
+    Contains information about the item change event including the
+    event type, the item (if included), and the source.
+
+    Type Parameters:
+        E: The type of the item.
+
+    Attributes:
+        event_type: The type of event (ADDED or REMOVED).
+        item: The item that was added or removed (if include_value=True).
+        member: The cluster member that triggered the event.
+        name: The name of the source distributed object.
+
+    Example:
+        >>> def on_item(event: ItemEvent[str]):
+        ...     if event.event_type == ItemEventType.ADDED:
+        ...         print(f"Added: {event.item}")
+    """
 
     def __init__(
         self,
@@ -63,7 +88,19 @@ class ItemEvent(Generic[E]):
 class ItemListener(Generic[E]):
     """Listener for item events on queues and other collections.
 
-    Implement the methods you want to handle.
+    Implement the methods you want to handle. Methods not overridden
+    will be no-ops.
+
+    Type Parameters:
+        E: The type of items in the collection.
+
+    Example:
+        >>> class MyListener(ItemListener[str]):
+        ...     def item_added(self, event: ItemEvent[str]) -> None:
+        ...         print(f"Added: {event.item}")
+        ...
+        ...     def item_removed(self, event: ItemEvent[str]) -> None:
+        ...         print(f"Removed: {event.item}")
     """
 
     def item_added(self, event: ItemEvent[E]) -> None:
@@ -86,7 +123,24 @@ class ItemListener(Generic[E]):
 class QueueProxy(Proxy, Generic[E]):
     """Proxy for Hazelcast IQueue distributed data structure.
 
-    A distributed, blocking queue implementation.
+    A distributed, blocking queue implementation that provides FIFO
+    ordering across the cluster. Supports blocking operations like
+    take() and put() for producer-consumer patterns.
+
+    Type Parameters:
+        E: The element type stored in the queue.
+
+    Attributes:
+        name: The name of this distributed queue.
+
+    Example:
+        Basic queue operations::
+
+            queue = client.get_queue("tasks")
+            queue.offer("task-1")
+            queue.put("task-2")
+            task = queue.poll(timeout=5)
+            print(f"Got task: {task}")
     """
 
     SERVICE_NAME = "hz:impl:queueService"
@@ -123,12 +177,24 @@ class QueueProxy(Proxy, Generic[E]):
     def offer(self, item: E, timeout: float = 0) -> bool:
         """Offer an item to the queue.
 
+        Inserts the item if possible, optionally waiting for space.
+
         Args:
-            item: The item to offer.
+            item: The item to offer. Must be serializable.
             timeout: Maximum time to wait in seconds if queue is full.
+                Use 0 for no wait (default).
 
         Returns:
             True if the item was added, False if timeout elapsed.
+
+        Raises:
+            IllegalStateException: If the queue has been destroyed.
+
+        Example:
+            >>> if queue.offer("task", timeout=5):
+            ...     print("Task added")
+            ... else:
+            ...     print("Queue full, timed out")
         """
         return self.offer_async(item, timeout).result()
 
@@ -155,8 +221,16 @@ class QueueProxy(Proxy, Generic[E]):
     def put(self, item: E) -> None:
         """Put an item in the queue, waiting if necessary.
 
+        Blocks until space is available in the queue.
+
         Args:
-            item: The item to put.
+            item: The item to put. Must be serializable.
+
+        Raises:
+            IllegalStateException: If the queue has been destroyed.
+
+        Example:
+            >>> queue.put("blocking-task")
         """
         self.put_async(item).result()
 
@@ -177,11 +251,22 @@ class QueueProxy(Proxy, Generic[E]):
     def poll(self, timeout: float = 0) -> Optional[E]:
         """Poll an item from the queue.
 
+        Retrieves and removes the head of the queue, optionally waiting.
+
         Args:
             timeout: Maximum time to wait in seconds if queue is empty.
+                Use 0 for no wait (default).
 
         Returns:
-            The item, or None if timeout elapsed.
+            The head item, or None if timeout elapsed or queue is empty.
+
+        Raises:
+            IllegalStateException: If the queue has been destroyed.
+
+        Example:
+            >>> item = queue.poll(timeout=10)
+            >>> if item:
+            ...     process(item)
         """
         return self.poll_async(timeout).result()
 
@@ -207,8 +292,18 @@ class QueueProxy(Proxy, Generic[E]):
     def take(self) -> E:
         """Take an item from the queue, waiting if necessary.
 
+        Retrieves and removes the head of the queue, blocking until
+        an item becomes available.
+
         Returns:
-            The item.
+            The head item.
+
+        Raises:
+            IllegalStateException: If the queue has been destroyed.
+
+        Example:
+            >>> item = queue.take()  # Blocks until available
+            >>> process(item)
         """
         return self.take_async().result()
 
@@ -231,7 +326,15 @@ class QueueProxy(Proxy, Generic[E]):
         """Peek at the head of the queue without removing.
 
         Returns:
-            The head item, or None if empty.
+            The head item, or None if the queue is empty.
+
+        Raises:
+            IllegalStateException: If the queue has been destroyed.
+
+        Example:
+            >>> head = queue.peek()
+            >>> if head:
+            ...     print(f"Next item: {head}")
         """
         return self.peek_async().result()
 
@@ -340,12 +443,22 @@ class QueueProxy(Proxy, Generic[E]):
     def drain_to(self, target: List[E], max_elements: int = -1) -> int:
         """Drain items to a collection.
 
+        Removes all available elements and adds them to the target list.
+
         Args:
-            target: The collection to drain to.
-            max_elements: Maximum number of elements to drain. -1 for all.
+            target: The list to drain items to.
+            max_elements: Maximum number of elements to drain. Use -1 for all.
 
         Returns:
             The number of items drained.
+
+        Raises:
+            IllegalStateException: If the queue has been destroyed.
+
+        Example:
+            >>> batch = []
+            >>> count = queue.drain_to(batch, max_elements=100)
+            >>> print(f"Drained {count} items")
         """
         return self.drain_to_async(target, max_elements).result()
 

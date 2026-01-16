@@ -1,4 +1,33 @@
-"""Hazelcast distributed data structure proxies."""
+"""Hazelcast distributed data structure proxies.
+
+This package provides proxy classes for interacting with Hazelcast
+distributed data structures. Each proxy represents a client-side
+handle to a server-side distributed object.
+
+Available Data Structures:
+    - MapProxy: Distributed key-value map
+    - MultiMapProxy: Map with multiple values per key
+    - ReplicatedMapProxy: Fully replicated map
+    - QueueProxy: Distributed blocking queue
+    - SetProxy: Distributed set (no duplicates)
+    - ListProxy: Distributed ordered list
+    - RingbufferProxy: Bounded circular buffer
+    - TopicProxy: Publish-subscribe messaging
+    - ReliableTopicProxy: Reliable pub-sub with ordering
+    - PNCounterProxy: CRDT counter
+    - CardinalityEstimator: HyperLogLog cardinality estimation
+    - ExecutorServiceProxy: Distributed task execution
+    - ScheduledExecutorServiceProxy: Scheduled task execution
+    - DurableExecutorService: Durable task execution
+    - Cache: JCache-compliant distributed cache
+    - VectorCollection: Vector similarity search
+
+Example:
+    >>> from hazelcast import HazelcastClient
+    >>> client = HazelcastClient()
+    >>> my_map = client.get_map("my-map")
+    >>> my_map.put("key", "value")
+"""
 
 from hazelcast.proxy.base import Proxy, DistributedObject, ProxyContext
 from hazelcast.proxy.map import MapProxy, EntryEvent, EntryListener

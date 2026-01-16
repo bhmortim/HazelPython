@@ -25,7 +25,17 @@ E = TypeVar("E")
 
 
 class OverflowPolicy(Enum):
-    """Overflow policy for ringbuffer when full."""
+    """Overflow policy for ringbuffer when full.
+
+    Determines the behavior when adding items to a full ringbuffer.
+
+    Attributes:
+        OVERWRITE: Overwrite the oldest items when the buffer is full.
+        FAIL: Fail the add operation when the buffer is full.
+
+    Example:
+        >>> rb.add("item", OverflowPolicy.OVERWRITE)
+    """
 
     OVERWRITE = 0
     FAIL = 1
@@ -37,6 +47,26 @@ class RingbufferProxy(Proxy, Generic[E]):
     A ringbuffer is a bounded data structure with a fixed capacity.
     Items are stored with sequence numbers that increase monotonically.
     When the buffer is full, the overflow policy determines behavior.
+
+    Ringbuffers are ideal for:
+    - Event sourcing and audit logs
+    - Reliable messaging (backing ReliableTopic)
+    - Time-series data with bounded retention
+
+    Type Parameters:
+        E: The element type stored in the ringbuffer.
+
+    Attributes:
+        name: The name of this distributed ringbuffer.
+
+    Example:
+        Basic ringbuffer usage::
+
+            rb = client.get_ringbuffer("events")
+            seq = rb.add("event-1")
+            seq = rb.add("event-2")
+            item = rb.read_one(seq)
+            print(f"Read: {item}")
     """
 
     SERVICE_NAME = "hz:impl:ringbufferService"
@@ -164,11 +194,19 @@ class RingbufferProxy(Proxy, Generic[E]):
         """Add an item to the ringbuffer.
 
         Args:
-            item: The item to add.
-            overflow_policy: Policy when the buffer is full.
+            item: The item to add. Must be serializable.
+            overflow_policy: Policy when the buffer is full. Defaults to OVERWRITE.
 
         Returns:
-            The sequence number of the added item, or -1 if failed with FAIL policy.
+            The sequence number of the added item, or -1 if the buffer is
+            full and FAIL policy is used.
+
+        Raises:
+            IllegalStateException: If the ringbuffer has been destroyed.
+
+        Example:
+            >>> seq = rb.add("my-event", OverflowPolicy.OVERWRITE)
+            >>> print(f"Added at sequence: {seq}")
         """
         return self.add_async(item, overflow_policy).result()
 
@@ -269,14 +307,21 @@ class RingbufferProxy(Proxy, Generic[E]):
         """Read a single item at the given sequence.
 
         Args:
-            sequence: The sequence to read.
+            sequence: The sequence number to read.
 
         Returns:
-            The item at the sequence.
+            The item at the specified sequence.
 
         Raises:
-            StaleSequenceException: If the sequence is older than the head.
-            IllegalArgumentException: If the sequence is beyond the tail.
+            StaleSequenceException: If the sequence is older than the head
+                (data has been overwritten).
+            IllegalArgumentException: If the sequence is beyond the tail
+                (data doesn't exist yet).
+            IllegalStateException: If the ringbuffer has been destroyed.
+
+        Example:
+            >>> item = rb.read_one(100)
+            >>> print(f"Event at seq 100: {item}")
         """
         return self.read_one_async(sequence).result()
 
@@ -328,14 +373,28 @@ class RingbufferProxy(Proxy, Generic[E]):
     ) -> "ReadResultSet[E]":
         """Read multiple items starting from a sequence.
 
+        Reads a batch of items from the ringbuffer for efficient
+        bulk retrieval.
+
         Args:
-            start_sequence: The sequence to start reading from.
-            min_count: Minimum number of items to read.
-            max_count: Maximum number of items to read.
+            start_sequence: The sequence number to start reading from.
+            min_count: Minimum number of items to read (blocks until available).
+            max_count: Maximum number of items to read in one batch.
             filter_predicate: Optional predicate to filter items.
 
         Returns:
-            A ReadResultSet containing the items.
+            A ReadResultSet containing the items and metadata.
+
+        Raises:
+            StaleSequenceException: If start_sequence is older than head.
+            IllegalArgumentException: If min_count < 0 or max_count < min_count.
+            IllegalStateException: If the ringbuffer has been destroyed.
+
+        Example:
+            >>> result = rb.read_many(0, 1, 100)
+            >>> for item in result:
+            ...     print(item)
+            >>> print(f"Next sequence: {result.next_sequence_to_read}")
         """
         return self.read_many_async(start_sequence, min_count, max_count, filter_predicate).result()
 
@@ -405,7 +464,25 @@ class RingbufferProxy(Proxy, Generic[E]):
 
 
 class ReadResultSet(Generic[E]):
-    """Result set from a ringbuffer read_many operation."""
+    """Result set from a ringbuffer read_many operation.
+
+    Contains the items read from the ringbuffer along with metadata
+    for pagination and sequence tracking.
+
+    Type Parameters:
+        E: The element type.
+
+    Attributes:
+        items: The list of items read.
+        read_count: The number of items read.
+        next_sequence_to_read: The next sequence to continue reading from.
+
+    Example:
+        >>> result = rb.read_many(0, 1, 100)
+        >>> print(f"Read {result.read_count} items")
+        >>> for item in result:
+        ...     print(item)
+    """
 
     def __init__(
         self,

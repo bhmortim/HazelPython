@@ -23,14 +23,21 @@ class VectorCollection(Proxy):
     - Image/audio similarity search
     - RAG (Retrieval Augmented Generation) applications
 
+    Attributes:
+        name: The name of this vector collection.
+
     Example:
-        >>> vc = client.get_vector_collection("embeddings")
-        >>> # Store a vector
-        >>> vc.put("doc-1", [0.1, 0.2, 0.3, 0.4], {"title": b"My Document"})
-        >>> # Search for similar vectors
-        >>> results = vc.search([0.15, 0.25, 0.35, 0.45], limit=10)
-        >>> for result in results:
-        ...     print(f"Score: {result.score}, Key: {result.key}")
+        Basic vector operations::
+
+            vc = client.get_vector_collection("embeddings")
+
+            # Store a vector
+            vc.put("doc-1", [0.1, 0.2, 0.3, 0.4], {"title": b"My Document"})
+
+            # Search for similar vectors
+            results = vc.search([0.15, 0.25, 0.35, 0.45], limit=10)
+            for result in results:
+                print(f"Score: {result.score}, Key: {result.key}")
     """
 
     def __init__(self, service_name: str, name: str, context: "ProxyContext"):
@@ -54,13 +61,16 @@ class VectorCollection(Proxy):
         If a vector with the same key already exists, it will be replaced.
 
         Args:
-            key: The unique identifier for the vector.
+            key: The unique identifier for the vector. Must be serializable.
             vector: The vector data as a list of floats.
             metadata: Optional dictionary of metadata key-value pairs.
                 Values will be serialized using the configured serializer.
 
         Returns:
             The previous key if it existed, None otherwise.
+
+        Raises:
+            IllegalStateException: If the collection has been destroyed.
 
         Example:
             >>> vc.put("user-embedding-123", [0.1, 0.2, 0.3], {"user_id": b"123"})
@@ -105,6 +115,9 @@ class VectorCollection(Proxy):
         Returns:
             A VectorDocument containing the vector and metadata,
             or None if not found.
+
+        Raises:
+            IllegalStateException: If the collection has been destroyed.
 
         Example:
             >>> doc = vc.get("user-embedding-123")
@@ -159,6 +172,9 @@ class VectorCollection(Proxy):
             A list of VectorSearchResult objects sorted by similarity
             score (highest first).
 
+        Raises:
+            IllegalStateException: If the collection has been destroyed.
+
         Example:
             >>> results = vc.search([0.1, 0.2, 0.3], limit=5)
             >>> for result in results:
@@ -206,6 +222,9 @@ class VectorCollection(Proxy):
         Returns:
             True if the vector was deleted, False if it didn't exist.
 
+        Raises:
+            IllegalStateException: If the collection has been destroyed.
+
         Example:
             >>> deleted = vc.delete("user-embedding-123")
             >>> print(f"Was deleted: {deleted}")
@@ -235,6 +254,9 @@ class VectorCollection(Proxy):
         Returns:
             The number of vectors stored in the collection.
 
+        Raises:
+            IllegalStateException: If the collection has been destroyed.
+
         Example:
             >>> count = vc.size()
             >>> print(f"Collection has {count} vectors")
@@ -257,6 +279,9 @@ class VectorCollection(Proxy):
     def clear(self) -> None:
         """Remove all vectors from the collection.
 
+        Raises:
+            IllegalStateException: If the collection has been destroyed.
+
         Example:
             >>> vc.clear()
             >>> assert vc.size() == 0
@@ -278,6 +303,9 @@ class VectorCollection(Proxy):
         This operation rebuilds the internal index structure to improve
         search accuracy and performance. It should be called after
         bulk insertions or deletions.
+
+        Raises:
+            IllegalStateException: If the collection has been destroyed.
 
         Note:
             This is a potentially expensive operation and should not

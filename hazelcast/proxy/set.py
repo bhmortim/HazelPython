@@ -16,7 +16,23 @@ E = TypeVar("E")
 class SetProxy(Proxy, Generic[E]):
     """Proxy for Hazelcast ISet distributed data structure.
 
-    A distributed, non-duplicating collection.
+    A distributed, non-duplicating collection that provides set semantics
+    across the cluster. Items are stored without duplicates.
+
+    Type Parameters:
+        E: The element type stored in the set.
+
+    Attributes:
+        name: The name of this distributed set.
+
+    Example:
+        Basic set operations::
+
+            my_set = client.get_set("unique-ids")
+            my_set.add("id-1")
+            my_set.add("id-2")
+            if my_set.contains("id-1"):
+                print("Found!")
     """
 
     SERVICE_NAME = "hz:impl:setService"
@@ -29,10 +45,16 @@ class SetProxy(Proxy, Generic[E]):
         """Add an item to the set.
 
         Args:
-            item: The item to add.
+            item: The item to add. Must be serializable.
 
         Returns:
-            True if the item was added (not a duplicate).
+            True if the item was added, False if it was a duplicate.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> added = my_set.add("new_item")
         """
         return self.add_async(item).result()
 
@@ -90,7 +112,13 @@ class SetProxy(Proxy, Generic[E]):
             item: The item to remove.
 
         Returns:
-            True if the item was removed.
+            True if the item was removed, False if not found.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> removed = my_set.remove("old_item")
         """
         return self.remove_async(item).result()
 
@@ -148,7 +176,14 @@ class SetProxy(Proxy, Generic[E]):
             item: The item to check.
 
         Returns:
-            True if the item is in the set.
+            True if the item is in the set, False otherwise.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> if my_set.contains("item"):
+            ...     print("Found!")
         """
         return self.contains_async(item).result()
 
@@ -233,6 +268,12 @@ class SetProxy(Proxy, Generic[E]):
 
         Returns:
             The number of items in the set.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> count = my_set.size()
         """
         return self.size_async().result()
 
@@ -273,7 +314,16 @@ class SetProxy(Proxy, Generic[E]):
         return self._invoke(request, handle_response)
 
     def clear(self) -> None:
-        """Clear the set."""
+        """Clear the set.
+
+        Removes all items from the set.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> my_set.clear()
+        """
         self.clear_async().result()
 
     def clear_async(self) -> Future:
@@ -290,7 +340,13 @@ class SetProxy(Proxy, Generic[E]):
         """Get all items in the set.
 
         Returns:
-            A list of all items.
+            A list containing all items in the set.
+
+        Raises:
+            IllegalStateException: If the set has been destroyed.
+
+        Example:
+            >>> items = my_set.get_all()
         """
         return self.get_all_async().result()
 
