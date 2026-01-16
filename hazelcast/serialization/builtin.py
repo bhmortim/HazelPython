@@ -93,7 +93,10 @@ class BoolSerializer(Serializer[bool]):
 
 
 class ByteSerializer(Serializer[int]):
-    """Serializer for byte values."""
+    """Serializer for byte values.
+
+    Serializes Python int as a single signed byte (-128 to 127).
+    """
 
     @property
     def type_id(self) -> int:
@@ -107,7 +110,10 @@ class ByteSerializer(Serializer[int]):
 
 
 class ShortSerializer(Serializer[int]):
-    """Serializer for short values."""
+    """Serializer for 16-bit short integer values.
+
+    Serializes Python int as a 16-bit signed short (-32768 to 32767).
+    """
 
     @property
     def type_id(self) -> int:
@@ -143,7 +149,11 @@ class IntSerializer(Serializer[int]):
 
 
 class LongSerializer(Serializer[int]):
-    """Serializer for long values."""
+    """Serializer for 64-bit long integer values.
+
+    Serializes Python int as a 64-bit signed long. Use this for integers
+    outside the 32-bit range (-2^63 to 2^63-1).
+    """
 
     @property
     def type_id(self) -> int:
@@ -157,7 +167,10 @@ class LongSerializer(Serializer[int]):
 
 
 class FloatSerializer(Serializer[float]):
-    """Serializer for float values."""
+    """Serializer for 32-bit float values.
+
+    Serializes Python float as a single-precision 32-bit IEEE 754 float.
+    """
 
     @property
     def type_id(self) -> int:
@@ -171,7 +184,11 @@ class FloatSerializer(Serializer[float]):
 
 
 class DoubleSerializer(Serializer[float]):
-    """Serializer for double precision float values."""
+    """Serializer for 64-bit double precision float values.
+
+    Serializes Python float as a double-precision 64-bit IEEE 754 float.
+    This is the default serializer for Python floats.
+    """
 
     @property
     def type_id(self) -> int:
@@ -202,7 +219,10 @@ class StringSerializer(Serializer[str]):
 
 
 class ByteArraySerializer(Serializer[bytes]):
-    """Serializer for byte array values."""
+    """Serializer for byte array values.
+
+    Serializes Python bytes and bytearray as length-prefixed byte sequences.
+    """
 
     @property
     def type_id(self) -> int:
@@ -267,7 +287,11 @@ class DictSerializer(Serializer[dict]):
 
 
 class UUIDSerializer(Serializer):
-    """Serializer for UUID values."""
+    """Serializer for UUID values.
+
+    Serializes Python uuid.UUID as two 64-bit longs (most significant
+    and least significant bits), compatible with Java's UUID format.
+    """
 
     @property
     def type_id(self) -> int:

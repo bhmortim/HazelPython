@@ -1,33 +1,11 @@
-Serialization API
-=================
+Serialization
+=============
 
-JSON Serialization
-------------------
+This section covers the serialization system for the Hazelcast Python Client.
 
-.. autoclass:: hazelcast.serialization.json.HazelcastJsonValue
-   :members:
-   :undoc-members:
+.. toctree::
+   :maxdepth: 2
 
-Compact Serialization
----------------------
-
-.. autoclass:: hazelcast.serialization.compact.CompactSerializer
-   :members:
-   :undoc-members:
-
-.. autoclass:: hazelcast.serialization.compact.GenericRecord
-   :members:
-   :undoc-members:
-
-Portable Serialization
-----------------------
-
-Portable serialization provides cross-language interoperability
-and partial deserialization capabilities.
-
-Configuration
-~~~~~~~~~~~~~
-
-.. autoclass:: hazelcast.config.SerializationConfig
-   :members:
-   :undoc-members:
+   serialization_api
+   serialization_builtin
+   serialization_service
