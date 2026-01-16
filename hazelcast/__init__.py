@@ -47,6 +47,13 @@ from hazelcast.proxy import (
     ReliableTopicConfig,
     PNCounterProxy,
     CardinalityEstimatorProxy,
+    IExecutorService,
+    ExecutorServiceProxy,
+    Callable,
+    Runnable,
+    ExecutionCallback,
+    MultiExecutionCallback,
+    Member,
 )
 from hazelcast.predicate import (
     Predicate,
@@ -164,6 +171,14 @@ __all__ = [
     "PNCounterProxy",
     # CardinalityEstimator
     "CardinalityEstimatorProxy",
+    # Executor Service
+    "IExecutorService",
+    "ExecutorServiceProxy",
+    "Callable",
+    "Runnable",
+    "ExecutionCallback",
+    "MultiExecutionCallback",
+    "Member",
     # Predicates
     "Predicate",
     "SqlPredicate",

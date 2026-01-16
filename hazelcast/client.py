@@ -34,6 +34,7 @@ from hazelcast.proxy.base import DistributedObject, Proxy, ProxyContext
 
 if TYPE_CHECKING:
     from hazelcast.proxy.map import Map
+    from hazelcast.proxy.executor import IExecutorService
     from hazelcast.proxy.queue import Queue
     from hazelcast.proxy.collections import Set, List as HzList
     from hazelcast.proxy.multi_map import MultiMap
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 
 
 SERVICE_NAME_MAP = "hz:impl:mapService"
+SERVICE_NAME_EXECUTOR = "hz:impl:executorService"
 SERVICE_NAME_CARDINALITY_ESTIMATOR = "hz:impl:cardinalityEstimatorService"
 SERVICE_NAME_QUEUE = "hz:impl:queueService"
 SERVICE_NAME_SET = "hz:impl:setService"
@@ -900,6 +902,30 @@ class HazelcastClient:
         """
         from hazelcast.cp.sync import Semaphore
         return self._get_or_create_proxy(SERVICE_NAME_SEMAPHORE, name, Semaphore)
+
+    def get_executor_service(self, name: str) -> "IExecutorService":
+        """Get or create a distributed IExecutorService.
+
+        Returns a proxy to a distributed executor service that can execute
+        tasks on cluster members. Tasks can be submitted to specific members,
+        to the owner of a key (for data locality), or to all members.
+
+        Args:
+            name: Name of the distributed executor service.
+
+        Returns:
+            IExecutorService instance for executing tasks.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> executor = client.get_executor_service("my-executor")
+            >>> future = executor.submit_to_key_owner(my_task, "user:123")
+            >>> result = future.result()
+        """
+        from hazelcast.proxy.executor import IExecutorService
+        return self._get_or_create_proxy(SERVICE_NAME_EXECUTOR, name, IExecutorService)
 
     def get_fenced_lock(self, name: str) -> "FencedLock":
         """Get or create a CP FencedLock.

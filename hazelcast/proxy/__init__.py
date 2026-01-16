@@ -23,6 +23,16 @@ from hazelcast.proxy.cardinality_estimator import (
     CardinalityEstimator,
     CardinalityEstimatorProxy,
 )
+from hazelcast.proxy.executor import (
+    IExecutorService,
+    ExecutorService,
+    ExecutorServiceProxy,
+    Callable,
+    Runnable,
+    ExecutionCallback,
+    MultiExecutionCallback,
+    Member,
+)
 from hazelcast.processor import (
     EntryProcessor,
     EntryProcessorEntry,
@@ -71,6 +81,15 @@ __all__ = [
     # CardinalityEstimator
     "CardinalityEstimator",
     "CardinalityEstimatorProxy",
+    # Executor Service
+    "IExecutorService",
+    "ExecutorService",
+    "ExecutorServiceProxy",
+    "Callable",
+    "Runnable",
+    "ExecutionCallback",
+    "MultiExecutionCallback",
+    "Member",
     # Entry Processor
     "EntryProcessor",
     "EntryProcessorEntry",
