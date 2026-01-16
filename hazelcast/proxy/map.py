@@ -27,6 +27,7 @@ from hazelcast.event_journal import (
     EventType,
     ReadResultSet,
 )
+from hazelcast.query_cache import QueryCache
 try:
     from hazelcast.predicate import Predicate
 except ImportError:
@@ -34,7 +35,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from hazelcast.near_cache import NearCache
-    from hazelcast.config import NearCacheConfig
+    from hazelcast.config import NearCacheConfig, QueryCacheConfig
     from hazelcast.predicate import Predicate
     from hazelcast.aggregator import Aggregator
     from hazelcast.protocol.client_message import ClientMessage
@@ -322,6 +323,8 @@ class MapProxy(Proxy, Generic[K, V]):
         self._near_cache: Optional["NearCache"] = near_cache
         self._near_cache_invalidation_listener_id: Optional[str] = None
         self._reference_id_generator = _ReferenceIdGenerator()
+        self._query_caches: Dict[str, QueryCache] = {}
+        self._query_caches_lock = threading.Lock()
 
     @property
     def near_cache(self) -> Optional["NearCache"]:
@@ -366,6 +369,17 @@ class MapProxy(Proxy, Generic[K, V]):
         self._teardown_near_cache_invalidation()
         if self._near_cache is not None:
             self._near_cache.clear()
+        self._destroy_query_caches()
+
+    def _destroy_query_caches(self) -> None:
+        """Destroy all query caches for this map."""
+        with self._query_caches_lock:
+            for query_cache in list(self._query_caches.values()):
+                try:
+                    query_cache.destroy()
+                except Exception:
+                    pass
+            self._query_caches.clear()
 
     def put(self, key: K, value: V, ttl: float = -1) -> Optional[V]:
         """Set a key-value pair in the map.
@@ -1756,6 +1770,101 @@ class MapProxy(Proxy, Generic[K, V]):
             )
 
         return self._invoke(request, handle_response)
+
+    def get_query_cache(
+        self,
+        name: str,
+        config: Optional["QueryCacheConfig"] = None,
+        predicate: Optional[Any] = None,
+    ) -> QueryCache[K, V]:
+        """Get or create a query cache for this map.
+
+        A query cache maintains a local copy of map entries that match
+        a predicate. The cache is automatically updated when the
+        underlying map changes.
+
+        Args:
+            name: Name of the query cache. Must be unique within this map.
+            config: Optional query cache configuration. If None, a default
+                configuration is used.
+            predicate: Optional predicate for filtering entries. If provided,
+                this overrides the predicate in the config.
+
+        Returns:
+            A QueryCache instance for performing local queries.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            Basic usage::
+
+                query_cache = my_map.get_query_cache("active-users")
+                for key in query_cache:
+                    print(f"Active user: {key}")
+
+            With configuration::
+
+                from hazelcast.config import QueryCacheConfig, EvictionPolicy
+
+                config = QueryCacheConfig(name="high-value")
+                config.predicate = "value > 1000"
+                config.eviction_policy = EvictionPolicy.LRU
+                config.eviction_max_size = 1000
+
+                query_cache = my_map.get_query_cache("high-value", config)
+
+            With local indexing::
+
+                query_cache = my_map.get_query_cache("users")
+                query_cache.add_index("department")
+                engineering = query_cache.get_by_index("department", "Engineering")
+        """
+        self._check_not_destroyed()
+
+        with self._query_caches_lock:
+            if name in self._query_caches:
+                existing = self._query_caches[name]
+                if not existing.is_destroyed:
+                    return existing
+
+            from hazelcast.config import QueryCacheConfig as QCConfig
+
+            if config is None:
+                config = QCConfig(name=name)
+
+            effective_predicate = predicate if predicate is not None else None
+
+            query_cache: QueryCache[K, V] = QueryCache(
+                name=name,
+                map_proxy=self,
+                config=config,
+                predicate=effective_predicate,
+            )
+            self._query_caches[name] = query_cache
+
+            return query_cache
+
+    def destroy_query_cache(self, name: str) -> bool:
+        """Destroy a query cache by name.
+
+        Args:
+            name: Name of the query cache to destroy.
+
+        Returns:
+            True if the query cache was destroyed, False if not found.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+        """
+        self._check_not_destroyed()
+
+        with self._query_caches_lock:
+            query_cache = self._query_caches.pop(name, None)
+            if query_cache is not None:
+                query_cache.destroy()
+                return True
+            return False
 
     def submit_to_key(
         self,
