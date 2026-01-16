@@ -43,12 +43,14 @@ if TYPE_CHECKING:
     from hazelcast.proxy.reliable_topic import ReliableTopic
     from hazelcast.proxy.pn_counter import PNCounter
     from hazelcast.cp.atomic import AtomicLong, AtomicReference
+    from hazelcast.proxy.cardinality_estimator import CardinalityEstimator
     from hazelcast.cp.sync import CountDownLatch, Semaphore, FencedLock
     from hazelcast.sql.service import SqlService
     from hazelcast.jet.service import JetService
 
 
 SERVICE_NAME_MAP = "hz:impl:mapService"
+SERVICE_NAME_CARDINALITY_ESTIMATOR = "hz:impl:cardinalityEstimatorService"
 SERVICE_NAME_QUEUE = "hz:impl:queueService"
 SERVICE_NAME_SET = "hz:impl:setService"
 SERVICE_NAME_LIST = "hz:impl:listService"
@@ -780,6 +782,37 @@ class HazelcastClient:
         """
         from hazelcast.proxy.reliable_topic import ReliableTopic
         return self._get_or_create_proxy(SERVICE_NAME_RELIABLE_TOPIC, name, ReliableTopic)
+
+    def get_cardinality_estimator(self, name: str) -> "CardinalityEstimator":
+        """Get or create a distributed CardinalityEstimator.
+
+        Returns a proxy to a distributed cardinality estimator that uses
+        the HyperLogLog algorithm to estimate the number of distinct
+        elements added to it.
+
+        CardinalityEstimator is useful for counting unique visitors,
+        unique events, or any scenario requiring approximate distinct
+        counts with low memory overhead.
+
+        Args:
+            name: Name of the distributed cardinality estimator.
+
+        Returns:
+            CardinalityEstimator instance for cardinality estimation.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> estimator = client.get_cardinality_estimator("unique-visitors")
+            >>> estimator.add("user-1")
+            >>> estimator.add("user-2")
+            >>> count = estimator.estimate().result()
+        """
+        from hazelcast.proxy.cardinality_estimator import CardinalityEstimator
+        return self._get_or_create_proxy(
+            SERVICE_NAME_CARDINALITY_ESTIMATOR, name, CardinalityEstimator
+        )
 
     def get_pn_counter(self, name: str) -> "PNCounter":
         """Get or create a distributed PNCounter.

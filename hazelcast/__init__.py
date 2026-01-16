@@ -44,6 +44,7 @@ from hazelcast.proxy import (
     ReliableTopicProxy,
     ReliableTopicConfig,
     PNCounterProxy,
+    CardinalityEstimatorProxy,
 )
 from hazelcast.predicate import (
     Predicate,
@@ -141,6 +142,8 @@ __all__ = [
     "ReliableTopicConfig",
     # PNCounter
     "PNCounterProxy",
+    # CardinalityEstimator
+    "CardinalityEstimatorProxy",
     # Predicates
     "Predicate",
     "SqlPredicate",

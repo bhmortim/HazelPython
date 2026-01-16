@@ -245,6 +245,78 @@ class ListLongCodec:
         return result
 
 
+CARDINALITY_ESTIMATOR_ADD = 0x190100
+CARDINALITY_ESTIMATOR_ESTIMATE = 0x190200
+
+CARDINALITY_ESTIMATOR_RESPONSE_HEADER_SIZE = 22
+
+
+class CardinalityEstimatorCodec:
+    """Codec for CardinalityEstimator protocol messages."""
+
+    REQUEST_INITIAL_FRAME_SIZE = 22
+
+    @staticmethod
+    def encode_add_request(name: str, data: bytes) -> "ClientMessage":
+        """Encode an Add request message.
+
+        Args:
+            name: The name of the CardinalityEstimator.
+            data: The serialized value to add.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        initial_frame = Frame(bytearray(CardinalityEstimatorCodec.REQUEST_INITIAL_FRAME_SIZE))
+
+        request = ClientMessage.create_for_encode()
+        request.add_frame(initial_frame)
+        request.set_message_type(CARDINALITY_ESTIMATOR_ADD)
+        request.set_partition_id(-1)
+
+        StringCodec.encode(request, name)
+        DataCodec.encode(request, data)
+        return request
+
+    @staticmethod
+    def encode_estimate_request(name: str) -> "ClientMessage":
+        """Encode an Estimate request message.
+
+        Args:
+            name: The name of the CardinalityEstimator.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        initial_frame = Frame(bytearray(CardinalityEstimatorCodec.REQUEST_INITIAL_FRAME_SIZE))
+
+        request = ClientMessage.create_for_encode()
+        request.add_frame(initial_frame)
+        request.set_message_type(CARDINALITY_ESTIMATOR_ESTIMATE)
+        request.set_partition_id(-1)
+
+        StringCodec.encode(request, name)
+        return request
+
+    @staticmethod
+    def decode_estimate_response(msg: "ClientMessage") -> int:
+        """Decode an Estimate response message.
+
+        Args:
+            msg: The response ClientMessage.
+
+        Returns:
+            The estimated cardinality.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < CARDINALITY_ESTIMATOR_RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+
+        return FixSizedTypesCodec.decode_long(
+            frame.content, CARDINALITY_ESTIMATOR_RESPONSE_HEADER_SIZE
+        )[0]
+
+
 class EntryListCodec:
     """Codec for entry lists (key-value pairs)."""
 

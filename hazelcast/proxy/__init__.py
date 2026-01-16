@@ -19,6 +19,10 @@ from hazelcast.proxy.reliable_topic import (
     TopicOverloadPolicy,
 )
 from hazelcast.proxy.pn_counter import PNCounterProxy
+from hazelcast.proxy.cardinality_estimator import (
+    CardinalityEstimator,
+    CardinalityEstimatorProxy,
+)
 
 __all__ = [
     # Base
@@ -59,4 +63,7 @@ __all__ = [
     "TopicOverloadPolicy",
     # PNCounter
     "PNCounterProxy",
+    # CardinalityEstimator
+    "CardinalityEstimator",
+    "CardinalityEstimatorProxy",
 ]
