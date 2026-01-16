@@ -16,6 +16,14 @@ from hazelcast.config import (
     ReconnectMode,
     EvictionPolicy,
     InMemoryFormat,
+    IndexType,
+    IndexConfig,
+    BitmapIndexOptions,
+    UniqueKeyTransformation,
+    QueryCacheConfig,
+    WanReplicationConfig,
+    ClientUserCodeDeploymentConfig,
+    LocalUpdatePolicy,
 )
 from hazelcast.exceptions import ConfigurationException
 
@@ -508,3 +516,415 @@ class TestInMemoryFormat:
     def test_all_formats_defined(self):
         assert InMemoryFormat.BINARY.value == "BINARY"
         assert InMemoryFormat.OBJECT.value == "OBJECT"
+
+
+class TestIndexType:
+    """Tests for IndexType enum."""
+
+    def test_all_types_defined(self):
+        assert IndexType.SORTED.value == "SORTED"
+        assert IndexType.HASH.value == "HASH"
+        assert IndexType.BITMAP.value == "BITMAP"
+
+
+class TestLocalUpdatePolicy:
+    """Tests for LocalUpdatePolicy enum."""
+
+    def test_all_policies_defined(self):
+        assert LocalUpdatePolicy.INVALIDATE.value == "INVALIDATE"
+        assert LocalUpdatePolicy.CACHE_ON_UPDATE.value == "CACHE_ON_UPDATE"
+
+
+class TestUniqueKeyTransformation:
+    """Tests for UniqueKeyTransformation enum."""
+
+    def test_all_transformations_defined(self):
+        assert UniqueKeyTransformation.OBJECT.value == "OBJECT"
+        assert UniqueKeyTransformation.LONG.value == "LONG"
+        assert UniqueKeyTransformation.RAW.value == "RAW"
+
+
+class TestBitmapIndexOptions:
+    """Tests for BitmapIndexOptions."""
+
+    def test_default_values(self):
+        options = BitmapIndexOptions()
+        assert options.unique_key == "__key"
+        assert options.unique_key_transformation == UniqueKeyTransformation.OBJECT
+
+    def test_custom_values(self):
+        options = BitmapIndexOptions(
+            unique_key="myKey",
+            unique_key_transformation=UniqueKeyTransformation.LONG,
+        )
+        assert options.unique_key == "myKey"
+        assert options.unique_key_transformation == UniqueKeyTransformation.LONG
+
+    def test_empty_unique_key_validation(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            BitmapIndexOptions(unique_key="")
+        assert "unique_key cannot be empty" in str(exc_info.value)
+
+    def test_from_dict(self):
+        data = {"unique_key": "id", "unique_key_transformation": "RAW"}
+        options = BitmapIndexOptions.from_dict(data)
+        assert options.unique_key == "id"
+        assert options.unique_key_transformation == UniqueKeyTransformation.RAW
+
+    def test_from_dict_invalid_transformation(self):
+        data = {"unique_key_transformation": "INVALID"}
+        with pytest.raises(ConfigurationException) as exc_info:
+            BitmapIndexOptions.from_dict(data)
+        assert "Invalid unique_key_transformation" in str(exc_info.value)
+
+
+class TestIndexConfig:
+    """Tests for IndexConfig."""
+
+    def test_default_values(self):
+        config = IndexConfig(attributes=["name"])
+        assert config.name is None
+        assert config.type == IndexType.SORTED
+        assert config.attributes == ["name"]
+        assert config.bitmap_index_options is None
+
+    def test_custom_values(self):
+        config = IndexConfig(
+            name="my-index",
+            type=IndexType.HASH,
+            attributes=["field1", "field2"],
+        )
+        assert config.name == "my-index"
+        assert config.type == IndexType.HASH
+        assert config.attributes == ["field1", "field2"]
+
+    def test_empty_attributes_validation(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            IndexConfig(attributes=[])
+        assert "At least one attribute" in str(exc_info.value)
+
+    def test_add_attribute(self):
+        config = IndexConfig(attributes=["field1"])
+        config.add_attribute("field2")
+        assert "field2" in config.attributes
+
+    def test_bitmap_index_with_options(self):
+        options = BitmapIndexOptions(unique_key="id")
+        config = IndexConfig(
+            type=IndexType.BITMAP,
+            attributes=["status"],
+            bitmap_index_options=options,
+        )
+        assert config.type == IndexType.BITMAP
+        assert config.bitmap_index_options.unique_key == "id"
+
+    def test_from_dict(self):
+        data = {
+            "name": "idx",
+            "type": "HASH",
+            "attributes": ["col1"],
+        }
+        config = IndexConfig.from_dict(data)
+        assert config.name == "idx"
+        assert config.type == IndexType.HASH
+        assert config.attributes == ["col1"]
+
+    def test_from_dict_with_bitmap_options(self):
+        data = {
+            "type": "BITMAP",
+            "attributes": ["flag"],
+            "bitmap_index_options": {"unique_key": "pk"},
+        }
+        config = IndexConfig.from_dict(data)
+        assert config.type == IndexType.BITMAP
+        assert config.bitmap_index_options.unique_key == "pk"
+
+    def test_from_dict_invalid_type(self):
+        data = {"type": "INVALID", "attributes": ["a"]}
+        with pytest.raises(ConfigurationException) as exc_info:
+            IndexConfig.from_dict(data)
+        assert "Invalid index type" in str(exc_info.value)
+
+
+class TestQueryCacheConfig:
+    """Tests for QueryCacheConfig."""
+
+    def test_default_values(self):
+        config = QueryCacheConfig()
+        assert config.name == "default"
+        assert config.predicate is None
+        assert config.batch_size == 1
+        assert config.buffer_size == 16
+        assert config.delay_seconds == 0
+        assert config.in_memory_format == InMemoryFormat.BINARY
+        assert config.include_value is True
+        assert config.populate is True
+        assert config.coalesce is False
+        assert config.eviction_max_size == 10000
+        assert config.eviction_policy == EvictionPolicy.LRU
+
+    def test_custom_values(self):
+        config = QueryCacheConfig(
+            name="my-cache",
+            predicate="active = true",
+            batch_size=100,
+            buffer_size=32,
+            delay_seconds=5,
+            in_memory_format=InMemoryFormat.OBJECT,
+            include_value=False,
+            populate=False,
+            coalesce=True,
+        )
+        assert config.name == "my-cache"
+        assert config.predicate == "active = true"
+        assert config.batch_size == 100
+        assert config.in_memory_format == InMemoryFormat.OBJECT
+
+    def test_empty_name_validation(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            QueryCacheConfig(name="")
+        assert "name cannot be empty" in str(exc_info.value)
+
+    def test_invalid_batch_size(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            QueryCacheConfig(batch_size=0)
+        assert "batch_size must be at least 1" in str(exc_info.value)
+
+    def test_invalid_buffer_size(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            QueryCacheConfig(buffer_size=0)
+        assert "buffer_size must be at least 1" in str(exc_info.value)
+
+    def test_negative_delay_seconds(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            QueryCacheConfig(delay_seconds=-1)
+        assert "delay_seconds cannot be negative" in str(exc_info.value)
+
+    def test_invalid_eviction_max_size(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            QueryCacheConfig(eviction_max_size=0)
+        assert "eviction_max_size must be positive" in str(exc_info.value)
+
+    def test_from_dict(self):
+        data = {
+            "predicate": "status = 1",
+            "batch_size": 50,
+            "buffer_size": 64,
+            "in_memory_format": "OBJECT",
+            "coalesce": True,
+            "eviction_policy": "LFU",
+        }
+        config = QueryCacheConfig.from_dict("test-qc", data)
+        assert config.name == "test-qc"
+        assert config.predicate == "status = 1"
+        assert config.batch_size == 50
+        assert config.in_memory_format == InMemoryFormat.OBJECT
+        assert config.coalesce is True
+        assert config.eviction_policy == EvictionPolicy.LFU
+
+    def test_from_dict_invalid_in_memory_format(self):
+        data = {"in_memory_format": "INVALID"}
+        with pytest.raises(ConfigurationException) as exc_info:
+            QueryCacheConfig.from_dict("test", data)
+        assert "Invalid in_memory_format" in str(exc_info.value)
+
+
+class TestWanReplicationConfig:
+    """Tests for WanReplicationConfig."""
+
+    def test_default_values(self):
+        config = WanReplicationConfig()
+        assert config.cluster_name == "dev"
+        assert config.endpoints == []
+        assert config.queue_capacity == 10000
+        assert config.batch_size == 500
+        assert config.batch_max_delay_millis == 1000
+        assert config.response_timeout_millis == 60000
+        assert config.acknowledge_type == "ACK_ON_OPERATION_COMPLETE"
+
+    def test_custom_values(self):
+        config = WanReplicationConfig(
+            cluster_name="remote-dc",
+            endpoints=["10.0.0.1:5701", "10.0.0.2:5701"],
+            queue_capacity=50000,
+            batch_size=1000,
+            acknowledge_type="ACK_ON_RECEIPT",
+        )
+        assert config.cluster_name == "remote-dc"
+        assert len(config.endpoints) == 2
+        assert config.queue_capacity == 50000
+        assert config.acknowledge_type == "ACK_ON_RECEIPT"
+
+    def test_empty_cluster_name_validation(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            WanReplicationConfig(cluster_name="")
+        assert "cluster_name cannot be empty" in str(exc_info.value)
+
+    def test_invalid_queue_capacity(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            WanReplicationConfig(queue_capacity=0)
+        assert "queue_capacity must be positive" in str(exc_info.value)
+
+    def test_invalid_batch_size(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            WanReplicationConfig(batch_size=0)
+        assert "batch_size must be positive" in str(exc_info.value)
+
+    def test_negative_batch_max_delay(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            WanReplicationConfig(batch_max_delay_millis=-1)
+        assert "batch_max_delay_millis cannot be negative" in str(exc_info.value)
+
+    def test_invalid_response_timeout(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            WanReplicationConfig(response_timeout_millis=0)
+        assert "response_timeout_millis must be positive" in str(exc_info.value)
+
+    def test_invalid_acknowledge_type(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            WanReplicationConfig(acknowledge_type="INVALID")
+        assert "Invalid acknowledge_type" in str(exc_info.value)
+
+    def test_add_endpoint(self):
+        config = WanReplicationConfig()
+        config.add_endpoint("node1:5701")
+        config.add_endpoint("node2:5701")
+        assert len(config.endpoints) == 2
+        assert "node1:5701" in config.endpoints
+
+    def test_from_dict(self):
+        data = {
+            "cluster_name": "wan-cluster",
+            "endpoints": ["host1:5701"],
+            "queue_capacity": 20000,
+            "batch_size": 250,
+            "acknowledge_type": "ACK_ON_RECEIPT",
+        }
+        config = WanReplicationConfig.from_dict(data)
+        assert config.cluster_name == "wan-cluster"
+        assert config.endpoints == ["host1:5701"]
+        assert config.queue_capacity == 20000
+        assert config.acknowledge_type == "ACK_ON_RECEIPT"
+
+
+class TestClientUserCodeDeploymentConfig:
+    """Tests for ClientUserCodeDeploymentConfig."""
+
+    def test_default_values(self):
+        config = ClientUserCodeDeploymentConfig()
+        assert config.enabled is False
+        assert config.class_names == []
+        assert config.jar_paths == []
+
+    def test_custom_values(self):
+        config = ClientUserCodeDeploymentConfig(
+            enabled=True,
+            class_names=["com.example.MyClass"],
+            jar_paths=["/path/to/my.jar"],
+        )
+        assert config.enabled is True
+        assert "com.example.MyClass" in config.class_names
+        assert "/path/to/my.jar" in config.jar_paths
+
+    def test_add_class_name(self):
+        config = ClientUserCodeDeploymentConfig()
+        config.add_class_name("com.example.Class1")
+        config.add_class_name("com.example.Class2")
+        assert len(config.class_names) == 2
+
+    def test_add_jar_path(self):
+        config = ClientUserCodeDeploymentConfig()
+        config.add_jar_path("/path/a.jar")
+        config.add_jar_path("/path/b.jar")
+        assert len(config.jar_paths) == 2
+
+    def test_fluent_api(self):
+        config = (
+            ClientUserCodeDeploymentConfig()
+            .add_class_name("com.example.A")
+            .add_jar_path("/path/x.jar")
+        )
+        assert "com.example.A" in config.class_names
+        assert "/path/x.jar" in config.jar_paths
+
+    def test_from_dict(self):
+        data = {
+            "enabled": True,
+            "class_names": ["com.example.Foo", "com.example.Bar"],
+            "jar_paths": ["/lib/foo.jar"],
+        }
+        config = ClientUserCodeDeploymentConfig.from_dict(data)
+        assert config.enabled is True
+        assert len(config.class_names) == 2
+        assert config.jar_paths == ["/lib/foo.jar"]
+
+
+class TestNearCacheConfigExtended:
+    """Extended tests for NearCacheConfig with new options."""
+
+    def test_new_default_values(self):
+        config = NearCacheConfig()
+        assert config.serialize_keys is False
+        assert config.local_update_policy == LocalUpdatePolicy.INVALIDATE
+        assert config.preloader_enabled is False
+        assert config.preloader_directory == ""
+        assert config.preloader_store_initial_delay_seconds == 600
+        assert config.preloader_store_interval_seconds == 600
+
+    def test_serialize_keys(self):
+        config = NearCacheConfig(serialize_keys=True)
+        assert config.serialize_keys is True
+
+    def test_local_update_policy(self):
+        config = NearCacheConfig(local_update_policy=LocalUpdatePolicy.CACHE_ON_UPDATE)
+        assert config.local_update_policy == LocalUpdatePolicy.CACHE_ON_UPDATE
+
+    def test_preloader_options(self):
+        config = NearCacheConfig(
+            preloader_enabled=True,
+            preloader_directory="/tmp/preload",
+            preloader_store_initial_delay_seconds=300,
+            preloader_store_interval_seconds=120,
+        )
+        assert config.preloader_enabled is True
+        assert config.preloader_directory == "/tmp/preload"
+        assert config.preloader_store_initial_delay_seconds == 300
+        assert config.preloader_store_interval_seconds == 120
+
+    def test_negative_preloader_initial_delay_validation(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            NearCacheConfig(preloader_store_initial_delay_seconds=-1)
+        assert "preloader_store_initial_delay_seconds cannot be negative" in str(
+            exc_info.value
+        )
+
+    def test_negative_preloader_interval_validation(self):
+        with pytest.raises(ConfigurationException) as exc_info:
+            NearCacheConfig(preloader_store_interval_seconds=-1)
+        assert "preloader_store_interval_seconds cannot be negative" in str(
+            exc_info.value
+        )
+
+    def test_from_dict_with_new_options(self):
+        data = {
+            "serialize_keys": True,
+            "local_update_policy": "CACHE_ON_UPDATE",
+            "preloader_enabled": True,
+            "preloader_directory": "/data/near-cache",
+            "preloader_store_initial_delay_seconds": 60,
+            "preloader_store_interval_seconds": 30,
+        }
+        config = NearCacheConfig.from_dict("extended-nc", data)
+        assert config.name == "extended-nc"
+        assert config.serialize_keys is True
+        assert config.local_update_policy == LocalUpdatePolicy.CACHE_ON_UPDATE
+        assert config.preloader_enabled is True
+        assert config.preloader_directory == "/data/near-cache"
+        assert config.preloader_store_initial_delay_seconds == 60
+        assert config.preloader_store_interval_seconds == 30
+
+    def test_from_dict_invalid_local_update_policy(self):
+        data = {"local_update_policy": "INVALID"}
+        with pytest.raises(ConfigurationException) as exc_info:
+            NearCacheConfig.from_dict("test", data)
+        assert "Invalid local_update_policy" in str(exc_info.value)

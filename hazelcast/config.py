@@ -29,6 +29,26 @@ class InMemoryFormat(Enum):
     OBJECT = "OBJECT"
 
 
+class IndexType(Enum):
+    """Index type for map indexes."""
+    SORTED = "SORTED"
+    HASH = "HASH"
+    BITMAP = "BITMAP"
+
+
+class LocalUpdatePolicy(Enum):
+    """Local update policy for near cache."""
+    INVALIDATE = "INVALIDATE"
+    CACHE_ON_UPDATE = "CACHE_ON_UPDATE"
+
+
+class UniqueKeyTransformation(Enum):
+    """Transformation applied to unique key for bitmap index."""
+    OBJECT = "OBJECT"
+    LONG = "LONG"
+    RAW = "RAW"
+
+
 class RetryConfig:
     """Configuration for exponential backoff retry strategy."""
 
@@ -295,6 +315,499 @@ class SecurityConfig:
         )
 
 
+class BitmapIndexOptions:
+    """Configuration options for bitmap indexes."""
+
+    def __init__(
+        self,
+        unique_key: str = "__key",
+        unique_key_transformation: UniqueKeyTransformation = UniqueKeyTransformation.OBJECT,
+    ):
+        self._unique_key = unique_key
+        self._unique_key_transformation = unique_key_transformation
+        self._validate()
+
+    def _validate(self) -> None:
+        if not self._unique_key:
+            raise ConfigurationException("unique_key cannot be empty")
+
+    @property
+    def unique_key(self) -> str:
+        """Get the unique key attribute."""
+        return self._unique_key
+
+    @unique_key.setter
+    def unique_key(self, value: str) -> None:
+        self._unique_key = value
+        self._validate()
+
+    @property
+    def unique_key_transformation(self) -> UniqueKeyTransformation:
+        """Get the unique key transformation."""
+        return self._unique_key_transformation
+
+    @unique_key_transformation.setter
+    def unique_key_transformation(self, value: UniqueKeyTransformation) -> None:
+        self._unique_key_transformation = value
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BitmapIndexOptions":
+        """Create BitmapIndexOptions from a dictionary."""
+        transform_str = data.get("unique_key_transformation", "OBJECT")
+        try:
+            transformation = UniqueKeyTransformation(transform_str.upper())
+        except ValueError:
+            raise ConfigurationException(
+                f"Invalid unique_key_transformation: {transform_str}"
+            )
+        return cls(
+            unique_key=data.get("unique_key", "__key"),
+            unique_key_transformation=transformation,
+        )
+
+
+class IndexConfig:
+    """Configuration for map indexes."""
+
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        type: IndexType = IndexType.SORTED,
+        attributes: List[str] = None,
+        bitmap_index_options: Optional[BitmapIndexOptions] = None,
+    ):
+        self._name = name
+        self._type = type
+        self._attributes = attributes or []
+        self._bitmap_index_options = bitmap_index_options
+        self._validate()
+
+    def _validate(self) -> None:
+        if not self._attributes:
+            raise ConfigurationException("At least one attribute is required for index")
+
+    @property
+    def name(self) -> Optional[str]:
+        """Get the index name."""
+        return self._name
+
+    @name.setter
+    def name(self, value: Optional[str]) -> None:
+        self._name = value
+
+    @property
+    def type(self) -> IndexType:
+        """Get the index type."""
+        return self._type
+
+    @type.setter
+    def type(self, value: IndexType) -> None:
+        self._type = value
+
+    @property
+    def attributes(self) -> List[str]:
+        """Get the indexed attributes."""
+        return self._attributes
+
+    @attributes.setter
+    def attributes(self, value: List[str]) -> None:
+        self._attributes = value
+        self._validate()
+
+    @property
+    def bitmap_index_options(self) -> Optional[BitmapIndexOptions]:
+        """Get bitmap index options."""
+        return self._bitmap_index_options
+
+    @bitmap_index_options.setter
+    def bitmap_index_options(self, value: Optional[BitmapIndexOptions]) -> None:
+        self._bitmap_index_options = value
+
+    def add_attribute(self, attribute: str) -> "IndexConfig":
+        """Add an attribute to the index."""
+        self._attributes.append(attribute)
+        return self
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "IndexConfig":
+        """Create IndexConfig from a dictionary."""
+        type_str = data.get("type", "SORTED")
+        try:
+            index_type = IndexType(type_str.upper())
+        except ValueError:
+            raise ConfigurationException(f"Invalid index type: {type_str}")
+
+        bitmap_options = None
+        if "bitmap_index_options" in data:
+            bitmap_options = BitmapIndexOptions.from_dict(data["bitmap_index_options"])
+
+        return cls(
+            name=data.get("name"),
+            type=index_type,
+            attributes=data.get("attributes", []),
+            bitmap_index_options=bitmap_options,
+        )
+
+
+class QueryCacheConfig:
+    """Configuration for continuous query cache."""
+
+    def __init__(
+        self,
+        name: str = "default",
+        predicate: Optional[str] = None,
+        batch_size: int = 1,
+        buffer_size: int = 16,
+        delay_seconds: int = 0,
+        in_memory_format: InMemoryFormat = InMemoryFormat.BINARY,
+        include_value: bool = True,
+        populate: bool = True,
+        coalesce: bool = False,
+        eviction_max_size: int = 10000,
+        eviction_policy: EvictionPolicy = EvictionPolicy.LRU,
+    ):
+        self._name = name
+        self._predicate = predicate
+        self._batch_size = batch_size
+        self._buffer_size = buffer_size
+        self._delay_seconds = delay_seconds
+        self._in_memory_format = in_memory_format
+        self._include_value = include_value
+        self._populate = populate
+        self._coalesce = coalesce
+        self._eviction_max_size = eviction_max_size
+        self._eviction_policy = eviction_policy
+        self._validate()
+
+    def _validate(self) -> None:
+        if not self._name:
+            raise ConfigurationException("Query cache name cannot be empty")
+        if self._batch_size < 1:
+            raise ConfigurationException("batch_size must be at least 1")
+        if self._buffer_size < 1:
+            raise ConfigurationException("buffer_size must be at least 1")
+        if self._delay_seconds < 0:
+            raise ConfigurationException("delay_seconds cannot be negative")
+        if self._eviction_max_size <= 0:
+            raise ConfigurationException("eviction_max_size must be positive")
+
+    @property
+    def name(self) -> str:
+        """Get the query cache name."""
+        return self._name
+
+    @property
+    def predicate(self) -> Optional[str]:
+        """Get the predicate string."""
+        return self._predicate
+
+    @predicate.setter
+    def predicate(self, value: Optional[str]) -> None:
+        self._predicate = value
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size for event batching."""
+        return self._batch_size
+
+    @batch_size.setter
+    def batch_size(self, value: int) -> None:
+        self._batch_size = value
+        self._validate()
+
+    @property
+    def buffer_size(self) -> int:
+        """Get the buffer size."""
+        return self._buffer_size
+
+    @buffer_size.setter
+    def buffer_size(self, value: int) -> None:
+        self._buffer_size = value
+        self._validate()
+
+    @property
+    def delay_seconds(self) -> int:
+        """Get the coalescing delay in seconds."""
+        return self._delay_seconds
+
+    @delay_seconds.setter
+    def delay_seconds(self, value: int) -> None:
+        self._delay_seconds = value
+        self._validate()
+
+    @property
+    def in_memory_format(self) -> InMemoryFormat:
+        """Get the in-memory format."""
+        return self._in_memory_format
+
+    @in_memory_format.setter
+    def in_memory_format(self, value: InMemoryFormat) -> None:
+        self._in_memory_format = value
+
+    @property
+    def include_value(self) -> bool:
+        """Get whether values are included."""
+        return self._include_value
+
+    @include_value.setter
+    def include_value(self, value: bool) -> None:
+        self._include_value = value
+
+    @property
+    def populate(self) -> bool:
+        """Get whether to populate on creation."""
+        return self._populate
+
+    @populate.setter
+    def populate(self, value: bool) -> None:
+        self._populate = value
+
+    @property
+    def coalesce(self) -> bool:
+        """Get whether to coalesce updates."""
+        return self._coalesce
+
+    @coalesce.setter
+    def coalesce(self, value: bool) -> None:
+        self._coalesce = value
+
+    @property
+    def eviction_max_size(self) -> int:
+        """Get the eviction max size."""
+        return self._eviction_max_size
+
+    @eviction_max_size.setter
+    def eviction_max_size(self, value: int) -> None:
+        self._eviction_max_size = value
+        self._validate()
+
+    @property
+    def eviction_policy(self) -> EvictionPolicy:
+        """Get the eviction policy."""
+        return self._eviction_policy
+
+    @eviction_policy.setter
+    def eviction_policy(self, value: EvictionPolicy) -> None:
+        self._eviction_policy = value
+
+    @classmethod
+    def from_dict(cls, name: str, data: dict) -> "QueryCacheConfig":
+        """Create QueryCacheConfig from a dictionary."""
+        format_str = data.get("in_memory_format", "BINARY")
+        try:
+            in_memory_format = InMemoryFormat(format_str.upper())
+        except ValueError:
+            raise ConfigurationException(f"Invalid in_memory_format: {format_str}")
+
+        eviction_str = data.get("eviction_policy", "LRU")
+        try:
+            eviction_policy = EvictionPolicy(eviction_str.upper())
+        except ValueError:
+            raise ConfigurationException(f"Invalid eviction_policy: {eviction_str}")
+
+        return cls(
+            name=name,
+            predicate=data.get("predicate"),
+            batch_size=data.get("batch_size", 1),
+            buffer_size=data.get("buffer_size", 16),
+            delay_seconds=data.get("delay_seconds", 0),
+            in_memory_format=in_memory_format,
+            include_value=data.get("include_value", True),
+            populate=data.get("populate", True),
+            coalesce=data.get("coalesce", False),
+            eviction_max_size=data.get("eviction_max_size", 10000),
+            eviction_policy=eviction_policy,
+        )
+
+
+class WanReplicationConfig:
+    """Configuration for WAN replication."""
+
+    def __init__(
+        self,
+        cluster_name: str = "dev",
+        endpoints: List[str] = None,
+        queue_capacity: int = 10000,
+        batch_size: int = 500,
+        batch_max_delay_millis: int = 1000,
+        response_timeout_millis: int = 60000,
+        acknowledge_type: str = "ACK_ON_OPERATION_COMPLETE",
+    ):
+        self._cluster_name = cluster_name
+        self._endpoints = endpoints or []
+        self._queue_capacity = queue_capacity
+        self._batch_size = batch_size
+        self._batch_max_delay_millis = batch_max_delay_millis
+        self._response_timeout_millis = response_timeout_millis
+        self._acknowledge_type = acknowledge_type
+        self._validate()
+
+    def _validate(self) -> None:
+        if not self._cluster_name:
+            raise ConfigurationException("WAN cluster_name cannot be empty")
+        if self._queue_capacity <= 0:
+            raise ConfigurationException("queue_capacity must be positive")
+        if self._batch_size <= 0:
+            raise ConfigurationException("batch_size must be positive")
+        if self._batch_max_delay_millis < 0:
+            raise ConfigurationException("batch_max_delay_millis cannot be negative")
+        if self._response_timeout_millis <= 0:
+            raise ConfigurationException("response_timeout_millis must be positive")
+        valid_ack_types = {"ACK_ON_RECEIPT", "ACK_ON_OPERATION_COMPLETE"}
+        if self._acknowledge_type not in valid_ack_types:
+            raise ConfigurationException(
+                f"Invalid acknowledge_type: {self._acknowledge_type}. "
+                f"Must be one of {valid_ack_types}"
+            )
+
+    @property
+    def cluster_name(self) -> str:
+        """Get the target cluster name."""
+        return self._cluster_name
+
+    @cluster_name.setter
+    def cluster_name(self, value: str) -> None:
+        self._cluster_name = value
+        self._validate()
+
+    @property
+    def endpoints(self) -> List[str]:
+        """Get the target endpoints."""
+        return self._endpoints
+
+    @endpoints.setter
+    def endpoints(self, value: List[str]) -> None:
+        self._endpoints = value
+
+    @property
+    def queue_capacity(self) -> int:
+        """Get the replication queue capacity."""
+        return self._queue_capacity
+
+    @queue_capacity.setter
+    def queue_capacity(self, value: int) -> None:
+        self._queue_capacity = value
+        self._validate()
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size."""
+        return self._batch_size
+
+    @batch_size.setter
+    def batch_size(self, value: int) -> None:
+        self._batch_size = value
+        self._validate()
+
+    @property
+    def batch_max_delay_millis(self) -> int:
+        """Get the max delay for batching in milliseconds."""
+        return self._batch_max_delay_millis
+
+    @batch_max_delay_millis.setter
+    def batch_max_delay_millis(self, value: int) -> None:
+        self._batch_max_delay_millis = value
+        self._validate()
+
+    @property
+    def response_timeout_millis(self) -> int:
+        """Get the response timeout in milliseconds."""
+        return self._response_timeout_millis
+
+    @response_timeout_millis.setter
+    def response_timeout_millis(self, value: int) -> None:
+        self._response_timeout_millis = value
+        self._validate()
+
+    @property
+    def acknowledge_type(self) -> str:
+        """Get the acknowledge type."""
+        return self._acknowledge_type
+
+    @acknowledge_type.setter
+    def acknowledge_type(self, value: str) -> None:
+        self._acknowledge_type = value
+        self._validate()
+
+    def add_endpoint(self, endpoint: str) -> "WanReplicationConfig":
+        """Add a target endpoint."""
+        self._endpoints.append(endpoint)
+        return self
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WanReplicationConfig":
+        """Create WanReplicationConfig from a dictionary."""
+        return cls(
+            cluster_name=data.get("cluster_name", "dev"),
+            endpoints=data.get("endpoints", []),
+            queue_capacity=data.get("queue_capacity", 10000),
+            batch_size=data.get("batch_size", 500),
+            batch_max_delay_millis=data.get("batch_max_delay_millis", 1000),
+            response_timeout_millis=data.get("response_timeout_millis", 60000),
+            acknowledge_type=data.get("acknowledge_type", "ACK_ON_OPERATION_COMPLETE"),
+        )
+
+
+class ClientUserCodeDeploymentConfig:
+    """Configuration for client user code deployment."""
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        class_names: List[str] = None,
+        jar_paths: List[str] = None,
+    ):
+        self._enabled = enabled
+        self._class_names = class_names or []
+        self._jar_paths = jar_paths or []
+
+    @property
+    def enabled(self) -> bool:
+        """Get whether user code deployment is enabled."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    @property
+    def class_names(self) -> List[str]:
+        """Get the class names to deploy."""
+        return self._class_names
+
+    @class_names.setter
+    def class_names(self, value: List[str]) -> None:
+        self._class_names = value
+
+    @property
+    def jar_paths(self) -> List[str]:
+        """Get the JAR paths to deploy."""
+        return self._jar_paths
+
+    @jar_paths.setter
+    def jar_paths(self, value: List[str]) -> None:
+        self._jar_paths = value
+
+    def add_class_name(self, class_name: str) -> "ClientUserCodeDeploymentConfig":
+        """Add a class name to deploy."""
+        self._class_names.append(class_name)
+        return self
+
+    def add_jar_path(self, jar_path: str) -> "ClientUserCodeDeploymentConfig":
+        """Add a JAR path to deploy."""
+        self._jar_paths.append(jar_path)
+        return self
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ClientUserCodeDeploymentConfig":
+        """Create ClientUserCodeDeploymentConfig from a dictionary."""
+        return cls(
+            enabled=data.get("enabled", False),
+            class_names=data.get("class_names", []),
+            jar_paths=data.get("jar_paths", []),
+        )
+
+
 class NearCacheConfig:
     """Configuration for near cache."""
 
@@ -307,6 +820,12 @@ class NearCacheConfig:
         max_size: int = 10000,
         in_memory_format: InMemoryFormat = InMemoryFormat.BINARY,
         invalidate_on_change: bool = True,
+        serialize_keys: bool = False,
+        local_update_policy: LocalUpdatePolicy = LocalUpdatePolicy.INVALIDATE,
+        preloader_enabled: bool = False,
+        preloader_directory: str = "",
+        preloader_store_initial_delay_seconds: int = 600,
+        preloader_store_interval_seconds: int = 600,
     ):
         self._name = name
         self._max_idle_seconds = max_idle_seconds
@@ -315,6 +834,12 @@ class NearCacheConfig:
         self._max_size = max_size
         self._in_memory_format = in_memory_format
         self._invalidate_on_change = invalidate_on_change
+        self._serialize_keys = serialize_keys
+        self._local_update_policy = local_update_policy
+        self._preloader_enabled = preloader_enabled
+        self._preloader_directory = preloader_directory
+        self._preloader_store_initial_delay_seconds = preloader_store_initial_delay_seconds
+        self._preloader_store_interval_seconds = preloader_store_interval_seconds
         self._validate()
 
     def _validate(self) -> None:
@@ -326,6 +851,14 @@ class NearCacheConfig:
             raise ConfigurationException("time_to_live_seconds cannot be negative")
         if self._max_size <= 0:
             raise ConfigurationException("max_size must be positive")
+        if self._preloader_store_initial_delay_seconds < 0:
+            raise ConfigurationException(
+                "preloader_store_initial_delay_seconds cannot be negative"
+            )
+        if self._preloader_store_interval_seconds < 0:
+            raise ConfigurationException(
+                "preloader_store_interval_seconds cannot be negative"
+            )
 
     @property
     def name(self) -> str:
@@ -389,6 +922,62 @@ class NearCacheConfig:
     def invalidate_on_change(self, value: bool) -> None:
         self._invalidate_on_change = value
 
+    @property
+    def serialize_keys(self) -> bool:
+        """Get whether to serialize keys."""
+        return self._serialize_keys
+
+    @serialize_keys.setter
+    def serialize_keys(self, value: bool) -> None:
+        self._serialize_keys = value
+
+    @property
+    def local_update_policy(self) -> LocalUpdatePolicy:
+        """Get the local update policy."""
+        return self._local_update_policy
+
+    @local_update_policy.setter
+    def local_update_policy(self, value: LocalUpdatePolicy) -> None:
+        self._local_update_policy = value
+
+    @property
+    def preloader_enabled(self) -> bool:
+        """Get whether preloader is enabled."""
+        return self._preloader_enabled
+
+    @preloader_enabled.setter
+    def preloader_enabled(self, value: bool) -> None:
+        self._preloader_enabled = value
+
+    @property
+    def preloader_directory(self) -> str:
+        """Get the preloader directory."""
+        return self._preloader_directory
+
+    @preloader_directory.setter
+    def preloader_directory(self, value: str) -> None:
+        self._preloader_directory = value
+
+    @property
+    def preloader_store_initial_delay_seconds(self) -> int:
+        """Get the preloader store initial delay in seconds."""
+        return self._preloader_store_initial_delay_seconds
+
+    @preloader_store_initial_delay_seconds.setter
+    def preloader_store_initial_delay_seconds(self, value: int) -> None:
+        self._preloader_store_initial_delay_seconds = value
+        self._validate()
+
+    @property
+    def preloader_store_interval_seconds(self) -> int:
+        """Get the preloader store interval in seconds."""
+        return self._preloader_store_interval_seconds
+
+    @preloader_store_interval_seconds.setter
+    def preloader_store_interval_seconds(self, value: int) -> None:
+        self._preloader_store_interval_seconds = value
+        self._validate()
+
     @classmethod
     def from_dict(cls, name: str, data: dict) -> "NearCacheConfig":
         """Create NearCacheConfig from a dictionary."""
@@ -404,6 +993,14 @@ class NearCacheConfig:
         except ValueError:
             raise ConfigurationException(f"Invalid in_memory_format: {format_str}")
 
+        update_policy_str = data.get("local_update_policy", "INVALIDATE")
+        try:
+            local_update_policy = LocalUpdatePolicy(update_policy_str.upper())
+        except ValueError:
+            raise ConfigurationException(
+                f"Invalid local_update_policy: {update_policy_str}"
+            )
+
         return cls(
             name=name,
             max_idle_seconds=data.get("max_idle_seconds", 0),
@@ -412,6 +1009,16 @@ class NearCacheConfig:
             max_size=data.get("max_size", 10000),
             in_memory_format=in_memory_format,
             invalidate_on_change=data.get("invalidate_on_change", True),
+            serialize_keys=data.get("serialize_keys", False),
+            local_update_policy=local_update_policy,
+            preloader_enabled=data.get("preloader_enabled", False),
+            preloader_directory=data.get("preloader_directory", ""),
+            preloader_store_initial_delay_seconds=data.get(
+                "preloader_store_initial_delay_seconds", 600
+            ),
+            preloader_store_interval_seconds=data.get(
+                "preloader_store_interval_seconds", 600
+            ),
         )
 
 
