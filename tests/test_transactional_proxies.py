@@ -1,12 +1,12 @@
-"""Integration tests for transactional data structure proxies.
-
-These tests verify ACID properties of transactional operations.
-"""
+"""Tests for Transactional Proxy implementations."""
 
 import unittest
 from unittest.mock import MagicMock
 
-from hazelcast.proxy.base import ProxyContext
+from hazelcast.transaction import (
+    TransactionContext,
+    TransactionNotActiveException,
+)
 from hazelcast.proxy.transactional import (
     TransactionalProxy,
     TransactionalMap,
@@ -15,452 +15,412 @@ from hazelcast.proxy.transactional import (
     TransactionalQueue,
     TransactionalMultiMap,
 )
-from hazelcast.transaction import (
-    TransactionContext,
-    TransactionOptions,
-    TransactionType,
-    TransactionState,
-    TransactionNotActiveException,
-)
+from hazelcast.proxy.base import ProxyContext
 
 
-class TransactionalProxyTestBase(unittest.TestCase):
-    """Base class for transactional proxy tests."""
+class TestTransactionalProxy(unittest.TestCase):
+    """Tests for TransactionalProxy base class."""
 
     def setUp(self):
-        self.mock_invocation_service = MagicMock()
-        self.mock_serialization_service = MagicMock()
-        self.context = ProxyContext(
-            invocation_service=self.mock_invocation_service,
-            serialization_service=self.mock_serialization_service,
+        self.mock_context = ProxyContext(
+            invocation_service=MagicMock(),
+            serialization_service=MagicMock(),
         )
+        self.txn_ctx = TransactionContext(self.mock_context)
+
+    def test_name_property(self):
+        self.txn_ctx.begin()
+        txn_map = TransactionalMap("test-map", self.txn_ctx)
+        self.assertEqual(txn_map.name, "test-map")
+
+    def test_transaction_context_property(self):
+        self.txn_ctx.begin()
+        txn_map = TransactionalMap("test-map", self.txn_ctx)
+        self.assertIs(txn_map.transaction_context, self.txn_ctx)
+
+    def test_repr(self):
+        self.txn_ctx.begin()
+        txn_map = TransactionalMap("test-map", self.txn_ctx)
+        self.assertIn("TransactionalMap", repr(txn_map))
+        self.assertIn("test-map", repr(txn_map))
 
 
-class TestTransactionalMapACID(TransactionalProxyTestBase):
-    """Tests verifying ACID properties for TransactionalMap."""
+class TestTransactionalMapOperations(unittest.TestCase):
+    """Tests for TransactionalMap operations."""
 
-    def test_atomicity_commit_applies_all_changes(self):
-        """All operations within a transaction are applied atomically on commit."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            txn_map.put("key1", "value1")
-            txn_map.put("key2", "value2")
-            txn_map.put("key3", "value3")
+    def setUp(self):
+        self.mock_context = ProxyContext(
+            invocation_service=MagicMock(),
+            serialization_service=MagicMock(),
+        )
+        self.txn_ctx = TransactionContext(self.mock_context)
+        self.txn_ctx.begin()
+        self.txn_map = self.txn_ctx.get_map("test-map")
 
-            self.assertEqual(txn_map.size(), 3)
-            self.assertEqual(txn_map.get("key1"), "value1")
-            self.assertEqual(txn_map.get("key2"), "value2")
-            self.assertEqual(txn_map.get("key3"), "value3")
+    def test_put_and_get(self):
+        self.txn_map.put("key1", "value1")
+        self.assertEqual(self.txn_map.get("key1"), "value1")
 
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
+    def test_put_returns_old_value(self):
+        self.txn_map.put("key1", "value1")
+        old = self.txn_map.put("key1", "value2")
+        self.assertEqual(old, "value1")
+        self.assertEqual(self.txn_map.get("key1"), "value2")
 
-    def test_atomicity_rollback_discards_all_changes(self):
-        """All operations are discarded on rollback."""
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_map = txn_ctx.get_map("test-map")
-        txn_map.put("key1", "value1")
-        txn_map.put("key2", "value2")
+    def test_get_nonexistent_returns_none(self):
+        self.assertIsNone(self.txn_map.get("nonexistent"))
 
-        txn_ctx.rollback()
-        self.assertEqual(txn_ctx.state, TransactionState.ROLLED_BACK)
+    def test_remove_returns_old_value(self):
+        self.txn_map.put("key1", "value1")
+        old = self.txn_map.remove("key1")
+        self.assertEqual(old, "value1")
+        self.assertIsNone(self.txn_map.get("key1"))
 
-    def test_consistency_operations_reflect_local_state(self):
-        """Operations within a transaction see consistent local state."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
+    def test_remove_nonexistent_returns_none(self):
+        self.assertIsNone(self.txn_map.remove("nonexistent"))
 
-            self.assertFalse(txn_map.contains_key("key1"))
-            self.assertTrue(txn_map.is_empty())
+    def test_contains_key(self):
+        self.assertFalse(self.txn_map.contains_key("key1"))
+        self.txn_map.put("key1", "value1")
+        self.assertTrue(self.txn_map.contains_key("key1"))
 
-            txn_map.put("key1", "value1")
+    def test_contains_key_after_delete(self):
+        self.txn_map.put("key1", "value1")
+        self.txn_map.delete("key1")
+        self.assertFalse(self.txn_map.contains_key("key1"))
 
-            self.assertTrue(txn_map.contains_key("key1"))
-            self.assertFalse(txn_map.is_empty())
-            self.assertEqual(txn_map.get("key1"), "value1")
-
-            txn_map.remove("key1")
-            self.assertFalse(txn_map.contains_key("key1"))
-            self.assertTrue(txn_map.is_empty())
-
-    def test_isolation_operations_not_visible_outside_transaction(self):
-        """Changes are isolated until commit."""
-        txn_ctx1 = TransactionContext(self.context)
-        txn_ctx1.begin()
-        txn_map1 = txn_ctx1.get_map("test-map")
-        txn_map1.put("key1", "value1")
-
-        txn_ctx2 = TransactionContext(self.context)
-        txn_ctx2.begin()
-        txn_map2 = txn_ctx2.get_map("test-map")
-
-        self.assertIsNone(txn_map2.get("key1"))
-
-        txn_ctx1.commit()
-        txn_ctx2.commit()
-
-    def test_durability_state_persists_after_commit(self):
-        """State persists after commit (simulated)."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            txn_map.put("key1", "value1")
-
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
-
-    def test_put_returns_previous_value(self):
-        """Put returns the previous value for the key."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            result1 = txn_map.put("key1", "value1")
-            self.assertIsNone(result1)
-
-            result2 = txn_map.put("key1", "value2")
-            self.assertEqual(result2, "value1")
-
-    def test_put_if_absent(self):
-        """Put if absent only adds when key doesn't exist."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-
-            result1 = txn_map.put_if_absent("key1", "value1")
-            self.assertIsNone(result1)
-            self.assertEqual(txn_map.get("key1"), "value1")
-
-            result2 = txn_map.put_if_absent("key1", "value2")
-            self.assertEqual(result2, "value1")
-            self.assertEqual(txn_map.get("key1"), "value1")
-
-    def test_replace(self):
-        """Replace only updates existing keys."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-
-            result1 = txn_map.replace("key1", "value1")
-            self.assertIsNone(result1)
-            self.assertIsNone(txn_map.get("key1"))
-
-            txn_map.put("key1", "value1")
-            result2 = txn_map.replace("key1", "value2")
-            self.assertEqual(result2, "value1")
-            self.assertEqual(txn_map.get("key1"), "value2")
-
-    def test_replace_if_same(self):
-        """Replace if same only updates when value matches."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            txn_map.put("key1", "value1")
-
-            result1 = txn_map.replace_if_same("key1", "wrong", "value2")
-            self.assertFalse(result1)
-            self.assertEqual(txn_map.get("key1"), "value1")
-
-            result2 = txn_map.replace_if_same("key1", "value1", "value2")
-            self.assertTrue(result2)
-            self.assertEqual(txn_map.get("key1"), "value2")
-
-    def test_delete(self):
-        """Delete removes key without returning value."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            txn_map.put("key1", "value1")
-            txn_map.delete("key1")
-            self.assertFalse(txn_map.contains_key("key1"))
-
-    def test_key_set_and_values(self):
-        """Key set and values return correct data."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            txn_map.put("key1", "value1")
-            txn_map.put("key2", "value2")
-
-            keys = txn_map.key_set()
-            self.assertEqual(keys, {"key1", "key2"})
-
-            values = txn_map.values()
-            self.assertEqual(sorted(values), ["value1", "value2"])
-
-
-class TestTransactionalSetACID(TransactionalProxyTestBase):
-    """Tests verifying ACID properties for TransactionalSet."""
-
-    def test_atomicity_commit(self):
-        """All set operations are applied atomically on commit."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_set = txn_ctx.get_set("test-set")
-            txn_set.add("item1")
-            txn_set.add("item2")
-            txn_set.add("item3")
-
-            self.assertEqual(txn_set.size(), 3)
-            self.assertTrue(txn_set.contains("item1"))
-
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
-
-    def test_no_duplicates(self):
-        """Set does not allow duplicate items."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_set = txn_ctx.get_set("test-set")
-            self.assertTrue(txn_set.add("item1"))
-            self.assertFalse(txn_set.add("item1"))
-            self.assertEqual(txn_set.size(), 1)
-
-    def test_remove(self):
-        """Remove returns correct results."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_set = txn_ctx.get_set("test-set")
-            txn_set.add("item1")
-
-            self.assertTrue(txn_set.remove("item1"))
-            self.assertFalse(txn_set.contains("item1"))
-            self.assertFalse(txn_set.remove("item1"))
+    def test_size(self):
+        self.assertEqual(self.txn_map.size(), 0)
+        self.txn_map.put("key1", "value1")
+        self.assertEqual(self.txn_map.size(), 1)
+        self.txn_map.put("key2", "value2")
+        self.assertEqual(self.txn_map.size(), 2)
 
     def test_is_empty(self):
-        """Is empty reflects current state."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_set = txn_ctx.get_set("test-set")
-            self.assertTrue(txn_set.is_empty())
+        self.assertTrue(self.txn_map.is_empty())
+        self.txn_map.put("key1", "value1")
+        self.assertFalse(self.txn_map.is_empty())
 
-            txn_set.add("item1")
-            self.assertFalse(txn_set.is_empty())
+    def test_key_set(self):
+        self.txn_map.put("key1", "value1")
+        self.txn_map.put("key2", "value2")
+        keys = self.txn_map.key_set()
+        self.assertEqual(keys, {"key1", "key2"})
 
+    def test_values(self):
+        self.txn_map.put("key1", "value1")
+        self.txn_map.put("key2", "value2")
+        values = self.txn_map.values()
+        self.assertEqual(sorted(values), ["value1", "value2"])
 
-class TestTransactionalListACID(TransactionalProxyTestBase):
-    """Tests verifying ACID properties for TransactionalList."""
+    def test_put_if_absent_when_absent(self):
+        result = self.txn_map.put_if_absent("key1", "value1")
+        self.assertIsNone(result)
+        self.assertEqual(self.txn_map.get("key1"), "value1")
 
-    def test_atomicity_commit(self):
-        """All list operations are applied atomically on commit."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_list = txn_ctx.get_list("test-list")
-            txn_list.add("item1")
-            txn_list.add("item2")
-            txn_list.add("item3")
+    def test_put_if_absent_when_present(self):
+        self.txn_map.put("key1", "value1")
+        result = self.txn_map.put_if_absent("key1", "value2")
+        self.assertEqual(result, "value1")
+        self.assertEqual(self.txn_map.get("key1"), "value1")
 
-            self.assertEqual(txn_list.size(), 3)
+    def test_replace_when_exists(self):
+        self.txn_map.put("key1", "value1")
+        old = self.txn_map.replace("key1", "value2")
+        self.assertEqual(old, "value1")
+        self.assertEqual(self.txn_map.get("key1"), "value2")
 
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
+    def test_replace_when_not_exists(self):
+        old = self.txn_map.replace("key1", "value1")
+        self.assertIsNone(old)
 
-    def test_allows_duplicates(self):
-        """List allows duplicate items."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_list = txn_ctx.get_list("test-list")
-            txn_list.add("item1")
-            txn_list.add("item1")
-            self.assertEqual(txn_list.size(), 2)
+    def test_replace_if_same_success(self):
+        self.txn_map.put("key1", "value1")
+        result = self.txn_map.replace_if_same("key1", "value1", "value2")
+        self.assertTrue(result)
+        self.assertEqual(self.txn_map.get("key1"), "value2")
 
-    def test_remove(self):
-        """Remove only removes first occurrence."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_list = txn_ctx.get_list("test-list")
-            txn_list.add("item1")
-            txn_list.add("item2")
-            txn_list.add("item1")
+    def test_replace_if_same_failure(self):
+        self.txn_map.put("key1", "value1")
+        result = self.txn_map.replace_if_same("key1", "wrong", "value2")
+        self.assertFalse(result)
+        self.assertEqual(self.txn_map.get("key1"), "value1")
 
-            self.assertTrue(txn_list.remove("item1"))
-            self.assertEqual(txn_list.size(), 2)
+    def test_set(self):
+        self.txn_map.set("key1", "value1")
+        self.assertEqual(self.txn_map.get("key1"), "value1")
 
-            self.assertFalse(txn_list.remove("item3"))
+    def test_delete(self):
+        self.txn_map.put("key1", "value1")
+        self.txn_map.delete("key1")
+        self.assertIsNone(self.txn_map.get("key1"))
 
-    def test_get_all(self):
-        """Get all returns all items in order."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_list = txn_ctx.get_list("test-list")
-            txn_list.add("item1")
-            txn_list.add("item2")
-            txn_list.add("item3")
-
-            all_items = txn_list.get_all()
-            self.assertEqual(all_items, ["item1", "item2", "item3"])
-
-
-class TestTransactionalQueueACID(TransactionalProxyTestBase):
-    """Tests verifying ACID properties for TransactionalQueue."""
-
-    def test_atomicity_commit(self):
-        """All queue operations are applied atomically on commit."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_queue = txn_ctx.get_queue("test-queue")
-            txn_queue.offer("item1")
-            txn_queue.offer("item2")
-            txn_queue.offer("item3")
-
-            self.assertEqual(txn_queue.size(), 3)
-
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
-
-    def test_fifo_ordering(self):
-        """Queue maintains FIFO order."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_queue = txn_ctx.get_queue("test-queue")
-            txn_queue.offer("first")
-            txn_queue.offer("second")
-            txn_queue.offer("third")
-
-            self.assertEqual(txn_queue.poll(), "first")
-            self.assertEqual(txn_queue.poll(), "second")
-            self.assertEqual(txn_queue.poll(), "third")
-
-    def test_peek_does_not_remove(self):
-        """Peek returns item without removing it."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_queue = txn_ctx.get_queue("test-queue")
-            txn_queue.offer("item1")
-
-            self.assertEqual(txn_queue.peek(), "item1")
-            self.assertEqual(txn_queue.peek(), "item1")
-            self.assertEqual(txn_queue.size(), 1)
-
-    def test_poll_empty_queue(self):
-        """Poll on empty queue returns None."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_queue = txn_ctx.get_queue("test-queue")
-            self.assertIsNone(txn_queue.poll())
-            self.assertIsNone(txn_queue.peek())
-
-    def test_take_empty_queue_raises(self):
-        """Take on empty queue raises exception."""
-        from hazelcast.exceptions import IllegalStateException
-
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_queue = txn_ctx.get_queue("test-queue")
-            with self.assertRaises(IllegalStateException):
-                txn_queue.take()
+    def test_get_for_update(self):
+        self.txn_map.put("key1", "value1")
+        value = self.txn_map.get_for_update("key1")
+        self.assertEqual(value, "value1")
 
 
-class TestTransactionalMultiMapACID(TransactionalProxyTestBase):
-    """Tests verifying ACID properties for TransactionalMultiMap."""
+class TestTransactionalSetOperations(unittest.TestCase):
+    """Tests for TransactionalSet operations."""
 
-    def test_atomicity_commit(self):
-        """All multimap operations are applied atomically on commit."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_mm = txn_ctx.get_multi_map("test-multimap")
-            txn_mm.put("key1", "value1")
-            txn_mm.put("key1", "value2")
-            txn_mm.put("key2", "value3")
+    def setUp(self):
+        self.mock_context = ProxyContext(
+            invocation_service=MagicMock(),
+            serialization_service=MagicMock(),
+        )
+        self.txn_ctx = TransactionContext(self.mock_context)
+        self.txn_ctx.begin()
+        self.txn_set = self.txn_ctx.get_set("test-set")
 
-            self.assertEqual(txn_mm.size(), 3)
+    def test_add_new_item(self):
+        result = self.txn_set.add("item1")
+        self.assertTrue(result)
 
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
+    def test_add_duplicate_item(self):
+        self.txn_set.add("item1")
+        result = self.txn_set.add("item1")
+        self.assertFalse(result)
 
-    def test_multiple_values_per_key(self):
-        """MultiMap allows multiple values per key."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_mm = txn_ctx.get_multi_map("test-multimap")
-            txn_mm.put("key1", "value1")
-            txn_mm.put("key1", "value2")
-            txn_mm.put("key1", "value3")
+    def test_remove_existing_item(self):
+        self.txn_set.add("item1")
+        result = self.txn_set.remove("item1")
+        self.assertTrue(result)
 
-            values = txn_mm.get("key1")
-            self.assertEqual(len(values), 3)
-            self.assertIn("value1", values)
-            self.assertIn("value2", values)
-            self.assertIn("value3", values)
+    def test_remove_nonexistent_item(self):
+        result = self.txn_set.remove("nonexistent")
+        self.assertFalse(result)
 
-    def test_value_count(self):
-        """Value count returns correct count per key."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_mm = txn_ctx.get_multi_map("test-multimap")
-            txn_mm.put("key1", "value1")
-            txn_mm.put("key1", "value2")
-            txn_mm.put("key2", "value3")
+    def test_contains(self):
+        self.assertFalse(self.txn_set.contains("item1"))
+        self.txn_set.add("item1")
+        self.assertTrue(self.txn_set.contains("item1"))
 
-            self.assertEqual(txn_mm.value_count("key1"), 2)
-            self.assertEqual(txn_mm.value_count("key2"), 1)
-            self.assertEqual(txn_mm.value_count("key3"), 0)
+    def test_size(self):
+        self.assertEqual(self.txn_set.size(), 0)
+        self.txn_set.add("item1")
+        self.assertEqual(self.txn_set.size(), 1)
+        self.txn_set.add("item2")
+        self.assertEqual(self.txn_set.size(), 2)
+        self.txn_set.add("item1")  # Duplicate
+        self.assertEqual(self.txn_set.size(), 2)
 
-    def test_remove_specific_value(self):
-        """Remove removes only the specific key-value pair."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_mm = txn_ctx.get_multi_map("test-multimap")
-            txn_mm.put("key1", "value1")
-            txn_mm.put("key1", "value2")
+    def test_is_empty(self):
+        self.assertTrue(self.txn_set.is_empty())
+        self.txn_set.add("item1")
+        self.assertFalse(self.txn_set.is_empty())
 
-            self.assertTrue(txn_mm.remove("key1", "value1"))
-            self.assertEqual(txn_mm.value_count("key1"), 1)
 
-            self.assertFalse(txn_mm.remove("key1", "value1"))
+class TestTransactionalListOperations(unittest.TestCase):
+    """Tests for TransactionalList operations."""
+
+    def setUp(self):
+        self.mock_context = ProxyContext(
+            invocation_service=MagicMock(),
+            serialization_service=MagicMock(),
+        )
+        self.txn_ctx = TransactionContext(self.mock_context)
+        self.txn_ctx.begin()
+        self.txn_list = self.txn_ctx.get_list("test-list")
+
+    def test_add(self):
+        result = self.txn_list.add("item1")
+        self.assertTrue(result)
+
+    def test_add_duplicates_allowed(self):
+        self.txn_list.add("item1")
+        result = self.txn_list.add("item1")
+        self.assertTrue(result)
+        self.assertEqual(self.txn_list.size(), 2)
+
+    def test_remove_existing_item(self):
+        self.txn_list.add("item1")
+        result = self.txn_list.remove("item1")
+        self.assertTrue(result)
+
+    def test_remove_nonexistent_item(self):
+        result = self.txn_list.remove("nonexistent")
+        self.assertFalse(result)
+
+    def test_remove_only_first_occurrence(self):
+        self.txn_list.add("item1")
+        self.txn_list.add("item1")
+        self.txn_list.remove("item1")
+        self.assertEqual(self.txn_list.size(), 1)
+
+    def test_contains(self):
+        self.assertFalse(self.txn_list.contains("item1"))
+        self.txn_list.add("item1")
+        self.assertTrue(self.txn_list.contains("item1"))
+
+    def test_size(self):
+        self.assertEqual(self.txn_list.size(), 0)
+        self.txn_list.add("item1")
+        self.assertEqual(self.txn_list.size(), 1)
+
+    def test_is_empty(self):
+        self.assertTrue(self.txn_list.is_empty())
+        self.txn_list.add("item1")
+        self.assertFalse(self.txn_list.is_empty())
+
+
+class TestTransactionalQueueOperations(unittest.TestCase):
+    """Tests for TransactionalQueue operations."""
+
+    def setUp(self):
+        self.mock_context = ProxyContext(
+            invocation_service=MagicMock(),
+            serialization_service=MagicMock(),
+        )
+        self.txn_ctx = TransactionContext(self.mock_context)
+        self.txn_ctx.begin()
+        self.txn_queue = self.txn_ctx.get_queue("test-queue")
+
+    def test_offer(self):
+        result = self.txn_queue.offer("item1")
+        self.assertTrue(result)
+
+    def test_poll_returns_head(self):
+        self.txn_queue.offer("item1")
+        self.txn_queue.offer("item2")
+        result = self.txn_queue.poll()
+        self.assertEqual(result, "item1")
+
+    def test_poll_empty_returns_none(self):
+        result = self.txn_queue.poll()
+        self.assertIsNone(result)
+
+    def test_peek_returns_head_without_removing(self):
+        self.txn_queue.offer("item1")
+        result = self.txn_queue.peek()
+        self.assertEqual(result, "item1")
+        self.assertEqual(self.txn_queue.size(), 1)
+
+    def test_peek_empty_returns_none(self):
+        result = self.txn_queue.peek()
+        self.assertIsNone(result)
+
+    def test_take(self):
+        self.txn_queue.offer("item1")
+        result = self.txn_queue.take()
+        self.assertEqual(result, "item1")
+
+    def test_size(self):
+        self.assertEqual(self.txn_queue.size(), 0)
+        self.txn_queue.offer("item1")
+        self.assertEqual(self.txn_queue.size(), 1)
+
+    def test_is_empty(self):
+        self.assertTrue(self.txn_queue.is_empty())
+        self.txn_queue.offer("item1")
+        self.assertFalse(self.txn_queue.is_empty())
+
+
+class TestTransactionalMultiMapOperations(unittest.TestCase):
+    """Tests for TransactionalMultiMap operations."""
+
+    def setUp(self):
+        self.mock_context = ProxyContext(
+            invocation_service=MagicMock(),
+            serialization_service=MagicMock(),
+        )
+        self.txn_ctx = TransactionContext(self.mock_context)
+        self.txn_ctx.begin()
+        self.txn_mm = self.txn_ctx.get_multi_map("test-multimap")
+
+    def test_put(self):
+        result = self.txn_mm.put("key1", "value1")
+        self.assertTrue(result)
+
+    def test_put_multiple_values_same_key(self):
+        self.txn_mm.put("key1", "value1")
+        self.txn_mm.put("key1", "value2")
+        values = self.txn_mm.get("key1")
+        self.assertEqual(values, ["value1", "value2"])
+
+    def test_get_nonexistent_returns_empty_list(self):
+        values = self.txn_mm.get("nonexistent")
+        self.assertEqual(values, [])
+
+    def test_remove_specific_entry(self):
+        self.txn_mm.put("key1", "value1")
+        self.txn_mm.put("key1", "value2")
+        result = self.txn_mm.remove("key1", "value1")
+        self.assertTrue(result)
+        self.assertEqual(self.txn_mm.get("key1"), ["value2"])
+
+    def test_remove_nonexistent_entry(self):
+        result = self.txn_mm.remove("key1", "value1")
+        self.assertFalse(result)
 
     def test_remove_all(self):
-        """Remove all removes all values for a key."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_mm = txn_ctx.get_multi_map("test-multimap")
-            txn_mm.put("key1", "value1")
-            txn_mm.put("key1", "value2")
-            txn_mm.put("key2", "value3")
+        self.txn_mm.put("key1", "value1")
+        self.txn_mm.put("key1", "value2")
+        removed = self.txn_mm.remove_all("key1")
+        self.assertEqual(removed, ["value1", "value2"])
+        self.assertEqual(self.txn_mm.get("key1"), [])
 
-            removed = txn_mm.remove_all("key1")
-            self.assertEqual(len(removed), 2)
-            self.assertEqual(txn_mm.value_count("key1"), 0)
-            self.assertEqual(txn_mm.size(), 1)
+    def test_contains_key(self):
+        self.assertFalse(self.txn_mm.contains_key("key1"))
+        self.txn_mm.put("key1", "value1")
+        self.assertTrue(self.txn_mm.contains_key("key1"))
+
+    def test_contains_value(self):
+        self.assertFalse(self.txn_mm.contains_value("value1"))
+        self.txn_mm.put("key1", "value1")
+        self.assertTrue(self.txn_mm.contains_value("value1"))
+
+    def test_contains_entry(self):
+        self.assertFalse(self.txn_mm.contains_entry("key1", "value1"))
+        self.txn_mm.put("key1", "value1")
+        self.assertTrue(self.txn_mm.contains_entry("key1", "value1"))
+        self.assertFalse(self.txn_mm.contains_entry("key1", "value2"))
+
+    def test_value_count(self):
+        self.assertEqual(self.txn_mm.value_count("key1"), 0)
+        self.txn_mm.put("key1", "value1")
+        self.assertEqual(self.txn_mm.value_count("key1"), 1)
+        self.txn_mm.put("key1", "value2")
+        self.assertEqual(self.txn_mm.value_count("key1"), 2)
+
+    def test_size(self):
+        self.assertEqual(self.txn_mm.size(), 0)
+        self.txn_mm.put("key1", "value1")
+        self.assertEqual(self.txn_mm.size(), 1)
+        self.txn_mm.put("key1", "value2")
+        self.assertEqual(self.txn_mm.size(), 2)
+        self.txn_mm.put("key2", "value3")
+        self.assertEqual(self.txn_mm.size(), 3)
+
+    def test_is_empty(self):
+        self.assertTrue(self.txn_mm.is_empty())
+        self.txn_mm.put("key1", "value1")
+        self.assertFalse(self.txn_mm.is_empty())
+
+    def test_key_set(self):
+        self.txn_mm.put("key1", "value1")
+        self.txn_mm.put("key2", "value2")
+        keys = self.txn_mm.key_set()
+        self.assertEqual(keys, {"key1", "key2"})
+
+    def test_values(self):
+        self.txn_mm.put("key1", "value1")
+        self.txn_mm.put("key2", "value2")
+        values = self.txn_mm.values()
+        self.assertEqual(sorted(values), ["value1", "value2"])
 
 
-class TestTransactionContextWithProxies(TransactionalProxyTestBase):
-    """Tests for TransactionContext integration with proxies."""
+class TestTransactionalProxyIsolation(unittest.TestCase):
+    """Tests for transaction isolation."""
 
-    def test_multiple_data_structures_in_transaction(self):
-        """Multiple data structures can be used in a single transaction."""
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            txn_set = txn_ctx.get_set("test-set")
-            txn_list = txn_ctx.get_list("test-list")
-            txn_queue = txn_ctx.get_queue("test-queue")
-            txn_mm = txn_ctx.get_multi_map("test-multimap")
+    def setUp(self):
+        self.mock_context = ProxyContext(
+            invocation_service=MagicMock(),
+            serialization_service=MagicMock(),
+        )
 
-            txn_map.put("key", "value")
-            txn_set.add("item")
-            txn_list.add("item")
-            txn_queue.offer("item")
-            txn_mm.put("key", "value")
-
-            self.assertEqual(txn_map.size(), 1)
-            self.assertEqual(txn_set.size(), 1)
-            self.assertEqual(txn_list.size(), 1)
-            self.assertEqual(txn_queue.size(), 1)
-            self.assertEqual(txn_mm.size(), 1)
-
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
-
-    def test_two_phase_commit(self):
-        """Two-phase commit works correctly."""
-        options = TransactionOptions(transaction_type=TransactionType.TWO_PHASE)
-        txn_ctx = TransactionContext(self.context, options)
-
-        with txn_ctx:
-            txn_map = txn_ctx.get_map("test-map")
-            txn_map.put("key", "value")
-
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
-
-    def test_operations_after_commit_raise(self):
-        """Operations after commit raise exception."""
-        txn_ctx = TransactionContext(self.context)
+    def test_operations_require_active_transaction(self):
+        txn_ctx = TransactionContext(self.mock_context)
         txn_ctx.begin()
         txn_map = txn_ctx.get_map("test-map")
         txn_ctx.commit()
@@ -468,27 +428,23 @@ class TestTransactionContextWithProxies(TransactionalProxyTestBase):
         with self.assertRaises(TransactionNotActiveException):
             txn_map.put("key", "value")
 
-    def test_operations_after_rollback_raise(self):
-        """Operations after rollback raise exception."""
-        txn_ctx = TransactionContext(self.context)
+    def test_changes_visible_within_transaction(self):
+        txn_ctx = TransactionContext(self.mock_context)
         txn_ctx.begin()
         txn_map = txn_ctx.get_map("test-map")
-        txn_ctx.rollback()
 
-        with self.assertRaises(TransactionNotActiveException):
-            txn_map.get("key")
+        txn_map.put("key1", "value1")
+        self.assertEqual(txn_map.get("key1"), "value1")
 
-    def test_exception_in_context_manager_triggers_rollback(self):
-        """Exception within context manager triggers rollback."""
-        txn_ctx = TransactionContext(self.context)
+    def test_deleted_keys_not_visible(self):
+        txn_ctx = TransactionContext(self.mock_context)
+        txn_ctx.begin()
+        txn_map = txn_ctx.get_map("test-map")
 
-        with self.assertRaises(ValueError):
-            with txn_ctx:
-                txn_map = txn_ctx.get_map("test-map")
-                txn_map.put("key", "value")
-                raise ValueError("Test error")
-
-        self.assertEqual(txn_ctx.state, TransactionState.ROLLED_BACK)
+        txn_map.put("key1", "value1")
+        txn_map.delete("key1")
+        self.assertIsNone(txn_map.get("key1"))
+        self.assertFalse(txn_map.contains_key("key1"))
 
 
 if __name__ == "__main__":

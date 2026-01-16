@@ -1,4 +1,4 @@
-"""Base class for transactional distributed object proxies."""
+"""Base class for transactional proxies."""
 
 from abc import ABC
 from typing import Any, TYPE_CHECKING
@@ -8,18 +8,20 @@ if TYPE_CHECKING:
 
 
 class TransactionalProxy(ABC):
-    """Base class for transactional distributed object proxies.
+    """Base class for all transactional distributed object proxies.
 
-    Transactional proxies provide access to distributed data structures
-    within a transaction context. Operations on these proxies are part
-    of the enclosing transaction and are committed or rolled back atomically.
+    Transactional proxies provide operations that participate in a
+    transaction managed by a TransactionContext. All operations on
+    transactional proxies require an active transaction.
 
-    Subclasses implement specific data structure operations.
+    Attributes:
+        name: The name of the underlying distributed object.
+        transaction_context: The transaction context managing this proxy.
     """
 
-    def __init__(self, name: str, transaction: "TransactionContext"):
+    def __init__(self, name: str, transaction_context: "TransactionContext"):
         self._name = name
-        self._transaction = transaction
+        self._transaction_context = transaction_context
 
     @property
     def name(self) -> str:
@@ -27,18 +29,23 @@ class TransactionalProxy(ABC):
         return self._name
 
     @property
-    def transaction(self) -> "TransactionContext":
+    def transaction_context(self) -> "TransactionContext":
         """Get the transaction context."""
-        return self._transaction
+        return self._transaction_context
 
     def _check_transaction_active(self) -> None:
-        """Verify the transaction is still active."""
-        self._transaction._check_active()
+        """Verify the transaction is active.
+
+        Raises:
+            TransactionNotActiveException: If the transaction is not active.
+        """
+        self._transaction_context._check_active()
 
     def _to_data(self, obj: Any) -> bytes:
         """Serialize an object to binary data."""
-        if self._transaction._context and self._transaction._context.serialization_service:
-            return self._transaction._context.serialization_service.to_data(obj)
+        ctx = self._transaction_context._context
+        if ctx and ctx.serialization_service:
+            return ctx.serialization_service.to_data(obj)
         if obj is None:
             return b""
         if isinstance(obj, bytes):
@@ -47,8 +54,9 @@ class TransactionalProxy(ABC):
 
     def _to_object(self, data: bytes) -> Any:
         """Deserialize binary data to an object."""
-        if self._transaction._context and self._transaction._context.serialization_service:
-            return self._transaction._context.serialization_service.to_object(data)
+        ctx = self._transaction_context._context
+        if ctx and ctx.serialization_service:
+            return ctx.serialization_service.to_object(data)
         if not data:
             return None
         return data

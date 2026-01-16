@@ -1,4 +1,4 @@
-"""Transactional proxy classes for distributed data structures."""
+"""Transactional proxy implementations for Hazelcast distributed data structures."""
 
 from hazelcast.proxy.transactional.base import TransactionalProxy
 from hazelcast.proxy.transactional.map import TransactionalMap
