@@ -4295,6 +4295,97 @@ class SqlCodec:
         return msg
 
 
+# ExecutorService protocol constants
+EXECUTOR_SUBMIT_TO_PARTITION = 0x080100
+EXECUTOR_SUBMIT_TO_MEMBER = 0x080200
+EXECUTOR_SHUTDOWN = 0x080300
+EXECUTOR_IS_SHUTDOWN = 0x080400
+
+
+class ExecutorServiceCodec:
+    """Codec for ExecutorService protocol messages."""
+
+    @staticmethod
+    def encode_submit_to_partition_request(
+        name: str, task_data: bytes, partition_id: int
+    ) -> "ClientMessage":
+        """Encode an ExecutorService.submitToPartition request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, EXECUTOR_SUBMIT_TO_PARTITION)
+        struct.pack_into("<i", buffer, 12, partition_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(task_data))
+        return msg
+
+    @staticmethod
+    def decode_submit_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode an ExecutorService submit response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_submit_to_member_request(
+        name: str, task_data: bytes, member_uuid: uuid_module.UUID
+    ) -> "ClientMessage":
+        """Encode an ExecutorService.submitToMember request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, EXECUTOR_SUBMIT_TO_MEMBER)
+        struct.pack_into("<i", buffer, 12, -1)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE, member_uuid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(task_data))
+        return msg
+
+    @staticmethod
+    def encode_shutdown_request(name: str) -> "ClientMessage":
+        """Encode an ExecutorService.shutdown request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, EXECUTOR_SHUTDOWN)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_is_shutdown_request(name: str) -> "ClientMessage":
+        """Encode an ExecutorService.isShutdown request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, EXECUTOR_IS_SHUTDOWN)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_is_shutdown_response(msg: "ClientMessage") -> bool:
+        """Decode an ExecutorService.isShutdown response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+
 # Transactional protocol constants
 TXN_MAP_PUT = 0x0E0100
 TXN_MAP_GET = 0x0E0200

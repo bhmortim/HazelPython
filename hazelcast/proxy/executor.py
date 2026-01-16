@@ -1,8 +1,9 @@
 """Distributed Executor Service proxy implementation."""
 
+import uuid as uuid_module
 from abc import ABC, abstractmethod
 from concurrent.futures import Future
-from typing import Any, Callable as CallableType, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import Any, Callable as CallableType, Dict, List, Optional, Set, TYPE_CHECKING, Union
 
 from hazelcast.proxy.base import Proxy, ProxyContext
 from hazelcast.logging import get_logger
@@ -11,6 +12,45 @@ if TYPE_CHECKING:
     from hazelcast.protocol.client_message import ClientMessage
 
 _logger = get_logger("executor")
+
+
+class MemberSelector(ABC):
+    """Interface for selecting cluster members for task execution.
+
+    Implement this interface to filter which members should be
+    considered for task execution.
+
+    Example:
+        >>> class DataMemberSelector(MemberSelector):
+        ...     def select(self, member: Member) -> bool:
+        ...         return not member.lite_member
+    """
+
+    @abstractmethod
+    def select(self, member: "Member") -> bool:
+        """Determine if the given member should be selected.
+
+        Args:
+            member: The cluster member to evaluate.
+
+        Returns:
+            True if the member should be selected for task execution.
+        """
+        pass
+
+
+class LiteMemberSelector(MemberSelector):
+    """Selects only lite members."""
+
+    def select(self, member: "Member") -> bool:
+        return member.lite_member
+
+
+class DataMemberSelector(MemberSelector):
+    """Selects only data (non-lite) members."""
+
+    def select(self, member: "Member") -> bool:
+        return not member.lite_member
 
 
 class Callable(ABC):
@@ -232,6 +272,7 @@ class IExecutorService(Proxy):
     ):
         super().__init__(service_name, name, context)
         self._is_shutdown = False
+        self._members: Dict[str, Member] = {}
 
     def submit(
         self,
@@ -407,6 +448,91 @@ class IExecutorService(Proxy):
 
         return self._execute_on_members(task_data, members, callback)
 
+    def submit_to_member_with_selector(
+        self,
+        task: Union[Callable, Runnable],
+        member_selector: MemberSelector,
+        callback: ExecutionCallback = None,
+    ) -> Future:
+        """Submit a task to a member selected by the given selector.
+
+        Args:
+            task: The Callable or Runnable to execute.
+            member_selector: The selector to filter eligible members.
+            callback: Optional callback for completion notification.
+
+        Returns:
+            A Future containing the result (or None for Runnable).
+
+        Raises:
+            IllegalArgumentException: If no member matches the selector.
+            IllegalStateException: If the executor is shut down.
+
+        Example:
+            >>> selector = DataMemberSelector()
+            >>> future = executor.submit_to_member_with_selector(my_task, selector)
+        """
+        self._check_not_destroyed()
+        self._check_not_shutdown()
+
+        selected_members = self._select_members(member_selector)
+        if not selected_members:
+            from hazelcast.exceptions import IllegalArgumentException
+            raise IllegalArgumentException("No member matches the selector")
+
+        member = next(iter(selected_members))
+        return self.submit_to_member(task, member, callback)
+
+    def submit_to_all_members_with_selector(
+        self,
+        task: Union[Callable, Runnable],
+        member_selector: MemberSelector,
+        callback: MultiExecutionCallback = None,
+    ) -> Dict[Member, Future]:
+        """Submit a task to all members matching the selector.
+
+        Args:
+            task: The Callable or Runnable to execute.
+            member_selector: The selector to filter eligible members.
+            callback: Optional callback for completion notification.
+
+        Returns:
+            A dictionary mapping each selected member to its result Future.
+
+        Raises:
+            IllegalArgumentException: If no member matches the selector.
+            IllegalStateException: If the executor is shut down.
+
+        Example:
+            >>> selector = DataMemberSelector()
+            >>> futures = executor.submit_to_all_members_with_selector(my_task, selector)
+        """
+        self._check_not_destroyed()
+        self._check_not_shutdown()
+
+        selected_members = self._select_members(member_selector)
+        if not selected_members:
+            from hazelcast.exceptions import IllegalArgumentException
+            raise IllegalArgumentException("No member matches the selector")
+
+        return self.submit_to_members(task, list(selected_members), callback)
+
+    def _select_members(self, selector: MemberSelector) -> Set[Member]:
+        """Select members using the given selector."""
+        return {m for m in self._members.values() if selector.select(m)}
+
+    def _get_members(self) -> List[Member]:
+        """Get all known cluster members."""
+        return list(self._members.values())
+
+    def _add_member(self, member: Member) -> None:
+        """Add a member to the known members list."""
+        self._members[member.uuid] = member
+
+    def _remove_member(self, member_uuid: str) -> None:
+        """Remove a member from the known members list."""
+        self._members.pop(member_uuid, None)
+
     def shutdown(self) -> None:
         """Orderly shutdown of the executor service.
 
@@ -452,7 +578,24 @@ class IExecutorService(Proxy):
     ) -> None:
         """Execute task on a random member."""
         _logger.debug("Executing task on random member for executor %s", self._name)
-        self._complete_with_callback(future, None, callback)
+
+        if self._context is None or self._context.invocation_service is None:
+            self._complete_with_callback(future, None, callback)
+            return
+
+        partition_id = hash(uuid_module.uuid4()) % 271
+
+        from hazelcast.protocol.codec import ExecutorServiceCodec
+        request = ExecutorServiceCodec.encode_submit_to_partition_request(
+            self._name, task_data, partition_id
+        )
+
+        def handle_response(response):
+            result_data = ExecutorServiceCodec.decode_submit_response(response)
+            return self._to_object(result_data) if result_data else None
+
+        invoke_future = self._invoke_on_partition(request, partition_id, handle_response)
+        self._chain_future(invoke_future, future, callback)
 
     def _execute_on_member(
         self,
@@ -467,7 +610,23 @@ class IExecutorService(Proxy):
             member.uuid,
             self._name,
         )
-        self._complete_with_callback(future, None, callback)
+
+        if self._context is None or self._context.invocation_service is None:
+            self._complete_with_callback(future, None, callback)
+            return
+
+        from hazelcast.protocol.codec import ExecutorServiceCodec
+        member_uuid = uuid_module.UUID(member.uuid) if isinstance(member.uuid, str) else member.uuid
+        request = ExecutorServiceCodec.encode_submit_to_member_request(
+            self._name, task_data, member_uuid
+        )
+
+        def handle_response(response):
+            result_data = ExecutorServiceCodec.decode_submit_response(response)
+            return self._to_object(result_data) if result_data else None
+
+        invoke_future = self._invoke(request, handle_response)
+        self._chain_future(invoke_future, future, callback)
 
     def _execute_on_partition(
         self,
@@ -482,7 +641,22 @@ class IExecutorService(Proxy):
             partition_id,
             self._name,
         )
-        self._complete_with_callback(future, None, callback)
+
+        if self._context is None or self._context.invocation_service is None:
+            self._complete_with_callback(future, None, callback)
+            return
+
+        from hazelcast.protocol.codec import ExecutorServiceCodec
+        request = ExecutorServiceCodec.encode_submit_to_partition_request(
+            self._name, task_data, partition_id
+        )
+
+        def handle_response(response):
+            result_data = ExecutorServiceCodec.decode_submit_response(response)
+            return self._to_object(result_data) if result_data else None
+
+        invoke_future = self._invoke_on_partition(request, partition_id, handle_response)
+        self._chain_future(invoke_future, future, callback)
 
     def _execute_on_all_members(
         self,
@@ -491,12 +665,14 @@ class IExecutorService(Proxy):
     ) -> Dict[Member, Future]:
         """Execute task on all members."""
         _logger.debug("Executing task on all members for executor %s", self._name)
-        results: Dict[Member, Future] = {}
 
-        if callback:
-            callback.on_complete({})
+        members = self._get_members()
+        if not members:
+            if callback:
+                callback.on_complete({})
+            return {}
 
-        return results
+        return self._execute_on_members(task_data, members, callback)
 
     def _execute_on_members(
         self,
@@ -512,21 +688,69 @@ class IExecutorService(Proxy):
         )
         results: Dict[Member, Future] = {}
         all_results: Dict[str, Any] = {}
+        pending_count = [len(members)]
+
+        def on_member_complete(member: Member, member_future: Future) -> None:
+            try:
+                result = member_future.result()
+                all_results[member.uuid] = result
+                if callback:
+                    try:
+                        callback.on_response(member.uuid, result)
+                    except Exception as e:
+                        _logger.warning("Callback on_response raised exception: %s", e)
+            except Exception as e:
+                all_results[member.uuid] = None
+                if callback:
+                    try:
+                        callback.on_failure(member.uuid, e)
+                    except Exception as ex:
+                        _logger.warning("Callback on_failure raised exception: %s", ex)
+            finally:
+                pending_count[0] -= 1
+                if pending_count[0] == 0 and callback:
+                    try:
+                        callback.on_complete(all_results)
+                    except Exception as e:
+                        _logger.warning("Callback on_complete raised exception: %s", e)
 
         for member in members:
             member_future: Future = Future()
-            self._execute_on_member(task_data, member, member_future)
             results[member] = member_future
-            if member_future.done():
-                try:
-                    all_results[member.uuid] = member_future.result()
-                except Exception:
-                    all_results[member.uuid] = None
 
-        if callback:
-            callback.on_complete(all_results)
+            def make_callback(m: Member, f: Future):
+                return lambda _: on_member_complete(m, f)
+
+            self._execute_on_member(task_data, member, member_future)
+            member_future.add_done_callback(make_callback(member, member_future))
 
         return results
+
+    def _chain_future(
+        self,
+        source: Future,
+        target: Future,
+        callback: ExecutionCallback = None,
+    ) -> None:
+        """Chain a source future to a target future with optional callback."""
+        def on_done(f: Future) -> None:
+            try:
+                result = f.result()
+                target.set_result(result)
+                if callback:
+                    try:
+                        callback.on_response(result)
+                    except Exception as e:
+                        _logger.warning("Callback on_response raised exception: %s", e)
+            except Exception as e:
+                target.set_exception(e)
+                if callback:
+                    try:
+                        callback.on_failure(e)
+                    except Exception as ex:
+                        _logger.warning("Callback on_failure raised exception: %s", ex)
+
+        source.add_done_callback(on_done)
 
     def _complete_with_callback(
         self,
