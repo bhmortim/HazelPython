@@ -532,6 +532,269 @@ class TestInvocationService:
         with pytest.raises(TargetDisconnectedException):
             future.result()
 
+    def test_get_connection_no_connection_manager(self):
+        """Test _get_connection_for_invocation returns None without connection manager."""
+        service = InvocationService()
+        inv = Invocation(MagicMock(), partition_id=5)
+
+        result = service._get_connection_for_invocation(inv)
+
+        assert result is None
+
+    def test_init_config_without_retry(self):
+        """Test InvocationService with config that has no retry attribute."""
+        config = MagicMock(spec=['smart_routing'])
+        config.smart_routing = False
+
+        service = InvocationService(config=config)
+
+        assert service._smart_routing is False
+        assert service._retry_count == 3
+        assert service._retry_pause == 1.0
+
+    def test_schedule_retry_skipped_when_future_done(self):
+        """Test _schedule_retry skips retry when future already completed."""
+        service = InvocationService()
+        service._retry_pause = 0.001
+        service.start()
+
+        inv = Invocation(MagicMock())
+        inv.correlation_id = 1
+        inv.set_response(MagicMock())
+
+        send_calls = []
+        service._send_invocation = lambda i, r=0: send_calls.append(r)
+
+        service._schedule_retry(inv, 1)
+
+        time.sleep(0.05)
+
+        assert len(send_calls) == 0
+
+    def test_schedule_retry_skipped_when_not_running(self):
+        """Test _schedule_retry skips retry when service stopped."""
+        service = InvocationService()
+        service._retry_pause = 0.001
+        service.start()
+
+        inv = Invocation(MagicMock())
+        inv.correlation_id = 1
+
+        send_calls = []
+        service._send_invocation = lambda i, r=0: send_calls.append(r)
+
+        service._schedule_retry(inv, 1)
+        service._running = False
+
+        time.sleep(0.05)
+
+        assert len(send_calls) == 0
+
+    def test_handle_message_non_event_calls_handle_response(self):
+        """Test _handle_message calls handle_response for non-event messages."""
+        service = InvocationService()
+        service.start()
+
+        request = MagicMock()
+        inv = Invocation(request)
+        inv.correlation_id = 42
+        service._pending[42] = inv
+
+        message = MagicMock()
+        message.is_event.return_value = False
+        message.get_correlation_id.return_value = 42
+
+        service._handle_message(message)
+
+        assert inv.future.done()
+        assert inv.future.result() is message
+
+    def test_smart_routing_partition_zero(self):
+        """Test smart routing with partition_id=0 (valid partition)."""
+        conn_mgr = MagicMock()
+        service = InvocationService(connection_manager=conn_mgr)
+        service._smart_routing = True
+
+        inv = Invocation(MagicMock(), partition_id=0)
+        service._get_connection_for_invocation(inv)
+
+        conn_mgr.get_connection.assert_called_once_with(0)
+
+    def test_check_timeouts_empty_pending(self):
+        """Test check_timeouts with no pending invocations."""
+        service = InvocationService()
+        service.start()
+
+        timed_out = service.check_timeouts()
+
+        assert timed_out == 0
+
+    def test_check_timeouts_thread_safety(self):
+        """Test check_timeouts is thread-safe with concurrent calls."""
+        service = InvocationService()
+        service.start()
+
+        for i in range(20):
+            inv = Invocation(MagicMock(), timeout=0.001 if i % 2 == 0 else 60.0)
+            inv.correlation_id = i
+            inv.mark_sent()
+            service._pending[i] = inv
+
+        time.sleep(0.02)
+
+        results = []
+        lock = threading.Lock()
+
+        def check_thread():
+            result = service.check_timeouts()
+            with lock:
+                results.append(result)
+
+        threads = [threading.Thread(target=check_thread) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sum(results) == 10
+        assert service.get_pending_count() == 10
+
+    def test_invoke_full_flow_with_response(self):
+        """Test complete invoke flow from request to response."""
+        conn_mgr = MagicMock()
+        connection = MagicMock()
+        connection.connection_id = 1
+        conn_mgr.get_connection.return_value = connection
+        service = InvocationService(connection_manager=conn_mgr)
+        service.start()
+
+        request = MagicMock()
+        inv = Invocation(request, partition_id=3)
+
+        future = service.invoke(inv)
+
+        response = MagicMock()
+        response.get_correlation_id.return_value = inv.correlation_id
+        service.handle_response(response)
+
+        assert future.done()
+        assert future.result() is response
+        assert service.get_pending_count() == 0
+
+    def test_multiple_sequential_retries(self):
+        """Test multiple retry attempts with increasing backoff."""
+        conn_mgr = MagicMock()
+        conn_mgr.get_connection.return_value = None
+        service = InvocationService(connection_manager=conn_mgr)
+        service._retry_count = 3
+        service._retry_pause = 0.005
+        service.start()
+
+        request = MagicMock()
+        inv = Invocation(request)
+
+        service.invoke(inv)
+
+        time.sleep(0.2)
+
+        assert inv.future.done()
+        with pytest.raises(ClientOfflineException):
+            inv.future.result()
+
+        assert conn_mgr.get_connection.call_count >= 4
+
+    def test_concurrent_invoke_and_response(self):
+        """Test concurrent invoke and response handling."""
+        conn_mgr = MagicMock()
+        connection = MagicMock()
+        connection.connection_id = 1
+        conn_mgr.get_connection.return_value = connection
+        service = InvocationService(connection_manager=conn_mgr)
+        service.start()
+
+        futures = []
+        lock = threading.Lock()
+
+        def invoke_and_store(i):
+            inv = Invocation(MagicMock())
+            future = service.invoke(inv)
+            with lock:
+                futures.append((inv.correlation_id, future))
+
+        threads = [threading.Thread(target=invoke_and_store, args=(i,)) for i in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        for cid, future in futures:
+            response = MagicMock()
+            response.get_correlation_id.return_value = cid
+            service.handle_response(response)
+
+        for _, future in futures:
+            assert future.done()
+
+        assert service.get_pending_count() == 0
+
+    def test_fail_invocation_removes_from_pending(self):
+        """Test _fail_invocation removes invocation from pending map."""
+        service = InvocationService()
+        service.start()
+
+        inv = Invocation(MagicMock())
+        inv.correlation_id = 42
+        service._pending[42] = inv
+
+        service._fail_invocation(inv, HazelcastException("test"))
+
+        assert 42 not in service._pending
+        assert inv.future.done()
+
+    def test_invoke_on_connection_marks_sent_time(self):
+        """Test invoke_on_connection marks sent time correctly."""
+        service = InvocationService()
+        service.start()
+
+        connection = MagicMock()
+        inv = Invocation(MagicMock())
+
+        before = time.time()
+        service.invoke_on_connection(inv, connection)
+        after = time.time()
+
+        assert inv.sent_time is not None
+        assert before <= inv.sent_time <= after
+
+    def test_retry_backoff_calculation(self):
+        """Test exponential backoff values are calculated correctly."""
+        conn_mgr = MagicMock()
+        connection = MagicMock()
+        connection.connection_id = 1
+        connection.send_sync.side_effect = TargetDisconnectedException("fail")
+        conn_mgr.get_connection.return_value = connection
+
+        service = InvocationService(connection_manager=conn_mgr)
+        service._retry_count = 3
+        service._retry_pause = 0.01
+        service.start()
+
+        retry_times = []
+        original_schedule = service._schedule_retry
+
+        def mock_schedule(inv, retry_count):
+            retry_times.append((time.time(), retry_count))
+            original_schedule(inv, retry_count)
+
+        service._schedule_retry = mock_schedule
+
+        inv = Invocation(MagicMock())
+        service.invoke(inv)
+
+        time.sleep(0.2)
+
+        assert len(retry_times) >= 3
+
     def test_concurrent_invocations(self):
         """Test concurrent invocations get unique correlation IDs."""
         conn_mgr = MagicMock()
@@ -620,3 +883,167 @@ class TestInvocationService:
         assert inv.future.done()
         with pytest.raises(ClientOfflineException, match="shutting down"):
             inv.future.result()
+
+    def test_invoke_partition_routing_under_load(self):
+        """Test partition-aware routing under concurrent load."""
+        conn_mgr = MagicMock()
+        connections = {i: MagicMock(connection_id=i) for i in range(10)}
+
+        def get_connection(partition_id=None):
+            if partition_id is not None:
+                return connections.get(partition_id % 10)
+            return connections[0]
+
+        conn_mgr.get_connection.side_effect = get_connection
+        service = InvocationService(connection_manager=conn_mgr)
+        service._smart_routing = True
+        service.start()
+
+        results = []
+        lock = threading.Lock()
+
+        def invoke_partition(partition):
+            inv = Invocation(MagicMock(), partition_id=partition)
+            service.invoke(inv)
+            with lock:
+                results.append((partition, inv.correlation_id))
+
+        threads = [threading.Thread(target=invoke_partition, args=(i,)) for i in range(50)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 50
+        assert len(set(cid for _, cid in results)) == 50
+
+    def test_timeout_during_retry(self):
+        """Test invocation times out while waiting for retry."""
+        conn_mgr = MagicMock()
+        conn_mgr.get_connection.return_value = None
+        service = InvocationService(connection_manager=conn_mgr)
+        service._retry_count = 10
+        service._retry_pause = 1.0
+        service.start()
+
+        inv = Invocation(MagicMock(), timeout=0.01)
+        inv.correlation_id = 1
+        service._pending[1] = inv
+
+        service._send_invocation(inv)
+
+        time.sleep(0.05)
+
+        timed_out = service.check_timeouts()
+
+        assert timed_out == 1
+
+    def test_response_after_timeout(self):
+        """Test response received after timeout is ignored."""
+        service = InvocationService()
+        service.start()
+
+        inv = Invocation(MagicMock(), timeout=0.001)
+        inv.correlation_id = 1
+        inv.mark_sent()
+        service._pending[1] = inv
+
+        time.sleep(0.01)
+        service.check_timeouts()
+
+        response = MagicMock()
+        response.get_correlation_id.return_value = 1
+
+        result = service.handle_response(response)
+
+        assert result is False
+        with pytest.raises(OperationTimeoutException):
+            inv.future.result()
+
+    def test_disconnect_all_retries_exhausted(self):
+        """Test all retries exhausted on disconnect preserves original exception."""
+        conn_mgr = MagicMock()
+        connection = MagicMock()
+        connection.connection_id = 1
+        connection.send_sync.side_effect = TargetDisconnectedException("connection lost")
+        conn_mgr.get_connection.return_value = connection
+
+        service = InvocationService(connection_manager=conn_mgr)
+        service._retry_count = 0
+        service.start()
+
+        inv = Invocation(MagicMock())
+        service.invoke(inv)
+
+        assert inv.future.done()
+        with pytest.raises(TargetDisconnectedException, match="connection lost"):
+            inv.future.result()
+
+    def test_invoke_on_connection_adds_to_pending(self):
+        """Test invoke_on_connection adds invocation to pending map."""
+        service = InvocationService()
+        service.start()
+
+        connection = MagicMock()
+        inv = Invocation(MagicMock())
+
+        service.invoke_on_connection(inv, connection)
+
+        assert inv.correlation_id in service._pending
+
+    def test_config_missing_smart_routing(self):
+        """Test config without smart_routing attribute uses default."""
+        config = MagicMock(spec=[])
+
+        service = InvocationService(config=config)
+
+        assert service._smart_routing is True
+
+    def test_shutdown_idempotent(self):
+        """Test shutdown can be called multiple times safely."""
+        service = InvocationService()
+        service.start()
+
+        inv = Invocation(MagicMock())
+        inv.correlation_id = 1
+        service._pending[1] = inv
+
+        service.shutdown()
+        service.shutdown()
+
+        assert not service.is_running
+        assert service.get_pending_count() == 0
+
+    def test_check_timeouts_all_expired(self):
+        """Test check_timeouts when all invocations are expired."""
+        service = InvocationService()
+        service.start()
+
+        for i in range(5):
+            inv = Invocation(MagicMock(), timeout=0.001)
+            inv.correlation_id = i
+            inv.mark_sent()
+            service._pending[i] = inv
+
+        time.sleep(0.02)
+
+        timed_out = service.check_timeouts()
+
+        assert timed_out == 5
+        assert service.get_pending_count() == 0
+
+    def test_check_timeouts_none_expired(self):
+        """Test check_timeouts when no invocations are expired."""
+        service = InvocationService()
+        service.start()
+
+        for i in range(5):
+            inv = Invocation(MagicMock(), timeout=60.0)
+            inv.correlation_id = i
+            inv.mark_sent()
+            service._pending[i] = inv
+
+        timed_out = service.check_timeouts()
+
+        assert timed_out == 0
+        assert service.get_pending_count() == 5
