@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from hazelcast.sql.service import SqlService
     from hazelcast.jet.service import JetService
     from hazelcast.transaction import TransactionContext, TransactionOptions
+    from hazelcast.proxy.vector import VectorCollection
 
 
 SERVICE_NAME_CACHE = "hz:impl:cacheService"
@@ -87,6 +88,7 @@ SERVICE_NAME_SEMAPHORE = "hz:raft:semaphoreService"
 SERVICE_NAME_FENCED_LOCK = "hz:raft:lockService"
 SERVICE_NAME_CP_MAP = "hz:raft:mapService"
 SERVICE_NAME_DURABLE_EXECUTOR = "hz:impl:durableExecutorService"
+SERVICE_NAME_VECTOR_COLLECTION = "hz:impl:vectorCollectionService"
 
 
 class ClientState(Enum):
@@ -1239,6 +1241,38 @@ class HazelcastClient:
         """
         from hazelcast.cp.cp_map import CPMap
         return self._get_or_create_proxy(SERVICE_NAME_CP_MAP, name, CPMap)
+
+    def get_vector_collection(self, name: str) -> "VectorCollection":
+        """Get or create a distributed VectorCollection.
+
+        Returns a proxy to a distributed vector collection for storing
+        and searching vectors (embeddings) using approximate nearest
+        neighbor search.
+
+        VectorCollection is ideal for:
+        - Semantic search and similarity matching
+        - Recommendation systems
+        - RAG (Retrieval Augmented Generation) applications
+        - Image/audio/text embedding search
+
+        Args:
+            name: Name of the distributed vector collection.
+
+        Returns:
+            VectorCollection instance for vector operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> vc = client.get_vector_collection("embeddings")
+            >>> vc.put("doc-1", [0.1, 0.2, 0.3, 0.4])
+            >>> results = vc.search([0.15, 0.25, 0.35, 0.45], limit=10)
+            >>> for r in results:
+            ...     print(f"Key: {r.key}, Score: {r.score}")
+        """
+        from hazelcast.proxy.vector import VectorCollection
+        return self._get_or_create_proxy(SERVICE_NAME_VECTOR_COLLECTION, name, VectorCollection)
 
     def get_sql(self) -> "SqlService":
         """Get the SQL service for executing queries.

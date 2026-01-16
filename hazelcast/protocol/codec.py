@@ -5380,6 +5380,329 @@ class ExecutorServiceCodec:
         return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
 
 
+# Vector Collection protocol constants
+VECTOR_PUT = 0x240100
+VECTOR_GET = 0x240200
+VECTOR_SEARCH = 0x240300
+VECTOR_DELETE = 0x240400
+VECTOR_SIZE = 0x240500
+VECTOR_CLEAR = 0x240600
+VECTOR_OPTIMIZE = 0x240700
+
+
+class VectorDocument:
+    """Represents a vector document with key, vector data, and optional metadata."""
+
+    def __init__(
+        self,
+        key: bytes,
+        vector: List[float],
+        metadata: Optional[Dict[str, bytes]] = None,
+    ):
+        self.key = key
+        self.vector = vector
+        self.metadata = metadata or {}
+
+    def __repr__(self) -> str:
+        return f"VectorDocument(key={self.key!r}, vector_dim={len(self.vector)}, metadata_keys={list(self.metadata.keys())})"
+
+
+class VectorSearchResult:
+    """Represents a search result with score and document."""
+
+    def __init__(self, score: float, key: bytes, vector: List[float], metadata: Dict[str, bytes]):
+        self.score = score
+        self.key = key
+        self.vector = vector
+        self.metadata = metadata
+
+    def __repr__(self) -> str:
+        return f"VectorSearchResult(score={self.score}, key={self.key!r})"
+
+
+class VectorCodec:
+    """Codec for Vector Collection protocol messages."""
+
+    @staticmethod
+    def _encode_vector(buffer: bytearray, offset: int, vector: List[float]) -> int:
+        """Encode a vector as a list of floats."""
+        struct.pack_into("<i", buffer, offset, len(vector))
+        offset += INT_SIZE
+        for val in vector:
+            struct.pack_into("<f", buffer, offset, val)
+            offset += FLOAT_SIZE
+        return offset
+
+    @staticmethod
+    def _decode_vector(buffer: bytes, offset: int) -> Tuple[List[float], int]:
+        """Decode a vector from buffer."""
+        length = struct.unpack_from("<i", buffer, offset)[0]
+        offset += INT_SIZE
+        vector = []
+        for _ in range(length):
+            val = struct.unpack_from("<f", buffer, offset)[0]
+            vector.append(val)
+            offset += FLOAT_SIZE
+        return vector, offset
+
+    @staticmethod
+    def encode_put_request(
+        name: str,
+        key: bytes,
+        vector: List[float],
+        metadata: Optional[Dict[str, bytes]] = None,
+    ) -> "ClientMessage":
+        """Encode a VectorCollection.put request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, BEGIN_FRAME, END_FRAME, NULL_FRAME
+
+        vector_size = INT_SIZE + len(vector) * FLOAT_SIZE
+        buffer = bytearray(REQUEST_HEADER_SIZE + vector_size)
+        struct.pack_into("<I", buffer, 0, VECTOR_PUT)
+        struct.pack_into("<i", buffer, 12, -1)
+        VectorCodec._encode_vector(buffer, REQUEST_HEADER_SIZE, vector)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+
+        if metadata:
+            msg.add_frame(BEGIN_FRAME)
+            for meta_key, meta_value in metadata.items():
+                StringCodec.encode(msg, meta_key)
+                msg.add_frame(Frame(meta_value))
+            msg.add_frame(END_FRAME)
+        else:
+            msg.add_frame(NULL_FRAME)
+
+        return msg
+
+    @staticmethod
+    def decode_put_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a VectorCollection.put response (returns old key if existed)."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_get_request(name: str, key: bytes) -> "ClientMessage":
+        """Encode a VectorCollection.get request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, VECTOR_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_get_response(msg: "ClientMessage") -> Optional[VectorDocument]:
+        """Decode a VectorCollection.get response."""
+        frame = msg.next_frame()
+        if frame is None:
+            return None
+
+        content = frame.content
+        if len(content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return None
+
+        vector, offset = VectorCodec._decode_vector(content, RESPONSE_HEADER_SIZE)
+
+        key_frame = msg.next_frame()
+        if key_frame is None or key_frame.is_null_frame:
+            return None
+
+        key = key_frame.content
+
+        metadata = {}
+        meta_frame = msg.peek_next_frame()
+        if meta_frame is not None and not meta_frame.is_null_frame:
+            msg.next_frame()
+            while msg.has_next_frame():
+                frame = msg.peek_next_frame()
+                if frame is None or frame.is_end_data_structure_frame:
+                    msg.skip_frame()
+                    break
+                meta_key_frame = msg.next_frame()
+                meta_value_frame = msg.next_frame()
+                if meta_key_frame and meta_value_frame:
+                    meta_key = meta_key_frame.content.decode("utf-8")
+                    metadata[meta_key] = meta_value_frame.content
+        else:
+            msg.skip_frame()
+
+        return VectorDocument(key, vector, metadata)
+
+    @staticmethod
+    def encode_search_request(
+        name: str,
+        vector: List[float],
+        limit: int,
+        include_vectors: bool = False,
+        include_metadata: bool = True,
+    ) -> "ClientMessage":
+        """Encode a VectorCollection.search request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        vector_size = INT_SIZE + len(vector) * FLOAT_SIZE
+        buffer = bytearray(REQUEST_HEADER_SIZE + vector_size + INT_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, VECTOR_SEARCH)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        offset = REQUEST_HEADER_SIZE
+        offset = VectorCodec._encode_vector(buffer, offset, vector)
+        struct.pack_into("<i", buffer, offset, limit)
+        offset += INT_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if include_vectors else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if include_metadata else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_search_response(msg: "ClientMessage") -> List[VectorSearchResult]:
+        """Decode a VectorCollection.search response."""
+        frame = msg.next_frame()
+        if frame is None:
+            return []
+
+        results = []
+        msg.next_frame()
+
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            result_frame = msg.next_frame()
+            if result_frame is None:
+                break
+
+            content = result_frame.content
+            if len(content) < FLOAT_SIZE:
+                continue
+
+            score = struct.unpack_from("<f", content, 0)[0]
+            offset = FLOAT_SIZE
+
+            vector = []
+            if offset + INT_SIZE <= len(content):
+                vec_len = struct.unpack_from("<i", content, offset)[0]
+                offset += INT_SIZE
+                for _ in range(vec_len):
+                    if offset + FLOAT_SIZE <= len(content):
+                        val = struct.unpack_from("<f", content, offset)[0]
+                        vector.append(val)
+                        offset += FLOAT_SIZE
+
+            key_frame = msg.next_frame()
+            key = key_frame.content if key_frame and not key_frame.is_null_frame else b""
+
+            metadata = {}
+            meta_frame = msg.peek_next_frame()
+            if meta_frame is not None and not meta_frame.is_null_frame and not meta_frame.is_end_data_structure_frame:
+                msg.next_frame()
+                while msg.has_next_frame():
+                    inner_frame = msg.peek_next_frame()
+                    if inner_frame is None or inner_frame.is_end_data_structure_frame:
+                        msg.skip_frame()
+                        break
+                    meta_key_frame = msg.next_frame()
+                    meta_value_frame = msg.next_frame()
+                    if meta_key_frame and meta_value_frame:
+                        meta_key = meta_key_frame.content.decode("utf-8")
+                        metadata[meta_key] = meta_value_frame.content
+            elif meta_frame is not None and meta_frame.is_null_frame:
+                msg.skip_frame()
+
+            results.append(VectorSearchResult(score, key, vector, metadata))
+
+        return results
+
+    @staticmethod
+    def encode_delete_request(name: str, key: bytes) -> "ClientMessage":
+        """Encode a VectorCollection.delete request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, VECTOR_DELETE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_delete_response(msg: "ClientMessage") -> bool:
+        """Decode a VectorCollection.delete response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_size_request(name: str) -> "ClientMessage":
+        """Encode a VectorCollection.size request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, VECTOR_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a VectorCollection.size response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_clear_request(name: str) -> "ClientMessage":
+        """Encode a VectorCollection.clear request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, VECTOR_CLEAR)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_optimize_request(name: str) -> "ClientMessage":
+        """Encode a VectorCollection.optimize request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, VECTOR_OPTIMIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+
 # Cache (JCache JSR-107) protocol constants
 CACHE_GET = 0x130100
 CACHE_CONTAINS_KEY = 0x130200
