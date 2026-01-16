@@ -14,6 +14,7 @@ class DiscoveryStrategyType(Enum):
     AZURE = "AZURE"
     GCP = "GCP"
     KUBERNETES = "KUBERNETES"
+    CLOUD = "CLOUD"
 
 
 class DiscoveryConfig:
@@ -64,6 +65,7 @@ class DiscoveryConfig:
         self._azure: Optional[Dict] = None
         self._gcp: Optional[Dict] = None
         self._kubernetes: Optional[Dict] = None
+        self._cloud: Optional[Dict] = None
 
     @property
     def enabled(self) -> bool:
@@ -127,6 +129,17 @@ class DiscoveryConfig:
         if value and not self._strategy_type:
             self._strategy_type = DiscoveryStrategyType.KUBERNETES
 
+    @property
+    def cloud(self) -> Optional[Dict]:
+        """Get Hazelcast Cloud (Viridian) discovery configuration."""
+        return self._cloud
+
+    @cloud.setter
+    def cloud(self, value: Optional[Dict]) -> None:
+        self._cloud = value
+        if value and not self._strategy_type:
+            self._strategy_type = DiscoveryStrategyType.CLOUD
+
     def create_strategy(self) -> "DiscoveryStrategy":
         """Create and return the configured discovery strategy.
 
@@ -151,6 +164,8 @@ class DiscoveryConfig:
             GcpConfig,
             KubernetesDiscoveryStrategy,
             KubernetesConfig,
+            HazelcastCloudDiscovery,
+            CloudConfig,
         )
 
         if self._strategy_type == DiscoveryStrategyType.AWS:
@@ -168,6 +183,10 @@ class DiscoveryConfig:
         elif self._strategy_type == DiscoveryStrategyType.KUBERNETES:
             k8s_config = KubernetesConfig.from_dict(self._kubernetes or {})
             return KubernetesDiscoveryStrategy(k8s_config)
+
+        elif self._strategy_type == DiscoveryStrategyType.CLOUD:
+            cloud_config = CloudConfig.from_dict(self._cloud or {})
+            return HazelcastCloudDiscovery(cloud_config)
 
         else:
             raise ConfigurationException(
@@ -196,6 +215,8 @@ class DiscoveryConfig:
             config.gcp = data["gcp"]
         if "kubernetes" in data:
             config.kubernetes = data["kubernetes"]
+        if "cloud" in data:
+            config.cloud = data["cloud"]
 
         return config
 

@@ -5,6 +5,7 @@ from hazelcast.discovery.aws import AwsDiscoveryStrategy, AwsConfig
 from hazelcast.discovery.azure import AzureDiscoveryStrategy, AzureConfig
 from hazelcast.discovery.gcp import GcpDiscoveryStrategy, GcpConfig
 from hazelcast.discovery.kubernetes import KubernetesDiscoveryStrategy, KubernetesConfig
+from hazelcast.cloud import HazelcastCloudDiscovery, CloudConfig
 
 __all__ = [
     "DiscoveryStrategy",
@@ -17,4 +18,6 @@ __all__ = [
     "GcpConfig",
     "KubernetesDiscoveryStrategy",
     "KubernetesConfig",
+    "HazelcastCloudDiscovery",
+    "CloudConfig",
 ]
