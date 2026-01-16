@@ -1,4 +1,23 @@
-"""Built-in serializers for Python primitive types."""
+"""Built-in serializers for Python primitive types.
+
+This module provides serializers for Python's built-in types including
+primitives (bool, int, float, str), collections (list, dict), and
+standard library types (datetime, Decimal, UUID).
+
+These serializers are automatically registered with the SerializationService
+and handle the most common data types without requiring custom serializers.
+
+Supported Types:
+    - Primitives: None, bool, int, float, str, bytes
+    - Collections: list, tuple, dict
+    - Date/Time: datetime, date, time
+    - Numbers: Decimal (BigDecimal)
+    - Other: UUID, HazelcastJsonValue
+
+Type IDs:
+    Built-in serializers use negative type IDs to distinguish them from
+    user-defined serializers (which should use positive IDs).
+"""
 
 import struct
 from datetime import datetime, date, time, timedelta
@@ -39,7 +58,11 @@ JSON_TYPE_ID = -130
 
 
 class NoneSerializer(Serializer[None]):
-    """Serializer for None values."""
+    """Serializer for None values.
+
+    Handles Python's None (null) type. No data is written or read
+    since the type ID alone indicates a None value.
+    """
 
     @property
     def type_id(self) -> int:
@@ -53,7 +76,10 @@ class NoneSerializer(Serializer[None]):
 
 
 class BoolSerializer(Serializer[bool]):
-    """Serializer for boolean values."""
+    """Serializer for boolean values.
+
+    Serializes Python bool as a single byte (0 or 1).
+    """
 
     @property
     def type_id(self) -> int:
@@ -95,7 +121,15 @@ class ShortSerializer(Serializer[int]):
 
 
 class IntSerializer(Serializer[int]):
-    """Serializer for integer values."""
+    """Serializer for integer values.
+
+    Serializes Python int as a 32-bit signed integer.
+
+    Note:
+        Python integers have arbitrary precision, but this serializer
+        only handles values in the 32-bit signed range (-2^31 to 2^31-1).
+        Use LongSerializer for larger values.
+    """
 
     @property
     def type_id(self) -> int:
@@ -151,7 +185,10 @@ class DoubleSerializer(Serializer[float]):
 
 
 class StringSerializer(Serializer[str]):
-    """Serializer for string values."""
+    """Serializer for string values.
+
+    Serializes Python str as UTF-8 encoded bytes with a length prefix.
+    """
 
     @property
     def type_id(self) -> int:
@@ -179,7 +216,11 @@ class ByteArraySerializer(Serializer[bytes]):
 
 
 class ListSerializer(Serializer[list]):
-    """Serializer for list values."""
+    """Serializer for list values.
+
+    Serializes Python list (and tuple) as a length-prefixed sequence
+    of serialized objects. Each element is serialized recursively.
+    """
 
     @property
     def type_id(self) -> int:
@@ -199,7 +240,11 @@ class ListSerializer(Serializer[list]):
 
 
 class DictSerializer(Serializer[dict]):
-    """Serializer for dictionary values."""
+    """Serializer for dictionary values.
+
+    Serializes Python dict as a length-prefixed sequence of
+    key-value pairs. Both keys and values are serialized recursively.
+    """
 
     @property
     def type_id(self) -> int:
@@ -395,7 +440,11 @@ class StringArraySerializer(Serializer[List[str]]):
 
 
 class DateTimeSerializer(Serializer[datetime]):
-    """Serializer for datetime values."""
+    """Serializer for datetime values.
+
+    Serializes Python datetime with year, month, day, hour, minute,
+    second, and microsecond components.
+    """
 
     @property
     def type_id(self) -> int:
@@ -462,7 +511,11 @@ class TimeSerializer(Serializer[time]):
 
 
 class BigDecimalSerializer(Serializer[Decimal]):
-    """Serializer for Decimal (BigDecimal) values."""
+    """Serializer for Decimal (BigDecimal) values.
+
+    Serializes Python Decimal as unscaled integer bytes plus scale,
+    compatible with Java's BigDecimal representation.
+    """
 
     @property
     def type_id(self) -> int:
@@ -515,7 +568,11 @@ class BigDecimalSerializer(Serializer[Decimal]):
 
 
 def get_builtin_serializers() -> Dict[int, Serializer]:
-    """Get all built-in serializers indexed by type ID."""
+    """Get all built-in serializers indexed by type ID.
+
+    Returns:
+        Dictionary mapping type IDs to serializer instances.
+    """
     from hazelcast.serialization.json import HazelcastJsonValueSerializer
 
     serializers = [
@@ -549,7 +606,11 @@ def get_builtin_serializers() -> Dict[int, Serializer]:
 
 
 def get_type_serializer_mapping() -> Dict[type, Serializer]:
-    """Get mapping from Python types to serializers."""
+    """Get mapping from Python types to serializers.
+
+    Returns:
+        Dictionary mapping Python types to their default serializers.
+    """
     from hazelcast.serialization.json import HazelcastJsonValue, HazelcastJsonValueSerializer
 
     return {

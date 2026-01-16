@@ -1,4 +1,31 @@
-"""Executor service for distributed task execution."""
+"""Executor service for distributed task execution.
+
+This module provides distributed task execution capabilities, allowing
+tasks to be submitted to specific cluster members or partition owners.
+
+The executor service supports:
+- Submitting callable tasks that return values
+- Executing runnable tasks (fire-and-forget)
+- Targeting specific members or key owners
+- Submitting to all cluster members
+
+Example:
+    Submitting tasks to the cluster::
+
+        from hazelcast.service.executor import ExecutorService
+
+        executor = ExecutorService("my-executor")
+
+        # Submit to any member
+        future = executor.submit(lambda: compute_result())
+        result = future.result()
+
+        # Submit to specific member
+        future = executor.submit_to_member(task, member_uuid)
+
+        # Submit to key owner (data locality)
+        future = executor.submit_to_key_owner(task, "user:123")
+"""
 
 from abc import ABC, abstractmethod
 from concurrent.futures import Future
@@ -18,21 +45,50 @@ R = TypeVar("R")
 
 
 class ExecutorCallback(ABC, Generic[T]):
-    """Callback interface for executor task completion."""
+    """Callback interface for executor task completion.
+
+    Implement this interface to receive notifications when tasks
+    complete successfully or fail.
+
+    Type Parameters:
+        T: The result type of the task.
+    """
 
     @abstractmethod
     def on_response(self, response: T) -> None:
-        """Called when the task completes successfully."""
+        """Called when the task completes successfully.
+
+        Args:
+            response: The task result.
+        """
         pass
 
     @abstractmethod
     def on_failure(self, error: Exception) -> None:
-        """Called when the task fails."""
+        """Called when the task fails.
+
+        Args:
+            error: The exception that caused the failure.
+        """
         pass
 
 
 class FunctionExecutorCallback(ExecutorCallback[T]):
-    """Executor callback that delegates to functions."""
+    """Executor callback that delegates to functions.
+
+    Convenience implementation that wraps callback functions instead
+    of requiring a full class implementation.
+
+    Args:
+        on_success: Optional callback for successful completion.
+        on_error: Optional callback for failure.
+
+    Example:
+        >>> callback = FunctionExecutorCallback(
+        ...     on_success=lambda r: print(f"Result: {r}"),
+        ...     on_error=lambda e: print(f"Error: {e}")
+        ... )
+    """
 
     def __init__(
         self,
@@ -53,7 +109,19 @@ class FunctionExecutorCallback(ExecutorCallback[T]):
 
 @dataclass
 class ExecutorTask:
-    """Represents a task to be executed on the cluster."""
+    """Represents a task to be executed on the cluster.
+
+    Encapsulates task metadata including the callable/runnable,
+    target member or partition, and submission timestamp.
+
+    Attributes:
+        task_id: Unique identifier for this task.
+        callable: Optional callable that returns a value.
+        runnable: Optional runnable (no return value).
+        target_member: Optional target member UUID.
+        target_partition_key: Optional key for partition-based routing.
+        submission_time: When the task was submitted (Unix timestamp).
+    """
 
     task_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     callable: Optional[Callable[[], Any]] = None
@@ -64,12 +132,20 @@ class ExecutorTask:
 
     @property
     def is_callable(self) -> bool:
-        """Check if this is a callable task (returns a value)."""
+        """Check if this is a callable task (returns a value).
+
+        Returns:
+            ``True`` if the task has a callable.
+        """
         return self.callable is not None
 
     @property
     def is_runnable(self) -> bool:
-        """Check if this is a runnable task (no return value)."""
+        """Check if this is a runnable task (no return value).
+
+        Returns:
+            ``True`` if the task has a runnable.
+        """
         return self.runnable is not None
 
 
@@ -78,6 +154,22 @@ class ExecutorService:
 
     Provides distributed execution of callables and runnables
     with support for targeting specific members or partitions.
+    Tasks can be submitted with callbacks for async notification.
+
+    Args:
+        name: The executor service name.
+        invocation_service: Optional invocation service for cluster calls.
+        serialization_service: Optional serialization service.
+
+    Attributes:
+        name: The executor service name.
+        is_shutdown: Whether the executor has been shut down.
+
+    Example:
+        >>> executor = ExecutorService("my-executor")
+        >>> future = executor.submit(lambda: 42)
+        >>> result = future.result()
+        >>> print(result)  # 42
     """
 
     def __init__(
@@ -110,12 +202,17 @@ class ExecutorService:
     ) -> Future:
         """Submit a callable task for execution.
 
+        Submits the task to any available cluster member.
+
         Args:
-            task: The callable to execute.
+            task: The callable to execute. Must be serializable.
             callback: Optional callback for completion notification.
 
         Returns:
-            Future containing the task result.
+            Future that will contain the task result.
+
+        Raises:
+            IllegalStateException: If the executor is shut down.
         """
         return self.submit_to_member(task, None, callback)
 
@@ -128,12 +225,15 @@ class ExecutorService:
         """Submit a task to a specific member.
 
         Args:
-            task: The callable to execute.
-            member_uuid: Target member UUID, or None for any member.
+            task: The callable to execute. Must be serializable.
+            member_uuid: Target member UUID, or ``None`` for any member.
             callback: Optional callback for completion notification.
 
         Returns:
-            Future containing the task result.
+            Future that will contain the task result.
+
+        Raises:
+            IllegalStateException: If the executor is shut down.
         """
         self._check_not_shutdown()
 
@@ -174,13 +274,19 @@ class ExecutorService:
     ) -> Future:
         """Submit a task to the owner of a specific key.
 
+        Executes the task on the member that owns the partition for
+        the given key, enabling data locality optimizations.
+
         Args:
-            task: The callable to execute.
+            task: The callable to execute. Must be serializable.
             key: The key whose owner will execute the task.
             callback: Optional callback for completion notification.
 
         Returns:
-            Future containing the task result.
+            Future that will contain the task result.
+
+        Raises:
+            IllegalStateException: If the executor is shut down.
         """
         self._check_not_shutdown()
 
@@ -221,11 +327,14 @@ class ExecutorService:
         """Submit a task to multiple members.
 
         Args:
-            task: The callable to execute.
+            task: The callable to execute. Must be serializable.
             member_uuids: Set of member UUIDs to execute on.
 
         Returns:
-            Dictionary mapping member UUIDs to Futures.
+            Dictionary mapping member UUIDs to their result Futures.
+
+        Raises:
+            IllegalStateException: If the executor is shut down.
         """
         self._check_not_shutdown()
 
@@ -242,10 +351,13 @@ class ExecutorService:
         """Submit a task to all cluster members.
 
         Args:
-            task: The callable to execute.
+            task: The callable to execute. Must be serializable.
 
         Returns:
-            Dictionary mapping member UUIDs to Futures.
+            Dictionary mapping member UUIDs to their result Futures.
+
+        Raises:
+            IllegalStateException: If the executor is shut down.
         """
         self._check_not_shutdown()
         return {"local": self.submit(task)}
@@ -329,7 +441,11 @@ class ExecutorService:
         self.execute(task)
 
     def shutdown(self) -> None:
-        """Shutdown the executor service."""
+        """Shutdown the executor service.
+
+        After shutdown, no new tasks can be submitted. Pending tasks
+        are cleared.
+        """
         self._shutdown = True
         with self._lock:
             self._pending_tasks.clear()
@@ -338,7 +454,7 @@ class ExecutorService:
         """Check if all tasks have completed after shutdown.
 
         Returns:
-            True if shutdown and no pending tasks.
+            ``True`` if shutdown and no pending tasks remain.
         """
         with self._lock:
             return self._shutdown and len(self._pending_tasks) == 0

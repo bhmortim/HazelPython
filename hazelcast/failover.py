@@ -1,4 +1,35 @@
-"""Failover configuration for high availability."""
+"""Failover configuration for high availability.
+
+This module provides failover configuration for Hazelcast clients to
+support high availability across multiple clusters. When the primary
+cluster becomes unavailable, the client can automatically switch to
+a backup cluster.
+
+Key features:
+- Multiple cluster configurations with priority ordering
+- CNAME-based dynamic cluster discovery via DNS
+- Configurable retry counts per cluster
+- Automatic cluster switching on failure
+
+Example:
+    Basic failover configuration::
+
+        from hazelcast.failover import FailoverConfig
+
+        failover = FailoverConfig(try_count=3)
+        failover.add_cluster("primary", ["node1:5701", "node2:5701"])
+        failover.add_cluster("backup", ["backup1:5701"], priority=1)
+
+    CNAME-based discovery::
+
+        failover = FailoverConfig()
+        failover.add_cname_cluster(
+            "production",
+            dns_name="hazelcast.example.com",
+            port=5701,
+            refresh_interval=60.0
+        )
+"""
 
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, TYPE_CHECKING
@@ -12,7 +43,23 @@ if TYPE_CHECKING:
 
 @dataclass
 class ClusterConfig:
-    """Configuration for a single cluster in a failover setup."""
+    """Configuration for a single cluster in a failover setup.
+
+    Represents the connection details for one Hazelcast cluster
+    in a multi-cluster failover configuration.
+
+    Attributes:
+        cluster_name: Name of the cluster (must match server configuration).
+        addresses: List of member addresses in "host:port" format.
+        priority: Priority for failover ordering (lower = higher priority).
+
+    Example:
+        >>> config = ClusterConfig(
+        ...     cluster_name="production",
+        ...     addresses=["node1:5701", "node2:5701"],
+        ...     priority=0
+        ... )
+    """
 
     cluster_name: str
     addresses: List[str] = field(default_factory=list)
@@ -28,7 +75,27 @@ class CNAMEResolver:
 
     Enables dynamic discovery of cluster members through DNS,
     allowing for dynamic cluster membership changes without
-    client reconfiguration.
+    client reconfiguration. The resolver caches results and
+    periodically refreshes them.
+
+    Args:
+        dns_name: The DNS name to resolve (e.g., "hazelcast.example.com").
+        port: The port to use for resolved addresses. Defaults to 5701.
+        refresh_interval: How often to refresh DNS in seconds. Defaults to 60.
+
+    Attributes:
+        dns_name: The DNS name being resolved.
+        port: The port used for resolved addresses.
+
+    Example:
+        >>> resolver = CNAMEResolver(
+        ...     dns_name="hazelcast.example.com",
+        ...     port=5701,
+        ...     refresh_interval=30.0
+        ... )
+        >>> addresses = resolver.resolve()
+        >>> print(addresses)
+        ['192.168.1.10:5701', '192.168.1.11:5701']
     """
 
     def __init__(
@@ -57,8 +124,16 @@ class CNAMEResolver:
     def resolve(self) -> List[str]:
         """Resolve the DNS name to addresses.
 
+        Uses cached results if the refresh interval hasn't elapsed.
+        On DNS failure, returns previously cached addresses.
+
         Returns:
             List of resolved addresses in "host:port" format.
+
+        Example:
+            >>> resolver = CNAMEResolver("cluster.example.com")
+            >>> addresses = resolver.resolve()
+            ['10.0.0.1:5701', '10.0.0.2:5701']
         """
         current_time = time.time()
 
@@ -86,6 +161,9 @@ class CNAMEResolver:
     def refresh(self) -> List[str]:
         """Force refresh the resolved addresses.
 
+        Ignores the refresh interval and immediately performs a new
+        DNS lookup.
+
         Returns:
             List of newly resolved addresses.
         """
@@ -100,6 +178,26 @@ class FailoverConfig:
     Supports automatic failover between clusters when the primary
     cluster becomes unavailable, with configurable retry counts
     and CNAME-based dynamic discovery.
+
+    The failover mechanism works as follows:
+    1. Client attempts to connect to the current cluster
+    2. On failure, retries up to ``try_count`` times
+    3. If all retries fail, switches to the next cluster
+    4. Process repeats through all configured clusters
+
+    Attributes:
+        try_count: Maximum connection attempts per cluster.
+        clusters: List of configured clusters.
+        cluster_count: Number of configured clusters.
+        current_cluster_index: Index of the current cluster.
+
+    Example:
+        >>> failover = FailoverConfig(try_count=3)
+        >>> failover.add_cluster("primary", ["node1:5701", "node2:5701"])
+        >>> failover.add_cluster("dr-site", ["dr1:5701", "dr2:5701"], priority=1)
+        >>> current = failover.get_current_cluster()
+        >>> print(current.cluster_name)
+        'primary'
     """
 
     DEFAULT_TRY_COUNT = 3
@@ -113,7 +211,9 @@ class FailoverConfig:
 
         Args:
             try_count: Maximum number of connection attempts per cluster.
-            clusters: List of cluster configurations in priority order.
+                Defaults to 3.
+            clusters: Optional list of pre-configured clusters. Clusters
+                are sorted by priority (lower priority values first).
         """
         self._try_count = try_count
         self._clusters: List[ClusterConfig] = clusters or []
@@ -123,12 +223,23 @@ class FailoverConfig:
 
     @property
     def try_count(self) -> int:
-        """Get the maximum try count per cluster."""
+        """Get the maximum try count per cluster.
+
+        Returns:
+            Number of connection attempts before switching clusters.
+        """
         return self._try_count
 
     @try_count.setter
     def try_count(self, value: int) -> None:
-        """Set the maximum try count."""
+        """Set the maximum try count.
+
+        Args:
+            value: Number of attempts (must be at least 1).
+
+        Raises:
+            ValueError: If value is less than 1.
+        """
         if value < 1:
             raise ValueError("try_count must be at least 1")
         self._try_count = value
@@ -157,13 +268,22 @@ class FailoverConfig:
     ) -> "FailoverConfig":
         """Add a cluster configuration.
 
+        Adds a static cluster configuration with known member addresses.
+        Clusters are automatically sorted by priority.
+
         Args:
-            cluster_name: Name of the cluster.
-            addresses: List of member addresses.
-            priority: Priority (lower is higher priority).
+            cluster_name: Name of the cluster (must match server config).
+            addresses: List of member addresses in "host:port" format.
+            priority: Priority for failover ordering. Lower values have
+                higher priority and are tried first. Defaults to 0.
 
         Returns:
-            This config for chaining.
+            This config instance for method chaining.
+
+        Example:
+            >>> failover = FailoverConfig()
+            >>> failover.add_cluster("primary", ["node1:5701"])
+            ...        .add_cluster("backup", ["backup1:5701"], priority=1)
         """
         config = ClusterConfig(
             cluster_name=cluster_name,
@@ -184,15 +304,29 @@ class FailoverConfig:
     ) -> "FailoverConfig":
         """Add a cluster with CNAME-based discovery.
 
+        Adds a cluster that discovers member addresses dynamically
+        via DNS resolution. This allows the cluster membership to
+        change without client reconfiguration.
+
         Args:
-            cluster_name: Name of the cluster.
-            dns_name: DNS name for dynamic resolution.
-            port: Port for resolved addresses.
-            priority: Priority (lower is higher priority).
-            refresh_interval: DNS refresh interval in seconds.
+            cluster_name: Name of the cluster (must match server config).
+            dns_name: DNS name to resolve for member addresses
+                (e.g., "hazelcast.example.com").
+            port: Port to use for resolved addresses. Defaults to 5701.
+            priority: Priority for failover ordering. Defaults to 0.
+            refresh_interval: How often to refresh DNS in seconds.
+                Defaults to 60.
 
         Returns:
-            This config for chaining.
+            This config instance for method chaining.
+
+        Example:
+            >>> failover = FailoverConfig()
+            >>> failover.add_cname_cluster(
+            ...     "production",
+            ...     dns_name="hz.prod.example.com",
+            ...     refresh_interval=30.0
+            ... )
         """
         resolver = CNAMEResolver(dns_name, port, refresh_interval)
         self._cname_resolvers[cluster_name] = resolver
@@ -209,8 +343,10 @@ class FailoverConfig:
     def get_current_cluster(self) -> Optional[ClusterConfig]:
         """Get the current cluster configuration.
 
+        Returns the cluster that the client should currently connect to.
+
         Returns:
-            Current cluster config, or None if no clusters configured.
+            Current cluster config, or ``None`` if no clusters configured.
         """
         with self._lock:
             if not self._clusters:
@@ -220,13 +356,15 @@ class FailoverConfig:
     def get_cluster_addresses(self, cluster_name: str) -> List[str]:
         """Get addresses for a cluster.
 
-        Resolves CNAME if configured, otherwise returns static addresses.
+        For CNAME-based clusters, performs DNS resolution. For static
+        clusters, returns the configured addresses.
 
         Args:
             cluster_name: Name of the cluster.
 
         Returns:
-            List of addresses for the cluster.
+            List of addresses in "host:port" format, or empty list
+            if the cluster is not found.
         """
         if cluster_name in self._cname_resolvers:
             return self._cname_resolvers[cluster_name].resolve()
@@ -240,8 +378,11 @@ class FailoverConfig:
     def switch_to_next_cluster(self) -> Optional[ClusterConfig]:
         """Switch to the next cluster in the failover list.
 
+        Cycles through clusters in priority order. After the last
+        cluster, wraps back to the first.
+
         Returns:
-            The next cluster config, or None if no more clusters.
+            The next cluster config, or ``None`` if no clusters configured.
         """
         with self._lock:
             if not self._clusters:
@@ -254,18 +395,26 @@ class FailoverConfig:
             return self._clusters[self._current_cluster_index]
 
     def reset(self) -> None:
-        """Reset to the first cluster."""
+        """Reset to the first (highest priority) cluster.
+
+        Resets the current cluster index to 0, causing the next
+        connection attempt to use the highest priority cluster.
+        """
         with self._lock:
             self._current_cluster_index = 0
 
     def to_client_config(self, cluster_index: int = 0) -> "ClientConfig":
         """Create a ClientConfig for a specific cluster.
 
+        Generates a client configuration suitable for connecting to
+        one of the failover clusters.
+
         Args:
             cluster_index: Index of the cluster to configure.
+                Defaults to 0 (highest priority).
 
         Returns:
-            A ClientConfig for the specified cluster.
+            ClientConfig configured for the specified cluster.
         """
         from hazelcast.config import ClientConfig
 
@@ -285,11 +434,23 @@ class FailoverConfig:
     def from_configs(cls, configs: List["ClientConfig"]) -> "FailoverConfig":
         """Create a FailoverConfig from multiple ClientConfigs.
 
+        Factory method that creates a failover configuration from
+        a list of individual client configurations. Each config
+        becomes a cluster with priority based on its position.
+
         Args:
-            configs: List of client configurations.
+            configs: List of ClientConfig instances. Earlier configs
+                have higher priority.
 
         Returns:
-            A FailoverConfig with the clusters configured.
+            FailoverConfig with all clusters configured.
+
+        Example:
+            >>> config1 = ClientConfig()
+            >>> config1.cluster_name = "primary"
+            >>> config2 = ClientConfig()
+            >>> config2.cluster_name = "backup"
+            >>> failover = FailoverConfig.from_configs([config1, config2])
         """
         failover = cls()
         for i, config in enumerate(configs):

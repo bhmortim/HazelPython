@@ -1,4 +1,36 @@
-"""Serialization service implementation."""
+"""Serialization service implementation.
+
+This module provides the main serialization service for the Hazelcast client.
+It manages serializers for different data types and handles the conversion
+between Python objects and binary data.
+
+The serialization service supports multiple serialization formats:
+- Built-in serializers for Python primitives and collections
+- IdentifiedDataSerializable for efficient custom serialization
+- Portable for cross-language schema-based serialization
+- Compact for modern schema-less serialization
+
+Example:
+    Using the serialization service::
+
+        from hazelcast.serialization.service import SerializationService
+
+        service = SerializationService()
+
+        # Serialize an object
+        data = service.to_data({"name": "Alice", "age": 30})
+
+        # Deserialize back
+        obj = service.to_object(data)
+
+    Registering custom serializers::
+
+        from hazelcast.serialization.service import SerializationService
+
+        service = SerializationService(
+            custom_serializers={Person: PersonSerializer()}
+        )
+"""
 
 import struct
 import threading
@@ -31,7 +63,11 @@ DATA_OFFSET = TYPE_ID_SIZE
 
 
 class FieldType(IntEnum):
-    """Field types for Portable serialization."""
+    """Field types for Portable serialization.
+
+    Defines the supported field types in Portable class definitions.
+    Each type corresponds to a specific serialization format.
+    """
 
     BOOLEAN = 0
     BYTE = 1
@@ -54,7 +90,27 @@ class FieldType(IntEnum):
 
 
 class FieldDefinition:
-    """Definition of a field in a Portable class."""
+    """Definition of a field in a Portable class.
+
+    Describes a single field including its name, type, and position
+    within the class definition.
+
+    Args:
+        index: Field index (order in the class).
+        name: Field name.
+        field_type: The field's data type.
+        factory_id: For Portable fields, the nested object's factory ID.
+        class_id: For Portable fields, the nested object's class ID.
+        version: For Portable fields, the nested object's version.
+
+    Attributes:
+        index: Field index.
+        name: Field name.
+        field_type: Field data type.
+        factory_id: Nested Portable factory ID.
+        class_id: Nested Portable class ID.
+        version: Nested Portable version.
+    """
 
     def __init__(
         self,
@@ -87,7 +143,28 @@ class FieldDefinition:
 
 
 class ClassDefinition:
-    """Definition of a Portable class structure."""
+    """Definition of a Portable class structure.
+
+    Describes the schema of a Portable class including all fields
+    and their types. Used for schema evolution and cross-language
+    compatibility.
+
+    Args:
+        factory_id: Factory ID that creates instances of this class.
+        class_id: Unique class ID within the factory.
+        version: Version number for schema evolution.
+
+    Attributes:
+        factory_id: Factory ID.
+        class_id: Class ID.
+        version: Schema version.
+        fields: List of field definitions.
+
+    Example:
+        >>> class_def = ClassDefinition(1, 1, 0)
+        >>> class_def.add_field(FieldDefinition(0, "name", FieldType.STRING))
+        >>> class_def.add_field(FieldDefinition(1, "age", FieldType.INT))
+    """
 
     def __init__(self, factory_id: int, class_id: int, version: int):
         self.factory_id = factory_id
@@ -97,7 +174,14 @@ class ClassDefinition:
         self._field_list: List[FieldDefinition] = []
 
     def add_field(self, field_def: FieldDefinition) -> "ClassDefinition":
-        """Add a field definition."""
+        """Add a field definition.
+
+        Args:
+            field_def: The field definition to add.
+
+        Returns:
+            This ClassDefinition for chaining.
+        """
         self._fields[field_def.name] = field_def
         self._field_list.append(field_def)
         return self
@@ -149,7 +233,24 @@ class ClassDefinition:
 
 
 class ClassDefinitionBuilder:
-    """Builder for creating ClassDefinitions."""
+    """Builder for creating ClassDefinitions.
+
+    Provides a fluent API for constructing class definitions with
+    various field types.
+
+    Args:
+        factory_id: Factory ID for the class.
+        class_id: Class ID within the factory.
+        version: Schema version. Defaults to 0.
+
+    Example:
+        >>> builder = ClassDefinitionBuilder(1, 1, 0)
+        >>> class_def = (builder
+        ...     .add_string_field("name")
+        ...     .add_int_field("age")
+        ...     .add_boolean_field("active")
+        ...     .build())
+    """
 
     def __init__(self, factory_id: int, class_id: int, version: int = 0):
         self._factory_id = factory_id
@@ -246,7 +347,11 @@ class ClassDefinitionBuilder:
         self._index += 1
 
     def build(self) -> ClassDefinition:
-        """Build the class definition."""
+        """Build the class definition.
+
+        Returns:
+            The constructed ClassDefinition.
+        """
         class_def = ClassDefinition(self._factory_id, self._class_id, self._version)
         for field in self._fields:
             class_def.add_field(field)
@@ -286,29 +391,52 @@ class ClassDefinitionContext:
 
 
 class Data:
-    """Represents serialized data."""
+    """Represents serialized data.
+
+    Encapsulates serialized binary data with its type ID. This is the
+    wire format used for transmitting data to and from the cluster.
+
+    Args:
+        buffer: The serialized byte buffer.
+
+    Attributes:
+        buffer: The raw byte buffer.
+    """
 
     def __init__(self, buffer: bytes):
         self._buffer = buffer
 
     @property
     def buffer(self) -> bytes:
+        """Get the raw byte buffer."""
         return self._buffer
 
     def get_type_id(self) -> int:
-        """Get the type ID from the data."""
+        """Get the type ID from the data.
+
+        Returns:
+            The serializer type ID, or NONE_TYPE_ID if buffer is too small.
+        """
         if len(self._buffer) < TYPE_ID_SIZE:
             return NONE_TYPE_ID
         return struct.unpack_from("<i", self._buffer, 0)[0]
 
     def get_payload(self) -> bytes:
-        """Get the payload (data after type ID)."""
+        """Get the payload (data after type ID).
+
+        Returns:
+            The serialized data bytes without the type ID header.
+        """
         if len(self._buffer) <= DATA_OFFSET:
             return b""
         return self._buffer[DATA_OFFSET:]
 
     def total_size(self) -> int:
-        """Get total size of the data."""
+        """Get total size of the data including header.
+
+        Returns:
+            Total size in bytes.
+        """
         return len(self._buffer)
 
     def __len__(self) -> int:
@@ -446,7 +574,29 @@ class ObjectDataOutputImpl(ObjectDataOutput):
 
 
 class SerializationService:
-    """Main serialization service for the Hazelcast client."""
+    """Main serialization service for the Hazelcast client.
+
+    Manages all serializers and handles conversion between Python objects
+    and binary data. Supports built-in types, custom serializers,
+    IdentifiedDataSerializable, Portable, and Compact formats.
+
+    Args:
+        portable_version: Default version for Portable serialization.
+        portable_factories: Dictionary of factory_id to Portable factory.
+        data_serializable_factories: Dictionary of factory_id to
+            DataSerializable factory.
+        custom_serializers: Dictionary of type to custom serializer.
+        compact_serializers: List of Compact serializers to register.
+
+    Attributes:
+        class_definition_context: Context for Portable class definitions.
+        compact_service: Service for Compact serialization.
+
+    Example:
+        >>> service = SerializationService()
+        >>> data = service.to_data({"key": "value"})
+        >>> obj = service.to_object(data)
+    """
 
     IDENTIFIED_DATA_SERIALIZABLE_ID = -2
     PORTABLE_ID = -1
@@ -498,7 +648,10 @@ class SerializationService:
 
         Args:
             clazz: The class to serialize.
-            serializer: The serializer to use.
+            serializer: The serializer instance to use.
+
+        Example:
+            >>> service.register_serializer(Person, PersonSerializer())
         """
         with self._lock:
             self._type_to_serializer[clazz] = serializer
@@ -508,10 +661,17 @@ class SerializationService:
         """Serialize an object to Data.
 
         Args:
-            obj: The object to serialize.
+            obj: The object to serialize. Can be any type with a
+                registered serializer.
 
         Returns:
-            The serialized Data.
+            The serialized Data object.
+
+        Raises:
+            SerializationException: If no serializer is found for the type.
+
+        Example:
+            >>> data = service.to_data({"name": "Alice"})
         """
         if obj is None:
             return Data(struct.pack("<i", NONE_TYPE_ID))
@@ -546,10 +706,17 @@ class SerializationService:
         """Deserialize Data to an object.
 
         Args:
-            data: The data to deserialize (Data or bytes).
+            data: The data to deserialize. Can be a Data object,
+                bytes, or None.
 
         Returns:
-            The deserialized object.
+            The deserialized Python object.
+
+        Raises:
+            SerializationException: If no serializer is found for the type ID.
+
+        Example:
+            >>> obj = service.to_object(data)
         """
         if data is None:
             return None
@@ -612,7 +779,10 @@ class SerializationService:
         """Register a compact serializer.
 
         Args:
-            serializer: The compact serializer to register.
+            serializer: The CompactSerializer instance to register.
+
+        Example:
+            >>> service.register_compact_serializer(PersonCompactSerializer())
         """
         self._compact_service.register_serializer(serializer)
         self._compact_classes.add(serializer.clazz)
@@ -667,7 +837,11 @@ class SerializationService:
         return self._type_id_to_serializer[self.PORTABLE_ID]
 
     def register_class_definition(self, class_def: ClassDefinition) -> None:
-        """Register a class definition for portable serialization."""
+        """Register a class definition for portable serialization.
+
+        Args:
+            class_def: The ClassDefinition to register.
+        """
         self._class_definition_context.register(class_def)
         serializer = self._get_portable_serializer()
         serializer.register_class_definition(class_def)

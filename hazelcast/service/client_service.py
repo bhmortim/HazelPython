@@ -1,4 +1,32 @@
-"""Client service for connection monitoring and management."""
+"""Client service for connection monitoring and management.
+
+This module provides services for monitoring and managing client
+connections to the Hazelcast cluster. It tracks connection status,
+maintains connection metadata, and notifies listeners of connection
+events.
+
+Example:
+    Using the client service::
+
+        from hazelcast.service.client_service import ClientService, ConnectionStatus
+
+        service = ClientService()
+
+        # Check connection status
+        if service.is_connected:
+            print(f"Connected to {service.cluster_info.cluster_name}")
+
+        # Get active connections
+        connections = service.get_connections()
+        print(f"Active connections: {len(connections)}")
+
+        # Add connection listener
+        listener = FunctionConnectionListener(
+            on_opened=lambda c: print(f"Connected to {c.remote_address}"),
+            on_closed=lambda c, r: print(f"Disconnected: {r}")
+        )
+        service.add_connection_listener(listener)
+"""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -13,7 +41,14 @@ if TYPE_CHECKING:
 
 
 class ConnectionStatus(Enum):
-    """Status of the client connection to the cluster."""
+    """Status of the client connection to the cluster.
+
+    Attributes:
+        DISCONNECTED: Not connected to any cluster member.
+        CONNECTING: Attempting to establish connection.
+        CONNECTED: Successfully connected to the cluster.
+        RECONNECTING: Lost connection, attempting to reconnect.
+    """
 
     DISCONNECTED = "DISCONNECTED"
     CONNECTING = "CONNECTING"
@@ -22,21 +57,48 @@ class ConnectionStatus(Enum):
 
 
 class ClientConnectionListener(ABC):
-    """Listener for client connection events."""
+    """Listener for client connection events.
+
+    Implement this interface to receive notifications when connections
+    are opened or closed.
+    """
 
     @abstractmethod
     def on_connection_opened(self, connection: "Connection") -> None:
-        """Called when a new connection is established."""
+        """Called when a new connection is established.
+
+        Args:
+            connection: The newly opened connection.
+        """
         pass
 
     @abstractmethod
     def on_connection_closed(self, connection: "Connection", reason: str) -> None:
-        """Called when a connection is closed."""
+        """Called when a connection is closed.
+
+        Args:
+            connection: The closed connection.
+            reason: Description of why the connection was closed.
+        """
         pass
 
 
 class FunctionConnectionListener(ClientConnectionListener):
-    """Connection listener that delegates to functions."""
+    """Connection listener that delegates to functions.
+
+    Convenience implementation that wraps callback functions instead
+    of requiring a full class implementation.
+
+    Args:
+        on_opened: Optional callback for connection opened events.
+        on_closed: Optional callback for connection closed events.
+
+    Example:
+        >>> listener = FunctionConnectionListener(
+        ...     on_opened=lambda c: print(f"Connected: {c.remote_address}"),
+        ...     on_closed=lambda c, r: print(f"Closed: {r}")
+        ... )
+    """
 
     def __init__(
         self,
@@ -57,7 +119,20 @@ class FunctionConnectionListener(ClientConnectionListener):
 
 @dataclass
 class ConnectionInfo:
-    """Information about a connection."""
+    """Information about a connection.
+
+    Stores metadata about an individual connection to a cluster member.
+
+    Attributes:
+        connection_id: Unique identifier for this connection.
+        remote_address: Remote (host, port) tuple.
+        local_address: Local (host, port) tuple.
+        member_uuid: UUID of the connected member.
+        connected_time: When the connection was established.
+        last_read_time: Timestamp of last data read.
+        last_write_time: Timestamp of last data write.
+        is_alive: Whether the connection is still active.
+    """
 
     connection_id: int
     remote_address: Optional[tuple] = None
@@ -71,7 +146,17 @@ class ConnectionInfo:
 
 @dataclass
 class ClusterInfo:
-    """Information about the connected cluster."""
+    """Information about the connected cluster.
+
+    Stores metadata about the Hazelcast cluster the client is connected to.
+
+    Attributes:
+        cluster_uuid: Unique identifier of the cluster.
+        cluster_name: Name of the cluster.
+        member_count: Number of members in the cluster.
+        partition_count: Number of partitions in the cluster.
+        version: Cluster version string.
+    """
 
     cluster_uuid: Optional[str] = None
     cluster_name: str = ""
@@ -84,10 +169,23 @@ class ClientService:
     """Service for monitoring client connections and cluster state.
 
     Provides methods to query connection status, active connections,
-    and cluster information.
+    and cluster information. Also manages connection event listeners.
+
+    Attributes:
+        status: Current connection status.
+        is_connected: Whether the client is connected.
+        connection_count: Number of active connections.
+        cluster_info: Information about the connected cluster.
+
+    Example:
+        >>> service = ClientService()
+        >>> if service.is_connected:
+        ...     print(f"Connected to {service.cluster_info.cluster_name}")
+        ...     print(f"Active connections: {service.connection_count}")
     """
 
     def __init__(self):
+        """Initialize the client service."""
         self._status = ConnectionStatus.DISCONNECTED
         self._connections: Dict[int, ConnectionInfo] = {}
         self._cluster_info = ClusterInfo()
@@ -153,6 +251,8 @@ class ClientService:
     def add_connection(self, connection: "Connection") -> None:
         """Register a new connection.
 
+        Updates internal state and notifies listeners.
+
         Args:
             connection: The connection to register.
         """
@@ -179,9 +279,11 @@ class ClientService:
     def remove_connection(self, connection: "Connection", reason: str) -> None:
         """Unregister a connection.
 
+        Updates internal state and notifies listeners.
+
         Args:
             connection: The connection to unregister.
-            reason: Reason for removal.
+            reason: Description of why the connection was removed.
         """
         with self._lock:
             info = self._connections.get(connection.connection_id)
@@ -230,10 +332,10 @@ class ClientService:
         """Add a connection listener.
 
         Args:
-            listener: The listener to add.
+            listener: The listener to receive connection events.
 
         Returns:
-            Registration ID for removing the listener.
+            Registration ID for removing the listener later.
         """
         import uuid
         registration_id = str(uuid.uuid4())
@@ -281,7 +383,8 @@ class ClientService:
         """Get connection statistics.
 
         Returns:
-            Dictionary of statistics.
+            Dictionary containing connection status, counts, and
+            cluster information.
         """
         with self._lock:
             return {
@@ -295,7 +398,10 @@ class ClientService:
             }
 
     def reset(self) -> None:
-        """Reset the service state."""
+        """Reset the service state.
+
+        Clears all connections, listeners, and cluster information.
+        """
         with self._lock:
             self._status = ConnectionStatus.DISCONNECTED
             self._connections.clear()

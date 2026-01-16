@@ -1,4 +1,42 @@
-"""Near Cache implementation for Hazelcast client."""
+"""Near Cache implementation for Hazelcast client.
+
+This module provides a client-side cache that stores frequently accessed
+data locally, reducing network round-trips to the cluster. Near caches
+are particularly effective for read-heavy workloads with data that changes
+infrequently.
+
+Features:
+- Multiple eviction policies (LRU, LFU, RANDOM, NONE)
+- TTL and max-idle expiration
+- Binary or object in-memory format
+- Invalidation on cluster-side changes
+- Statistics tracking
+
+Example:
+    Configure a near cache for a map::
+
+        from hazelcast.config import ClientConfig, NearCacheConfig, EvictionPolicy
+
+        config = ClientConfig()
+        near_cache = NearCacheConfig(
+            name="my-map",
+            max_size=10000,
+            time_to_live_seconds=300,
+            eviction_policy=EvictionPolicy.LRU
+        )
+        config.add_near_cache(near_cache)
+
+    Using the NearCacheManager::
+
+        from hazelcast.near_cache import NearCacheManager, NearCacheConfig
+
+        manager = NearCacheManager()
+        config = NearCacheConfig(name="users", max_size=1000)
+        cache = manager.get_or_create("users", config)
+
+        cache.put("user:1", user_data)
+        data = cache.get("user:1")  # Local lookup
+"""
 
 import threading
 import time
@@ -17,7 +55,21 @@ V = TypeVar("V")
 
 @dataclass
 class NearCacheStats:
-    """Statistics for near cache operations."""
+    """Statistics for near cache operations.
+
+    Tracks cache effectiveness including hits, misses, and various
+    removal types (evictions, expirations, invalidations).
+
+    Attributes:
+        hits: Number of successful cache lookups.
+        misses: Number of cache lookups that didn't find data.
+        evictions: Number of entries removed due to capacity limits.
+        expirations: Number of entries removed due to TTL/idle expiration.
+        invalidations: Number of entries removed due to cluster updates.
+        entries_count: Current number of entries in the cache.
+        owned_entry_memory_cost: Estimated memory usage in bytes.
+        creation_time: Timestamp when the cache was created.
+    """
 
     hits: int = 0
     misses: int = 0
@@ -30,7 +82,11 @@ class NearCacheStats:
 
     @property
     def hit_ratio(self) -> float:
-        """Calculate hit ratio."""
+        """Calculate the cache hit ratio.
+
+        Returns:
+            Ratio of hits to total accesses (0.0 to 1.0).
+        """
         total = self.hits + self.misses
         if total == 0:
             return 0.0
@@ -38,14 +94,22 @@ class NearCacheStats:
 
     @property
     def miss_ratio(self) -> float:
-        """Calculate miss ratio."""
+        """Calculate the cache miss ratio.
+
+        Returns:
+            Ratio of misses to total accesses (0.0 to 1.0).
+        """
         total = self.hits + self.misses
         if total == 0:
             return 0.0
         return self.misses / total
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert stats to dictionary."""
+        """Convert stats to dictionary.
+
+        Returns:
+            Dictionary representation of all statistics.
+        """
         return {
             "hits": self.hits,
             "misses": self.misses,
@@ -62,7 +126,18 @@ class NearCacheStats:
 
 @dataclass
 class NearCacheRecord(Generic[V]):
-    """A record stored in the near cache."""
+    """A record stored in the near cache.
+
+    Wraps a cached value with metadata for expiration and eviction.
+
+    Attributes:
+        value: The cached value.
+        creation_time: When the record was created (Unix timestamp).
+        last_access_time: When the record was last accessed.
+        access_count: Number of times the record was accessed.
+        ttl_seconds: Time-to-live in seconds (0 = no TTL).
+        max_idle_seconds: Max idle time in seconds (0 = no limit).
+    """
 
     value: V
     creation_time: float = field(default_factory=time.time)
@@ -72,7 +147,11 @@ class NearCacheRecord(Generic[V]):
     max_idle_seconds: int = 0
 
     def is_expired(self) -> bool:
-        """Check if this record has expired."""
+        """Check if this record has expired.
+
+        Returns:
+            ``True`` if the record has exceeded TTL or max idle time.
+        """
         now = time.time()
         if self.ttl_seconds > 0:
             if now - self.creation_time > self.ttl_seconds:
@@ -83,24 +162,41 @@ class NearCacheRecord(Generic[V]):
         return False
 
     def record_access(self) -> None:
-        """Record an access to this record."""
+        """Record an access to this record.
+
+        Updates the last access time and increments the access count.
+        """
         self.last_access_time = time.time()
         self.access_count += 1
 
 
 class EvictionStrategy(ABC):
-    """Base class for eviction strategies."""
+    """Base class for eviction strategies.
+
+    Eviction strategies determine which entry to remove when the
+    cache reaches its capacity limit.
+    """
 
     @abstractmethod
     def select_for_eviction(
         self, records: Dict[Any, NearCacheRecord]
     ) -> Optional[Any]:
-        """Select a key for eviction."""
+        """Select a key for eviction.
+
+        Args:
+            records: Dictionary of keys to cache records.
+
+        Returns:
+            Key to evict, or ``None`` if no eviction should occur.
+        """
         pass
 
 
 class LRUEvictionStrategy(EvictionStrategy):
-    """Least Recently Used eviction strategy."""
+    """Least Recently Used eviction strategy.
+
+    Evicts the entry that was accessed longest ago.
+    """
 
     def select_for_eviction(
         self, records: Dict[Any, NearCacheRecord]
@@ -117,7 +213,10 @@ class LRUEvictionStrategy(EvictionStrategy):
 
 
 class LFUEvictionStrategy(EvictionStrategy):
-    """Least Frequently Used eviction strategy."""
+    """Least Frequently Used eviction strategy.
+
+    Evicts the entry with the lowest access count.
+    """
 
     def select_for_eviction(
         self, records: Dict[Any, NearCacheRecord]
@@ -134,7 +233,10 @@ class LFUEvictionStrategy(EvictionStrategy):
 
 
 class RandomEvictionStrategy(EvictionStrategy):
-    """Random eviction strategy."""
+    """Random eviction strategy.
+
+    Evicts a randomly selected entry.
+    """
 
     def select_for_eviction(
         self, records: Dict[Any, NearCacheRecord]
@@ -146,7 +248,12 @@ class RandomEvictionStrategy(EvictionStrategy):
 
 
 class NoneEvictionStrategy(EvictionStrategy):
-    """No eviction strategy - cache grows unbounded."""
+    """No eviction strategy - cache grows unbounded.
+
+    Warning:
+        Using this strategy may lead to memory issues if the cache
+        is not bounded by TTL or external invalidation.
+    """
 
     def select_for_eviction(
         self, records: Dict[Any, NearCacheRecord]
@@ -155,7 +262,14 @@ class NoneEvictionStrategy(EvictionStrategy):
 
 
 def _create_eviction_strategy(policy: EvictionPolicy) -> EvictionStrategy:
-    """Create an eviction strategy for the given policy."""
+    """Create an eviction strategy for the given policy.
+
+    Args:
+        policy: The eviction policy enum value.
+
+    Returns:
+        Appropriate eviction strategy instance.
+    """
     strategies = {
         EvictionPolicy.LRU: LRUEvictionStrategy,
         EvictionPolicy.LFU: LFUEvictionStrategy,
@@ -169,8 +283,35 @@ def _create_eviction_strategy(policy: EvictionPolicy) -> EvictionStrategy:
 class NearCache(Generic[K, V]):
     """Local cache for reducing remote calls to the cluster.
 
-    Supports LRU/LFU eviction policies, TTL, max-idle, and
-    invalidation on cluster-side changes.
+    Near cache stores frequently accessed data on the client side,
+    reducing network round-trips and improving read performance.
+    Supports various eviction policies, TTL/idle expiration, and
+    automatic invalidation when data changes on the cluster.
+
+    Type Parameters:
+        K: Key type.
+        V: Value type.
+
+    Args:
+        config: Near cache configuration.
+        serialization_service: Optional serialization service for
+            binary storage format.
+
+    Attributes:
+        name: The near cache name.
+        config: The near cache configuration.
+        stats: Cache statistics.
+        size: Current number of entries.
+
+    Example:
+        >>> config = NearCacheConfig(
+        ...     name="users",
+        ...     max_size=1000,
+        ...     time_to_live_seconds=300
+        ... )
+        >>> cache = NearCache(config)
+        >>> cache.put("user:1", user_data)
+        >>> data = cache.get("user:1")
     """
 
     def __init__(
@@ -212,11 +353,14 @@ class NearCache(Generic[K, V]):
     def get(self, key: K) -> Optional[V]:
         """Get a value from the near cache.
 
+        Returns the cached value if present and not expired. Updates
+        statistics (hit/miss counts) and access metadata.
+
         Args:
             key: The key to look up.
 
         Returns:
-            The cached value, or None if not found or expired.
+            The cached value, or ``None`` if not found or expired.
         """
         with self._lock:
             record = self._records.get(key)
@@ -235,6 +379,9 @@ class NearCache(Generic[K, V]):
 
     def put(self, key: K, value: V) -> None:
         """Put a value into the near cache.
+
+        Stores the value with the configured TTL and max idle time.
+        May trigger eviction if the cache is at capacity.
 
         Args:
             key: The key to store.
@@ -268,6 +415,9 @@ class NearCache(Generic[K, V]):
     def invalidate(self, key: K) -> None:
         """Invalidate a key in the cache.
 
+        Removes the entry and notifies invalidation listeners.
+        Typically called when the cluster-side data changes.
+
         Args:
             key: The key to invalidate.
         """
@@ -286,7 +436,10 @@ class NearCache(Generic[K, V]):
                 pass
 
     def invalidate_all(self) -> None:
-        """Invalidate all entries in the cache."""
+        """Invalidate all entries in the cache.
+
+        Clears all entries and increments the invalidation count.
+        """
         with self._lock:
             count = len(self._records)
             self._records.clear()
@@ -361,9 +514,10 @@ class NearCache(Generic[K, V]):
 
         Args:
             listener: Callback invoked when keys are invalidated.
+                Receives the invalidated key as argument.
 
         Returns:
-            Registration ID.
+            Registration ID for removing the listener.
         """
         import uuid
         reg_id = str(uuid.uuid4())
@@ -387,6 +541,9 @@ class NearCache(Generic[K, V]):
 
     def do_expiration(self) -> int:
         """Remove expired entries.
+
+        Scans all entries and removes those that have exceeded
+        their TTL or max idle time.
 
         Returns:
             Number of expired entries removed.
@@ -439,7 +596,20 @@ class NearCache(Generic[K, V]):
 
 
 class NearCacheManager:
-    """Manages near caches for multiple maps."""
+    """Manages near caches for multiple maps.
+
+    Provides centralized management of near cache instances,
+    ensuring consistent configuration and lifecycle management.
+
+    Args:
+        serialization_service: Optional serialization service
+            shared across all managed caches.
+
+    Example:
+        >>> manager = NearCacheManager(serialization_service)
+        >>> config = NearCacheConfig(name="users", max_size=1000)
+        >>> cache = manager.get_or_create("users", config)
+    """
 
     def __init__(self, serialization_service: Any = None):
         self._caches: Dict[str, NearCache] = {}
@@ -450,6 +620,9 @@ class NearCacheManager:
         self, name: str, config: NearCacheConfig
     ) -> NearCache:
         """Get or create a near cache for the given name.
+
+        Creates a new cache if one doesn't exist, otherwise returns
+        the existing instance.
 
         Args:
             name: The map name.
@@ -472,13 +645,15 @@ class NearCacheManager:
             name: The map name.
 
         Returns:
-            The near cache or None if not found.
+            The near cache or ``None`` if not found.
         """
         with self._lock:
             return self._caches.get(name)
 
     def destroy(self, name: str) -> None:
         """Destroy a near cache.
+
+        Clears and removes the cache from management.
 
         Args:
             name: The map name.
@@ -489,7 +664,10 @@ class NearCacheManager:
                 cache.clear()
 
     def destroy_all(self) -> None:
-        """Destroy all near caches."""
+        """Destroy all managed near caches.
+
+        Clears and removes all caches from management.
+        """
         with self._lock:
             for cache in self._caches.values():
                 cache.clear()
@@ -499,7 +677,7 @@ class NearCacheManager:
         """List all near caches with their stats.
 
         Returns:
-            Dictionary of cache names to stats.
+            Dictionary mapping cache names to their statistics.
         """
         with self._lock:
             return {name: cache.stats for name, cache in self._caches.items()}

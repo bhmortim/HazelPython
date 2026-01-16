@@ -1,4 +1,27 @@
-"""Partition service for cluster partition information."""
+"""Partition service for cluster partition information.
+
+This module provides access to the cluster's partition table, which
+determines how data is distributed across cluster members. The partition
+service is essential for data locality optimizations and understanding
+data distribution.
+
+Hazelcast uses consistent hashing to distribute data across partitions,
+and each partition is owned by one primary member with optional backups.
+
+Example:
+    Using the partition service::
+
+        from hazelcast.service.partition import PartitionService
+
+        partition_service = PartitionService(partition_count=271)
+
+        # Get partition for a key
+        partition_id = partition_service.get_partition_id("my-key")
+        owner = partition_service.get_partition_owner(partition_id)
+
+        # Get all partitions for a member
+        member_partitions = partition_service.get_partitions_for_member(member_uuid)
+"""
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
@@ -12,7 +35,16 @@ if TYPE_CHECKING:
 
 @dataclass
 class Partition:
-    """Represents a single partition in the cluster."""
+    """Represents a single partition in the cluster.
+
+    Each partition has a unique ID and is owned by one cluster member
+    (primary), with optional replica assignments for backup.
+
+    Attributes:
+        partition_id: Unique identifier for this partition (0 to count-1).
+        owner_uuid: UUID of the member that owns this partition.
+        replica_uuids: UUIDs of members holding backup replicas.
+    """
 
     partition_id: int
     owner_uuid: Optional[str] = None
@@ -20,7 +52,11 @@ class Partition:
 
     @property
     def is_assigned(self) -> bool:
-        """Check if this partition has an owner."""
+        """Check if this partition has an owner.
+
+        Returns:
+            ``True`` if the partition has been assigned to a member.
+        """
         return self.owner_uuid is not None
 
     def __eq__(self, other: object) -> bool:
@@ -34,22 +70,48 @@ class Partition:
 
 @dataclass
 class PartitionTable:
-    """Represents the complete partition table for the cluster."""
+    """Represents the complete partition table for the cluster.
+
+    The partition table maps partition IDs to their ownership information.
+    It is versioned to track updates from the cluster.
+
+    Attributes:
+        partitions: Dictionary mapping partition IDs to Partition objects.
+        version: Version number of this partition table snapshot.
+    """
 
     partitions: Dict[int, Partition] = field(default_factory=dict)
     version: int = 0
 
     @property
     def partition_count(self) -> int:
-        """Get the total number of partitions."""
+        """Get the total number of partitions.
+
+        Returns:
+            Number of partitions in the table.
+        """
         return len(self.partitions)
 
     def get_partition(self, partition_id: int) -> Optional[Partition]:
-        """Get a partition by ID."""
+        """Get a partition by ID.
+
+        Args:
+            partition_id: The partition ID.
+
+        Returns:
+            Partition object or ``None`` if not found.
+        """
         return self.partitions.get(partition_id)
 
     def get_partitions_for_owner(self, owner_uuid: str) -> List[Partition]:
-        """Get all partitions owned by a member."""
+        """Get all partitions owned by a member.
+
+        Args:
+            owner_uuid: The member's UUID.
+
+        Returns:
+            List of partitions owned by the member.
+        """
         return [
             p for p in self.partitions.values()
             if p.owner_uuid == owner_uuid
@@ -60,7 +122,23 @@ class PartitionService:
     """Service for managing partition information.
 
     Provides methods to query partition ownership, compute partition IDs
-    for keys, and monitor partition table changes.
+    for keys, and monitor partition table changes. This service is
+    essential for data locality optimizations.
+
+    Args:
+        partition_count: Number of partitions in the cluster.
+            Defaults to 271.
+        serialization_service: Optional serialization service for
+            computing key hashes.
+
+    Attributes:
+        partition_count: Total number of partitions.
+        is_initialized: Whether the partition table has been populated.
+
+    Example:
+        >>> service = PartitionService(partition_count=271)
+        >>> partition_id = service.get_partition_id("my-key")
+        >>> owner = service.get_partition_owner(partition_id)
     """
 
     DEFAULT_PARTITION_COUNT = 271
@@ -97,11 +175,19 @@ class PartitionService:
     def get_partition_id(self, key: Any) -> int:
         """Compute the partition ID for a key.
 
+        Uses consistent hashing to determine which partition should
+        store data for the given key.
+
         Args:
-            key: The key to compute partition for.
+            key: The key to compute partition for. Can be any
+                serializable type.
 
         Returns:
             The partition ID (0 to partition_count - 1).
+
+        Example:
+            >>> partition_id = service.get_partition_id("user:123")
+            >>> print(f"Key belongs to partition {partition_id}")
         """
         key_hash = self._compute_key_hash(key)
         return abs(key_hash) % self._partition_count
@@ -125,10 +211,10 @@ class PartitionService:
         """Get partition information by ID.
 
         Args:
-            partition_id: The partition ID.
+            partition_id: The partition ID (0 to partition_count - 1).
 
         Returns:
-            Partition information, or None if invalid ID.
+            Partition information, or ``None`` if invalid ID.
         """
         if 0 <= partition_id < self._partition_count:
             with self._lock:
@@ -142,7 +228,7 @@ class PartitionService:
             partition_id: The partition ID.
 
         Returns:
-            Owner member UUID, or None if not assigned.
+            Owner member UUID, or ``None`` if not assigned.
         """
         partition = self.get_partition(partition_id)
         return partition.owner_uuid if partition else None
@@ -150,11 +236,14 @@ class PartitionService:
     def get_partition_owner_for_key(self, key: Any) -> Optional[str]:
         """Get the owner UUID for a key's partition.
 
+        Convenience method that combines partition ID lookup
+        and owner resolution.
+
         Args:
             key: The key to look up.
 
         Returns:
-            Owner member UUID, or None if not assigned.
+            Owner member UUID, or ``None`` if not assigned.
         """
         partition_id = self.get_partition_id(key)
         return self.get_partition_owner(partition_id)
@@ -198,12 +287,15 @@ class PartitionService:
     ) -> bool:
         """Update the partition table with new ownership information.
 
+        Called when receiving partition table updates from the cluster.
+        Only applies updates with newer versions.
+
         Args:
             partitions: Mapping of partition ID to owner UUID.
             version: The partition table version.
 
         Returns:
-            True if the table was updated, False if version is older.
+            ``True`` if the table was updated, ``False`` if version is older.
         """
         with self._lock:
             if version <= self._partition_table.version and self._initialized:
@@ -229,7 +321,11 @@ class PartitionService:
             return self._partition_table.version
 
     def reset(self) -> None:
-        """Reset the partition table to uninitialized state."""
+        """Reset the partition table to uninitialized state.
+
+        Clears all ownership assignments and resets the version.
+        Used when disconnecting from the cluster.
+        """
         with self._lock:
             self._initialized = False
             for partition in self._partition_table.partitions.values():
