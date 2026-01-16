@@ -621,3 +621,280 @@ class TestConnectionManager:
                 await cm._reconnect_loop()
 
         assert call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_start_successful_connection(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+
+        mock_conn = MockConnection(1)
+
+        async def mock_connect_to_cluster():
+            cm._connections[1] = mock_conn
+
+        with patch.object(cm, "_connect_to_cluster", side_effect=mock_connect_to_cluster):
+            await cm.start()
+
+        assert cm._running is True
+        assert cm.connection_count == 1
+
+        await cm.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_start_calls_connection_opened_listener(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        on_opened = MagicMock()
+        on_closed = MagicMock()
+        cm.set_connection_listener(on_opened, on_closed)
+
+        addr = Address("127.0.0.1", 5701)
+
+        async def mock_connect():
+            pass
+
+        mock_conn = MockConnection(1, address=addr)
+
+        with patch("hazelcast.network.connection_manager.Connection") as MockConnClass:
+            mock_instance = MagicMock()
+            mock_instance.connect = AsyncMock()
+            mock_instance.is_alive = True
+            mock_instance.connection_id = 1
+            mock_instance.address = addr
+            mock_instance.set_message_callback = MagicMock()
+            mock_instance.start_reading = MagicMock()
+            MockConnClass.return_value = mock_instance
+
+            await cm._connect_to_address(addr)
+
+            on_opened.assert_called_once_with(mock_instance)
+
+    @pytest.mark.asyncio
+    async def test_connect_to_address_creates_new_connection(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        addr = Address("127.0.0.1", 5701)
+
+        with patch("hazelcast.network.connection_manager.Connection") as MockConnClass:
+            mock_instance = MagicMock()
+            mock_instance.connect = AsyncMock()
+            mock_instance.is_alive = True
+            mock_instance.connection_id = 1
+            mock_instance.address = addr
+            mock_instance.set_message_callback = MagicMock()
+            mock_instance.start_reading = MagicMock()
+            MockConnClass.return_value = mock_instance
+
+            result = await cm._connect_to_address(addr)
+
+            assert result is mock_instance
+            MockConnClass.assert_called_once()
+            mock_instance.connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_to_address_with_message_callback(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        callback = MagicMock()
+        cm.set_message_callback(callback)
+        addr = Address("127.0.0.1", 5701)
+
+        with patch("hazelcast.network.connection_manager.Connection") as MockConnClass:
+            mock_instance = MagicMock()
+            mock_instance.connect = AsyncMock()
+            mock_instance.is_alive = True
+            mock_instance.connection_id = 1
+            mock_instance.address = addr
+            mock_instance.set_message_callback = MagicMock()
+            mock_instance.start_reading = MagicMock()
+            MockConnClass.return_value = mock_instance
+
+            await cm._connect_to_address(addr)
+
+            mock_instance.set_message_callback.assert_called_once_with(callback)
+
+    @pytest.mark.asyncio
+    async def test_connect_to_address_adds_to_heartbeat_manager(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        cm._heartbeat_manager = MagicMock()
+        addr = Address("127.0.0.1", 5701)
+
+        with patch("hazelcast.network.connection_manager.Connection") as MockConnClass:
+            mock_instance = MagicMock()
+            mock_instance.connect = AsyncMock()
+            mock_instance.is_alive = True
+            mock_instance.connection_id = 1
+            mock_instance.address = addr
+            mock_instance.set_message_callback = MagicMock()
+            mock_instance.start_reading = MagicMock()
+            MockConnClass.return_value = mock_instance
+
+            await cm._connect_to_address(addr)
+
+            cm._heartbeat_manager.add_connection.assert_called_once_with(mock_instance)
+
+    @pytest.mark.asyncio
+    async def test_connect_to_cluster_handles_failures(self):
+        cm = ConnectionManager(
+            addresses=["127.0.0.1:5701", "127.0.0.1:5702"],
+            routing_mode=RoutingMode.ALL_MEMBERS,
+        )
+
+        async def fail_connect(addr):
+            raise Exception("Connection failed")
+
+        with patch.object(cm, "_connect_to_address", side_effect=fail_connect):
+            await cm._connect_to_cluster()
+
+        assert len(cm._pending_addresses) == 2
+
+    @pytest.mark.asyncio
+    async def test_connect_to_cluster_single_member_continues_on_failure(self):
+        cm = ConnectionManager(
+            addresses=["127.0.0.1:5701", "127.0.0.1:5702"],
+            routing_mode=RoutingMode.SINGLE_MEMBER,
+        )
+
+        call_count = 0
+
+        async def fail_then_succeed(addr):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("First connection failed")
+            conn = MockConnection(call_count, address=addr)
+            cm._connections[call_count] = conn
+            return conn
+
+        with patch.object(cm, "_connect_to_address", side_effect=fail_then_succeed):
+            await cm._connect_to_cluster()
+
+        assert call_count == 2
+        assert cm.connection_count == 1
+
+    @pytest.mark.asyncio
+    async def test_close_connection_removes_from_heartbeat_manager(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        cm._heartbeat_manager = MagicMock()
+
+        conn = MockConnection(1)
+        cm._connections[1] = conn
+
+        await cm._close_connection(conn, "Test close")
+
+        cm._heartbeat_manager.remove_connection.assert_called_once_with(conn)
+
+    @pytest.mark.asyncio
+    async def test_close_connection_updates_load_balancer(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+
+        conn = MockConnection(1)
+        cm._connections[1] = conn
+
+        with patch.object(cm._load_balancer, "init") as mock_init:
+            await cm._close_connection(conn, "Test close")
+            mock_init.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_try_reconnect_processes_pending_addresses(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        pending_addr = Address("192.168.1.1", 5701)
+        cm._pending_addresses = [pending_addr]
+
+        connect_called_with = []
+
+        async def track_connect(addr):
+            connect_called_with.append(addr)
+            conn = MockConnection(len(connect_called_with), address=addr)
+            cm._connections[len(connect_called_with)] = conn
+            return conn
+
+        with patch.object(cm, "_connect_to_address", side_effect=track_connect):
+            await cm._try_reconnect()
+
+        assert pending_addr in connect_called_with
+
+    @pytest.mark.asyncio
+    async def test_try_reconnect_reconnects_dead_connections(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        addr = Address("127.0.0.1", 5701)
+        cm._addresses = [addr]
+
+        dead_conn = MockConnection(1, is_alive=False, address=addr)
+        cm._address_connections[addr] = dead_conn
+
+        connected = []
+
+        async def track_connect(a):
+            connected.append(a)
+            conn = MockConnection(2, address=a)
+            cm._connections[2] = conn
+            return conn
+
+        with patch.object(cm, "_connect_to_address", side_effect=track_connect):
+            await cm._try_reconnect()
+
+        assert addr in connected
+
+    def test_connection_count_filters_dead(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        cm._connections = {
+            1: MockConnection(1, is_alive=True),
+            2: MockConnection(2, is_alive=False),
+            3: MockConnection(3, is_alive=True),
+        }
+        assert cm.connection_count == 2
+
+    @pytest.mark.asyncio
+    async def test_shutdown_stops_heartbeat_manager(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        cm._running = True
+        cm._heartbeat_manager = MagicMock()
+        cm._heartbeat_manager.stop = AsyncMock()
+
+        await cm.shutdown()
+
+        cm._heartbeat_manager.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_with_reconnect_mode(self):
+        reconnect_mode = MagicMock()
+        reconnect_mode.value = "ON"
+
+        cm = ConnectionManager(
+            addresses=["127.0.0.1:5701"],
+            reconnect_mode=reconnect_mode,
+        )
+
+        mock_conn = MockConnection(1)
+
+        async def mock_connect_to_cluster():
+            cm._connections[1] = mock_conn
+
+        with patch.object(cm, "_connect_to_cluster", side_effect=mock_connect_to_cluster):
+            await cm.start()
+
+        assert cm._reconnect_task is not None
+
+        await cm.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_reconnect_loop_stops_when_not_running(self):
+        cm = ConnectionManager(addresses=["127.0.0.1:5701"])
+        cm._running = True
+
+        call_count = 0
+
+        async def stop_after_first():
+            nonlocal call_count
+            call_count += 1
+            cm._running = False
+
+        with patch.object(cm, "_try_reconnect", side_effect=stop_after_first):
+            with patch.object(cm, "_calculate_backoff", return_value=0.001):
+                await cm._reconnect_loop()
+
+        assert call_count == 1
+
+    def test_get_connection_returns_none_when_empty_single_member(self):
+        cm = ConnectionManager(
+            addresses=["127.0.0.1:5701"],
+            routing_mode=RoutingMode.SINGLE_MEMBER,
+        )
+        assert cm.get_connection() is None

@@ -970,3 +970,221 @@ class TestConnection:
         with patch("asyncio.create_task") as mock_create:
             conn.start_reading()
             mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_read_loop_processes_data(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._state = ConnectionState.CONNECTED
+
+        mock_reader = AsyncMock()
+        mock_reader.read.side_effect = [b"", None]
+        conn._reader = mock_reader
+
+        await conn._read_loop()
+
+        assert conn.state == ConnectionState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_read_loop_handles_exception(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._state = ConnectionState.CONNECTED
+
+        mock_reader = AsyncMock()
+        mock_reader.read.side_effect = Exception("Read error")
+        conn._reader = mock_reader
+
+        mock_writer = MagicMock()
+        mock_writer.close = MagicMock()
+        mock_writer.wait_closed = AsyncMock()
+        mock_writer.get_extra_info.return_value = None
+        conn._writer = mock_writer
+
+        await conn._read_loop()
+
+        assert conn.state == ConnectionState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_read_loop_cancelled(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._state = ConnectionState.CONNECTED
+
+        mock_reader = AsyncMock()
+        mock_reader.read.side_effect = asyncio.CancelledError()
+        conn._reader = mock_reader
+
+        await conn._read_loop()
+
+    @pytest.mark.asyncio
+    async def test_process_buffer_incomplete_frame_header(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._read_buffer = bytearray(b"\x00\x01\x02")
+
+        await conn._process_buffer()
+
+        assert len(conn._read_buffer) == 3
+
+    @pytest.mark.asyncio
+    async def test_process_buffer_incomplete_frame_body(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._read_buffer = bytearray(struct.pack("<I", 100) + b"\x00\x00")
+
+        await conn._process_buffer()
+
+        assert len(conn._read_buffer) == 6
+
+    def test_find_message_end_insufficient_header(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._read_buffer = bytearray(b"\x00\x01\x02")
+
+        result = conn._find_message_end()
+
+        assert result is None
+
+    def test_find_message_end_incomplete_frame(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        frame_length = 100
+        conn._read_buffer = bytearray(struct.pack("<I", frame_length) + b"\x00\x00")
+
+        result = conn._find_message_end()
+
+        assert result is None
+
+    def test_find_message_end_complete_unfragmented(self):
+        from hazelcast.protocol.client_message import END_FLAG
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        frame_length = 10
+        flags = END_FLAG
+        conn._read_buffer = bytearray(
+            struct.pack("<I", frame_length) +
+            struct.pack("<H", flags) +
+            b"\x00" * (frame_length - 6)
+        )
+
+        result = conn._find_message_end()
+
+        assert result == frame_length
+
+    def test_find_message_end_no_end_flag(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        frame_length = 10
+        flags = 0
+        conn._read_buffer = bytearray(
+            struct.pack("<I", frame_length) +
+            struct.pack("<H", flags) +
+            b"\x00" * (frame_length - 6)
+        )
+
+        result = conn._find_message_end()
+
+        assert result is None
+
+    def test_send_sync_not_running_loop(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._state = ConnectionState.CONNECTED
+
+        mock_writer = MagicMock()
+        conn._writer = mock_writer
+
+        message = MagicMock()
+
+        with patch("asyncio.get_event_loop") as mock_get_loop:
+            mock_loop = MagicMock()
+            mock_loop.is_running.return_value = False
+            mock_loop.run_until_complete = MagicMock()
+            mock_get_loop.return_value = mock_loop
+
+            conn.send_sync(message)
+
+            mock_loop.run_until_complete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_updates_last_write_time(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._state = ConnectionState.CONNECTED
+        conn._last_write_time = 0.0
+
+        mock_writer = MagicMock()
+        mock_writer.drain = AsyncMock()
+        conn._writer = mock_writer
+
+        message = MagicMock()
+        message.to_bytes.return_value = b"test data"
+        message.get_correlation_id.return_value = 123
+
+        await conn.send(message)
+
+        assert conn._last_write_time > 0.0
+
+    @pytest.mark.asyncio
+    async def test_close_with_cause(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._state = ConnectionState.CONNECTED
+
+        cause = Exception("Test cause")
+        await conn.close("Test reason", cause)
+
+        assert conn._close_reason == "Test reason"
+        assert conn._close_cause is cause
+
+    @pytest.mark.asyncio
+    async def test_close_writer_exception_caught(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+        conn._state = ConnectionState.CONNECTED
+
+        mock_writer = MagicMock()
+        mock_writer.close.side_effect = Exception("Close failed")
+        mock_writer.get_extra_info.return_value = None
+        conn._writer = mock_writer
+
+        await conn.close("Test")
+
+        assert conn.state == ConnectionState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_connect_no_ssl_context_when_disabled(self):
+        addr = Address("localhost", 5701)
+        ssl_config = MagicMock()
+        ssl_config.enabled = False
+
+        conn = Connection(address=addr, connection_id=1, ssl_config=ssl_config)
+
+        mock_reader = AsyncMock()
+        mock_writer = MagicMock()
+        mock_writer.get_extra_info.return_value = None
+
+        with patch.object(addr, "resolve", return_value=[("127.0.0.1", 5701)]):
+            with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)) as mock_open:
+                await conn.connect()
+
+                call_kwargs = mock_open.call_args[1]
+                assert call_kwargs.get("ssl") is None
+
+    @pytest.mark.asyncio
+    async def test_connect_no_socket_from_writer(self):
+        addr = Address("localhost", 5701)
+        conn = Connection(address=addr, connection_id=1)
+
+        mock_reader = AsyncMock()
+        mock_writer = MagicMock()
+        mock_writer.get_extra_info.return_value = None
+
+        with patch.object(addr, "resolve", return_value=[("127.0.0.1", 5701)]):
+            with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
+                await conn.connect()
+
+        assert conn.state == ConnectionState.CONNECTED
+        assert conn.remote_address is None
+        assert conn.local_address is None

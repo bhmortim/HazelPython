@@ -227,6 +227,28 @@ class TestFailureDetector:
         suspects = fd.get_suspect_connections(connections)
         assert conn in suspects
 
+    def test_get_suspect_connections_skips_no_read_time(self):
+        fd = FailureDetector(heartbeat_timeout=0.01)
+        conn = MockConnection(1)
+        conn._last_read_time = 0
+        connections = {1: conn}
+        suspects = fd.get_suspect_connections(connections)
+        assert suspects == []
+
+    def test_get_suspect_connections_multiple(self):
+        fd = FailureDetector(heartbeat_timeout=0.01)
+        conn1 = MockConnection(1)
+        conn1._last_read_time = time.time() - 1.0
+        conn2 = MockConnection(2)
+        conn2._last_read_time = time.time()
+        conn3 = MockConnection(3)
+        conn3._last_read_time = time.time() - 2.0
+        connections = {1: conn1, 2: conn2, 3: conn3}
+        suspects = fd.get_suspect_connections(connections)
+        assert conn1 in suspects
+        assert conn2 not in suspects
+        assert conn3 in suspects
+
 
 class TestPingFailureDetector:
     """Tests for PingFailureDetector class."""
@@ -355,6 +377,140 @@ class TestPingFailureDetector:
                 assert success is False
                 assert latency == -1.0
 
+    @pytest.mark.asyncio
+    async def test_ping_updates_last_ping_time(self):
+        pfd = PingFailureDetector()
+        pfd._can_ping = True
+        pfd.register_host("192.168.1.1")
+        pfd._last_ping_times["192.168.1.1"] = 0.0
+
+        with patch.object(pfd, "_send_ping", new_callable=AsyncMock, return_value=(True, 10.0)):
+            await pfd.ping("192.168.1.1")
+
+        assert pfd._last_ping_times["192.168.1.1"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_ping_exception_records_failure(self):
+        pfd = PingFailureDetector()
+        pfd._can_ping = True
+        pfd.register_host("192.168.1.1")
+
+        with patch.object(pfd, "_send_ping", new_callable=AsyncMock, side_effect=Exception("Ping error")):
+            success, latency = await pfd.ping("192.168.1.1")
+
+        assert success is False
+        assert latency == -1.0
+        assert pfd._failure_counts["192.168.1.1"] == 1
+
+    @pytest.mark.asyncio
+    async def test_send_ping_raw_socket_permission_error_falls_back(self):
+        pfd = PingFailureDetector()
+        pfd._can_ping = True
+        pfd.register_host("127.0.0.1")
+
+        call_count = 0
+
+        def socket_factory(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise PermissionError("No raw socket permission")
+            mock_sock = MagicMock()
+            mock_sock.setblocking = MagicMock()
+            mock_sock.settimeout = MagicMock()
+            mock_sock.close = MagicMock()
+            return mock_sock
+
+        with patch("socket.socket", side_effect=socket_factory):
+            with patch("socket.gethostbyname", return_value="127.0.0.1"):
+                with patch("asyncio.get_event_loop") as mock_loop:
+                    mock_event_loop = MagicMock()
+                    mock_event_loop.sock_sendto = AsyncMock()
+                    mock_event_loop.sock_recvfrom = AsyncMock(return_value=(b"\x00" * 20, ("127.0.0.1", 0)))
+                    mock_loop.return_value = mock_event_loop
+
+                    success, latency = await pfd._send_ping("127.0.0.1")
+
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_ping_timeout(self):
+        pfd = PingFailureDetector(ping_timeout=0.001)
+        pfd._can_ping = True
+        pfd.register_host("192.168.1.1")
+
+        mock_sock = MagicMock()
+        mock_sock.setblocking = MagicMock()
+        mock_sock.settimeout = MagicMock()
+        mock_sock.close = MagicMock()
+
+        with patch("socket.socket", return_value=mock_sock):
+            with patch("socket.gethostbyname", return_value="192.168.1.1"):
+                with patch("asyncio.get_event_loop") as mock_loop:
+                    mock_event_loop = MagicMock()
+                    mock_event_loop.sock_sendto = AsyncMock()
+                    mock_event_loop.sock_recvfrom = AsyncMock(side_effect=asyncio.TimeoutError())
+                    mock_loop.return_value = mock_event_loop
+
+                    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
+                        success, latency = await pfd._send_ping("192.168.1.1")
+
+        assert success is False
+        assert latency == -1.0
+
+    @pytest.mark.asyncio
+    async def test_send_ping_general_exception(self):
+        pfd = PingFailureDetector()
+        pfd._can_ping = True
+        pfd.register_host("192.168.1.1")
+
+        with patch("socket.socket", side_effect=Exception("Socket creation failed")):
+            success, latency = await pfd._send_ping("192.168.1.1")
+
+        assert success is False
+        assert latency == -1.0
+
+    def test_record_failure_nonexistent_host(self):
+        pfd = PingFailureDetector()
+        pfd._record_failure("nonexistent")
+        assert pfd._failure_counts["nonexistent"] == 1
+
+
+class TestCanUseRawSocketsDgram:
+    """Additional tests for _can_use_raw_sockets DGRAM fallback."""
+
+    @patch("platform.system")
+    @patch("os.geteuid")
+    @patch("socket.socket")
+    def test_dgram_socket_fallback(self, mock_socket, mock_geteuid, mock_system):
+        mock_system.return_value = "Linux"
+        mock_geteuid.return_value = 1000
+
+        call_count = 0
+
+        def socket_side_effect(family, sock_type, proto):
+            nonlocal call_count
+            call_count += 1
+            if sock_type == socket.SOCK_RAW:
+                raise PermissionError("No raw socket permission")
+            mock_sock = MagicMock()
+            return mock_sock
+
+        mock_socket.side_effect = socket_side_effect
+        result = _can_use_raw_sockets()
+        assert result is True
+        assert call_count == 2
+
+    @patch("platform.system")
+    @patch("os.geteuid")
+    @patch("socket.socket")
+    def test_dgram_socket_also_fails(self, mock_socket, mock_geteuid, mock_system):
+        mock_system.return_value = "Linux"
+        mock_geteuid.return_value = 1000
+        mock_socket.side_effect = PermissionError("No permission")
+        result = _can_use_raw_sockets()
+        assert result is False
+
 
 class TestHeartbeatHistory:
     """Tests for HeartbeatHistory class."""
@@ -455,6 +611,30 @@ class TestHeartbeatHistory:
         hh.add(400.0)
         assert len(hh._intervals) == 3
 
+    def test_sum_and_squared_sum_maintained(self):
+        hh = HeartbeatHistory(max_sample_size=3, first_heartbeat_estimate_ms=0.0)
+        hh.add(0.0)
+        hh.add(100.0)
+        hh.add(200.0)
+        hh.add(300.0)
+        assert hh._sum == 200.0
+
+    def test_variance_with_varied_intervals(self):
+        hh = HeartbeatHistory(first_heartbeat_estimate_ms=0.0)
+        hh.add(0.0)
+        hh.add(100.0)
+        hh.add(300.0)
+        variance = hh.variance
+        assert variance > 0.0
+
+    def test_std_deviation_non_negative(self):
+        hh = HeartbeatHistory(first_heartbeat_estimate_ms=0.0)
+        hh._sum = 100.0
+        hh._squared_sum = 50.0
+        hh._intervals.append(100.0)
+        std_dev = hh.std_deviation
+        assert std_dev >= 0.0
+
 
 class TestPhiAccrualFailureDetector:
     """Tests for PhiAccrualFailureDetector class."""
@@ -464,6 +644,17 @@ class TestPhiAccrualFailureDetector:
         assert pafd.threshold == 8.0
         assert pafd._max_sample_size == 200
         assert pafd._min_std_deviation_ms == 100.0
+
+    def test_phi_with_empty_history_after_register(self):
+        pafd = PhiAccrualFailureDetector(first_heartbeat_estimate_ms=0.0)
+        pafd.register_connection(1)
+        assert pafd.phi(1) == 0.0
+
+    def test_phi_with_no_last_timestamp(self):
+        pafd = PhiAccrualFailureDetector()
+        pafd.register_connection(1)
+        pafd._heartbeat_history[1]._last_timestamp = None
+        assert pafd.phi(1) == 0.0
 
     def test_init_custom_values(self):
         pafd = PhiAccrualFailureDetector(
@@ -576,6 +767,32 @@ class TestPhiAccrualFailureDetector:
         pafd.heartbeat(1, now - 10000)
         pafd.heartbeat(1, now - 5000)
         assert pafd.is_available(1, now) is False
+
+    def test_is_available_auto_timestamp(self):
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+        now = time.time() * 1000
+        pafd.heartbeat(1, now - 100)
+        pafd.heartbeat(1, now)
+        assert pafd.is_available(1) is True
+
+    def test_phi_uses_min_std_deviation(self):
+        pafd = PhiAccrualFailureDetector(min_std_deviation_ms=200.0)
+        pafd.register_connection(1)
+        now = time.time() * 1000
+        pafd.heartbeat(1, now - 100)
+        pafd.heartbeat(1, now)
+        phi = pafd.phi(1, now + 50)
+        assert phi >= 0.0
+
+    def test_phi_with_acceptable_pause(self):
+        pafd = PhiAccrualFailureDetector(acceptable_heartbeat_pause_ms=500.0)
+        pafd.register_connection(1)
+        now = time.time() * 1000
+        pafd.heartbeat(1, now - 100)
+        pafd.heartbeat(1, now)
+        phi = pafd.phi(1, now + 600)
+        assert phi >= 0.0
 
 
 class TestHeartbeatManager:
@@ -708,3 +925,79 @@ class TestHeartbeatManager:
         hm.start()
         await asyncio.sleep(0.05)
         await hm.stop()
+
+    @pytest.mark.asyncio
+    async def test_check_connections_removes_dead_before_heartbeat(self):
+        fd = FailureDetector(heartbeat_interval=0.01, heartbeat_timeout=60.0)
+        send_hb = MagicMock()
+        on_failed = MagicMock()
+        hm = HeartbeatManager(fd, send_hb, on_failed)
+
+        conn = MockConnection(1, is_alive=True)
+        hm.add_connection(conn)
+        conn._is_alive = False
+
+        await hm._check_connections()
+
+        send_hb.assert_not_called()
+        on_failed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_check_connections_multiple_connections(self):
+        fd = FailureDetector(heartbeat_interval=0.001, heartbeat_timeout=60.0)
+        send_hb = MagicMock()
+        on_failed = MagicMock()
+        hm = HeartbeatManager(fd, send_hb, on_failed)
+
+        conn1 = MockConnection(1)
+        conn1._last_write_time = time.time() - 10.0
+        conn2 = MockConnection(2)
+        conn2._last_write_time = time.time() - 10.0
+
+        hm.add_connection(conn1)
+        hm.add_connection(conn2)
+
+        await hm._check_connections()
+
+        assert send_hb.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_loop_exception_continues(self):
+        fd = FailureDetector(heartbeat_interval=0.01)
+        send_hb = MagicMock()
+        on_failed = MagicMock()
+        hm = HeartbeatManager(fd, send_hb, on_failed)
+
+        call_count = 0
+
+        async def failing_check():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise Exception("Check failed")
+            hm._running = False
+
+        with patch.object(hm, "_check_connections", side_effect=failing_check):
+            hm._running = True
+            await hm._heartbeat_loop()
+
+        assert call_count >= 2
+
+    def test_failure_detector_property(self):
+        fd = FailureDetector()
+        send_hb = MagicMock()
+        on_failed = MagicMock()
+        hm = HeartbeatManager(fd, send_hb, on_failed)
+
+        assert hm.failure_detector is fd
+
+    @pytest.mark.asyncio
+    async def test_stop_when_not_running(self):
+        fd = FailureDetector()
+        send_hb = MagicMock()
+        on_failed = MagicMock()
+        hm = HeartbeatManager(fd, send_hb, on_failed)
+
+        await hm.stop()
+
+        assert hm._running is False
