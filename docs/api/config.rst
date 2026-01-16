@@ -1,84 +1,71 @@
-Configuration
-=============
+Configuration API Reference
+===========================
 
-.. module:: hazelcast.config
+.. automodule:: hazelcast.config
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 ClientConfig
 ------------
 
-.. autoclass:: ClientConfig
+.. autoclass:: hazelcast.config.ClientConfig
    :members:
    :undoc-members:
-   :show-inheritance:
 
 NetworkConfig
 -------------
 
-.. autoclass:: NetworkConfig
+.. autoclass:: hazelcast.config.NetworkConfig
    :members:
    :undoc-members:
-   :show-inheritance:
 
 SecurityConfig
 --------------
 
-.. autoclass:: SecurityConfig
+.. autoclass:: hazelcast.config.SecurityConfig
    :members:
    :undoc-members:
-   :show-inheritance:
-
-ConnectionStrategyConfig
-------------------------
-
-.. autoclass:: ConnectionStrategyConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-RetryConfig
------------
-
-.. autoclass:: RetryConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-NearCacheConfig
----------------
-
-.. autoclass:: NearCacheConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 SerializationConfig
 -------------------
 
-.. autoclass:: SerializationConfig
+.. autoclass:: hazelcast.config.SerializationConfig
    :members:
    :undoc-members:
-   :show-inheritance:
+
+NearCacheConfig
+---------------
+
+.. autoclass:: hazelcast.config.NearCacheConfig
+   :members:
+   :undoc-members:
+
+ConnectionStrategyConfig
+------------------------
+
+.. autoclass:: hazelcast.config.ConnectionStrategyConfig
+   :members:
+   :undoc-members:
+
+RetryConfig
+-----------
+
+.. autoclass:: hazelcast.config.RetryConfig
+   :members:
+   :undoc-members:
 
 Enumerations
 ------------
 
-ReconnectMode
-~~~~~~~~~~~~~
-
-.. autoclass:: ReconnectMode
+.. autoclass:: hazelcast.config.ReconnectMode
    :members:
    :undoc-members:
 
-EvictionPolicy
-~~~~~~~~~~~~~~
-
-.. autoclass:: EvictionPolicy
+.. autoclass:: hazelcast.config.EvictionPolicy
    :members:
    :undoc-members:
 
-InMemoryFormat
-~~~~~~~~~~~~~~
-
-.. autoclass:: InMemoryFormat
+.. autoclass:: hazelcast.config.InMemoryFormat
    :members:
    :undoc-members:

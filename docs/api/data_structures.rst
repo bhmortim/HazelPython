@@ -1,68 +1,34 @@
-Data Structures
-===============
-
-Base Classes
-------------
-
-.. module:: hazelcast.proxy.base
-
-.. autoclass:: DistributedObject
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: Proxy
-   :members:
-   :undoc-members:
-   :show-inheritance:
+Data Structures API Reference
+=============================
 
 Map
 ---
 
-.. module:: hazelcast.proxy.map
-
-.. autoclass:: Map
+.. automodule:: hazelcast.proxy.map
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. autoclass:: EntryEvent
-   :members:
-   :undoc-members:
-
-.. autoclass:: EntryListener
-   :members:
-   :undoc-members:
 
 Queue
 -----
 
-.. module:: hazelcast.proxy.queue
-
-.. autoclass:: Queue
+.. automodule:: hazelcast.proxy.queue
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: ItemEvent
-   :members:
-   :undoc-members:
+Set
+---
 
-.. autoclass:: ItemListener
-   :members:
-   :undoc-members:
-
-Collections
------------
-
-.. module:: hazelcast.proxy.collections
-
-.. autoclass:: Set
+.. automodule:: hazelcast.proxy.set
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: List
+List
+----
+
+.. automodule:: hazelcast.proxy.list
    :members:
    :undoc-members:
    :show-inheritance:
@@ -70,9 +36,7 @@ Collections
 MultiMap
 --------
 
-.. module:: hazelcast.proxy.multi_map
-
-.. autoclass:: MultiMap
+.. automodule:: hazelcast.proxy.multi_map
    :members:
    :undoc-members:
    :show-inheritance:
@@ -80,81 +44,39 @@ MultiMap
 ReplicatedMap
 -------------
 
-.. module:: hazelcast.proxy.replicated_map
-
-.. autoclass:: ReplicatedMap
+.. automodule:: hazelcast.proxy.replicated_map
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. autoclass:: EntryEvent
-   :members:
-   :undoc-members:
-
-.. autoclass:: EntryListener
-   :members:
-   :undoc-members:
 
 Ringbuffer
 ----------
 
-.. module:: hazelcast.proxy.ringbuffer
-
-.. autoclass:: Ringbuffer
+.. automodule:: hazelcast.proxy.ringbuffer
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. autoclass:: OverflowPolicy
-   :members:
-   :undoc-members:
-
-.. autoclass:: ReadResultSet
-   :members:
-   :undoc-members:
 
 Topic
 -----
 
-.. module:: hazelcast.proxy.topic
-
-.. autoclass:: Topic
+.. automodule:: hazelcast.proxy.topic
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. autoclass:: TopicMessage
-   :members:
-   :undoc-members:
-
-.. autoclass:: MessageListener
-   :members:
-   :undoc-members:
 
 ReliableTopic
 -------------
 
-.. module:: hazelcast.proxy.reliable_topic
-
-.. autoclass:: ReliableTopic
+.. automodule:: hazelcast.proxy.reliable_topic
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: ReliableTopicConfig
-   :members:
-   :undoc-members:
-
-.. autoclass:: ReliableMessageListener
-   :members:
-   :undoc-members:
-
 PNCounter
 ---------
 
-.. module:: hazelcast.proxy.pn_counter
-
-.. autoclass:: PNCounter
+.. automodule:: hazelcast.proxy.pn_counter
    :members:
    :undoc-members:
    :show-inheritance:
@@ -162,19 +84,7 @@ PNCounter
 CardinalityEstimator
 --------------------
 
-.. module:: hazelcast.proxy.cardinality_estimator
-
-.. autoclass:: CardinalityEstimator
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-FlakeIdGenerator
-----------------
-
-.. module:: hazelcast.proxy.flake_id
-
-.. autoclass:: FlakeIdGenerator
+.. automodule:: hazelcast.proxy.cardinality_estimator
    :members:
    :undoc-members:
    :show-inheritance:
@@ -182,38 +92,15 @@ FlakeIdGenerator
 Executor Service
 ----------------
 
-.. module:: hazelcast.proxy.executor
-
-.. autoclass:: IExecutorService
+.. automodule:: hazelcast.proxy.executor
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: Callable
+Base Classes
+------------
+
+.. automodule:: hazelcast.proxy.base
    :members:
    :undoc-members:
-
-.. autoclass:: Runnable
-   :members:
-   :undoc-members:
-
-.. autoclass:: ExecutionCallback
-   :members:
-   :undoc-members:
-
-.. autoclass:: MultiExecutionCallback
-   :members:
-   :undoc-members:
-
-Entry Processor
----------------
-
-.. module:: hazelcast.processor
-
-.. autoclass:: EntryProcessor
-   :members:
-   :undoc-members:
-
-.. autoclass:: EntryProcessorEntry
-   :members:
-   :undoc-members:
+   :show-inheritance:

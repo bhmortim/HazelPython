@@ -1,4 +1,28 @@
-"""PN Counter distributed data structure proxy."""
+"""PN Counter distributed data structure proxy.
+
+This module provides the PNCounter (Positive-Negative Counter), a CRDT
+that supports increment and decrement operations with eventual consistency.
+
+Classes:
+    PNCounterProxy: Proxy for the distributed PN Counter.
+
+Example:
+    Basic counter operations::
+
+        counter = client.get_pn_counter("page-views")
+
+        # Increment
+        new_value = counter.increment_and_get()
+
+        # Decrement
+        new_value = counter.decrement_and_get()
+
+        # Add arbitrary delta
+        new_value = counter.add_and_get(10)
+
+        # Get current value
+        current = counter.get()
+"""
 
 from concurrent.futures import Future
 from typing import Optional
@@ -9,14 +33,57 @@ from hazelcast.proxy.base import Proxy, ProxyContext
 class PNCounterProxy(Proxy):
     """Proxy for Hazelcast PN Counter (Positive-Negative Counter).
 
-    A CRDT (Conflict-free Replicated Data Type) counter that supports
-    both increment and decrement operations. Eventually consistent
-    and available even during network partitions.
+    PNCounter is a CRDT (Conflict-free Replicated Data Type) counter
+    that supports both increment and decrement operations. It provides
+    eventual consistency and remains available even during network
+    partitions.
+
+    Unlike AtomicLong in the CP Subsystem, PNCounter favors availability
+    over strong consistency. Updates are propagated asynchronously and
+    all replicas eventually converge to the same value.
+
+    Use Cases:
+        - Page view counters
+        - Like/dislike counts
+        - Metrics that can tolerate eventual consistency
+        - Counters that need to work during network partitions
+
+    Attributes:
+        name: The name of this PN counter.
+
+    Example:
+        Basic operations::
+
+            counter = client.get_pn_counter("visits")
+
+            # Increment and get new value
+            visits = counter.increment_and_get()
+
+            # Add multiple at once
+            visits = counter.add_and_get(10)
+
+            # Get without modifying
+            current = counter.get()
+
+        Async operations::
+
+            future = counter.increment_and_get_async()
+            new_value = future.result()
+
+    Note:
+        PNCounter is eventually consistent. For strong consistency,
+        use AtomicLong from the CP Subsystem instead.
     """
 
     SERVICE_NAME = "hz:impl:PNCounterService"
 
     def __init__(self, name: str, context: Optional[ProxyContext] = None):
+        """Initialize the PNCounterProxy.
+
+        Args:
+            name: The name of the distributed PN counter.
+            context: The proxy context for service access.
+        """
         super().__init__(self.SERVICE_NAME, name, context)
         self._observed_clock: dict = {}
         self._current_target_replica: Optional[str] = None
@@ -212,7 +279,19 @@ class PNCounterProxy(Proxy):
         return self.subtract_and_get_async(1)
 
     def reset(self) -> None:
-        """Reset the observed clock, target replica, and counter value."""
+        """Reset the local state of this PN counter proxy.
+
+        Resets the observed vector clock, target replica selection,
+        and local counter value. This does not affect the distributed
+        counter state on the cluster.
+
+        This method is primarily useful for testing or when the client
+        needs to re-synchronize with the cluster state.
+
+        Note:
+            This only resets the local proxy state, not the distributed
+            counter value on the cluster.
+        """
         self._observed_clock.clear()
         self._current_target_replica = None
         self._value = 0

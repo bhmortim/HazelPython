@@ -1,21 +1,17 @@
-Client
-======
-
-.. module:: hazelcast.client
+Client API Reference
+====================
 
 HazelcastClient
 ---------------
 
-.. autoclass:: HazelcastClient
+.. automodule:: hazelcast.client
    :members:
    :undoc-members:
    :show-inheritance:
 
-   .. automethod:: __init__
-
 ClientState
------------
+~~~~~~~~~~~
 
-.. autoclass:: ClientState
+.. autoclass:: hazelcast.client.ClientState
    :members:
    :undoc-members:

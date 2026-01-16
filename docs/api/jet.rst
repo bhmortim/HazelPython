@@ -1,12 +1,10 @@
+Jet API Reference
+=================
+
 Jet Service
-===========
+-----------
 
-Service
--------
-
-.. module:: hazelcast.jet.service
-
-.. autoclass:: JetService
+.. automodule:: hazelcast.jet.service
    :members:
    :undoc-members:
    :show-inheritance:
@@ -14,38 +12,15 @@ Service
 Pipeline
 --------
 
-.. module:: hazelcast.jet
-
-.. autoclass:: Pipeline
+.. automodule:: hazelcast.jet.pipeline
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. autoclass:: Stage
-   :members:
-   :undoc-members:
-
-.. autoclass:: Source
-   :members:
-   :undoc-members:
-
-.. autoclass:: Sink
-   :members:
-   :undoc-members:
 
 Job
 ---
 
-.. autoclass:: Job
+.. automodule:: hazelcast.jet.job
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. autoclass:: JobConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: JobStatus
-   :members:
-   :undoc-members:

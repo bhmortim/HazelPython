@@ -1,54 +1,26 @@
+SQL API Reference
+=================
+
 SQL Service
-===========
+-----------
 
-Service
--------
-
-.. module:: hazelcast.sql.service
-
-.. autoclass:: SqlService
+.. automodule:: hazelcast.sql.service
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: SqlServiceError
+SQL Statement
+-------------
+
+.. automodule:: hazelcast.sql.statement
    :members:
    :undoc-members:
    :show-inheritance:
 
-Statement
----------
+SQL Result
+----------
 
-.. module:: hazelcast.sql.statement
-
-.. autoclass:: SqlStatement
+.. automodule:: hazelcast.sql.result
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. autoclass:: SqlExpectedResultType
-   :members:
-   :undoc-members:
-
-Result
-------
-
-.. module:: hazelcast.sql.result
-
-.. autoclass:: SqlResult
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: SqlRow
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. autoclass:: SqlRowMetadata
-   :members:
-   :undoc-members:
-
-.. autoclass:: SqlColumnMetadata
-   :members:
-   :undoc-members:

@@ -3,90 +3,91 @@ Contributing
 
 We welcome contributions to the Hazelcast Python Client!
 
-Getting Started
----------------
+Development Setup
+-----------------
 
-1. Fork the repository on GitHub
-2. Clone your fork locally:
+1. Clone the repository:
 
    .. code-block:: bash
 
-      git clone https://github.com/YOUR_USERNAME/HazelPython.git
-      cd HazelPython
+       git clone https://github.com/hazelcast/HazelPython.git
+       cd HazelPython
+
+2. Create a virtual environment:
+
+   .. code-block:: bash
+
+       python -m venv venv
+       source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 3. Install development dependencies:
 
    .. code-block:: bash
 
-      pip install -e ".[dev]"
-
-4. Create a branch for your changes:
-
-   .. code-block:: bash
-
-      git checkout -b feature/my-feature
-
-Development
------------
+       pip install -e ".[dev]"
 
 Running Tests
-~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # Run all unit tests
-   pytest tests/ -v
-
-   # Run with coverage
-   pytest tests/ --cov=hazelcast --cov-report=html
-
-   # Run integration tests (requires running cluster)
-   pytest tests/integration/ -v --integration
-
-Code Style
-~~~~~~~~~~
-
-We use Black for code formatting and isort for import sorting:
-
-.. code-block:: bash
-
-   # Format code
-   black hazelcast/ tests/
-
-   # Sort imports
-   isort hazelcast/ tests/
-
-   # Check types
-   mypy hazelcast/
-
-   # Lint
-   flake8 hazelcast/ tests/
-
-Building Documentation
-~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   cd docs
-   make html
-
-   # View at docs/_build/html/index.html
-
-Pull Requests
 -------------
 
-1. Ensure all tests pass
-2. Update documentation for any new features
-3. Add entries to CHANGELOG.md
-4. Submit a pull request to the main branch
+Unit tests:
+
+.. code-block:: bash
+
+    pytest tests/ -v
+
+Integration tests (requires Docker):
+
+.. code-block:: bash
+
+    pytest tests/integration/ -v
+
+With coverage:
+
+.. code-block:: bash
+
+    pytest tests/ --cov=hazelcast --cov-report=html
+
+Code Style
+----------
+
+We use the following tools for code quality:
+
+* **black** for code formatting
+* **isort** for import sorting
+* **flake8** for linting
+* **mypy** for type checking
+
+Run all checks:
+
+.. code-block:: bash
+
+    black hazelcast tests
+    isort hazelcast tests
+    flake8 hazelcast tests
+    mypy hazelcast
+
+Building Documentation
+----------------------
+
+.. code-block:: bash
+
+    cd docs
+    pip install -e "..[docs]"
+    make html
+
+Documentation will be in ``docs/_build/html/``.
+
+Submitting Changes
+------------------
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new functionality
+5. Ensure all tests pass
+6. Submit a pull request
 
 Code of Conduct
 ---------------
 
 Please be respectful and constructive in all interactions.
-
-License
--------
-
-By contributing, you agree that your contributions will be licensed
-under the Apache License 2.0.

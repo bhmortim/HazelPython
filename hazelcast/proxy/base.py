@@ -1,4 +1,30 @@
-"""Base proxy classes for distributed data structures."""
+"""Base proxy classes for distributed data structures.
+
+This module provides the foundational classes for all distributed object
+proxies in the Hazelcast Python Client. These classes handle common
+functionality like service invocation, serialization, and lifecycle
+management.
+
+Classes:
+    DistributedObject: Abstract base interface for all distributed objects.
+    ProxyContext: Container for services needed by proxies.
+    Proxy: Base implementation class for distributed object proxies.
+
+Example:
+    Creating a custom proxy::
+
+        from hazelcast.proxy.base import Proxy, ProxyContext
+
+        class MyCustomProxy(Proxy):
+            SERVICE_NAME = "hz:impl:myService"
+
+            def __init__(self, name: str, context: ProxyContext = None):
+                super().__init__(self.SERVICE_NAME, name, context)
+
+            def my_operation(self) -> str:
+                self._check_not_destroyed()
+                return "result"
+"""
 
 import logging
 from abc import ABC, abstractmethod
@@ -15,33 +41,96 @@ _logger = get_logger("proxy")
 
 
 class DistributedObject(ABC):
-    """Base interface for all distributed objects."""
+    """Abstract base interface for all distributed objects.
+
+    This interface defines the common contract for all distributed
+    objects managed by the Hazelcast cluster. Every distributed data
+    structure (Map, Queue, Set, etc.) implements this interface.
+
+    Distributed objects are identified by their service name and
+    object name, forming a unique key within the cluster.
+
+    Attributes:
+        name: The unique name of this distributed object within its service.
+        service_name: The service identifier (e.g., "hz:impl:mapService").
+    """
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Get the name of this distributed object."""
+        """Get the name of this distributed object.
+
+        Returns:
+            The unique name identifying this object within its service.
+        """
         pass
 
     @property
     @abstractmethod
     def service_name(self) -> str:
-        """Get the service name for this distributed object."""
+        """Get the service name for this distributed object.
+
+        The service name identifies the type of distributed object
+        (e.g., Map, Queue, Set).
+
+        Returns:
+            The service identifier string.
+        """
         pass
 
     @abstractmethod
     def destroy(self) -> None:
-        """Destroy this distributed object."""
+        """Destroy this distributed object.
+
+        Destroys this object cluster-wide. Clears all data and releases
+        all resources for this object. After destruction, any operation
+        on this object will raise an exception.
+
+        Warning:
+            This operation is irreversible. All data in this distributed
+            object will be permanently deleted.
+
+        Raises:
+            IllegalStateException: If the object is already destroyed.
+        """
         pass
 
     @abstractmethod
     async def destroy_async(self) -> None:
-        """Destroy this distributed object asynchronously."""
+        """Destroy this distributed object asynchronously.
+
+        Async version of :meth:`destroy`.
+
+        Raises:
+            IllegalStateException: If the object is already destroyed.
+        """
         pass
 
 
 class ProxyContext:
-    """Context holding services needed by proxies."""
+    """Context holding services needed by proxies.
+
+    ProxyContext provides proxies with access to the client's internal
+    services for request invocation, serialization, partition routing,
+    and listener management.
+
+    This class is typically created by the HazelcastClient and passed
+    to proxies during their creation.
+
+    Args:
+        invocation_service: Service for sending requests to the cluster.
+        serialization_service: Service for object serialization.
+        partition_service: Service for partition routing.
+        listener_service: Service for managing event listeners.
+
+    Example:
+        >>> context = ProxyContext(
+        ...     invocation_service=inv_service,
+        ...     serialization_service=ser_service,
+        ...     partition_service=part_service,
+        ...     listener_service=listener_service,
+        ... )
+    """
 
     def __init__(
         self,
@@ -50,6 +139,14 @@ class ProxyContext:
         partition_service: Any = None,
         listener_service: Any = None,
     ):
+        """Initialize the ProxyContext with required services.
+
+        Args:
+            invocation_service: Service for sending requests to the cluster.
+            serialization_service: Service for object serialization.
+            partition_service: Service for partition routing.
+            listener_service: Service for managing event listeners.
+        """
         self._invocation_service = invocation_service
         self._serialization_service = serialization_service
         self._partition_service = partition_service
@@ -57,23 +154,69 @@ class ProxyContext:
 
     @property
     def invocation_service(self) -> "InvocationService":
+        """Get the invocation service.
+
+        Returns:
+            The service used for sending requests to cluster members.
+        """
         return self._invocation_service
 
     @property
     def serialization_service(self) -> Any:
+        """Get the serialization service.
+
+        Returns:
+            The service used for serializing and deserializing objects.
+        """
         return self._serialization_service
 
     @property
     def partition_service(self) -> Any:
+        """Get the partition service.
+
+        Returns:
+            The service used for determining partition ownership.
+        """
         return self._partition_service
 
     @property
     def listener_service(self) -> Any:
+        """Get the listener service.
+
+        Returns:
+            The service used for managing event listeners.
+        """
         return self._listener_service
 
 
 class Proxy(DistributedObject):
-    """Abstract base class for distributed object proxies."""
+    """Abstract base class for distributed object proxies.
+
+    Proxy is the base implementation for all distributed data structure
+    proxies. It provides common functionality for service invocation,
+    serialization, and lifecycle management.
+
+    Subclasses should implement specific operations for their data
+    structure type while leveraging the base class for common operations.
+
+    Args:
+        service_name: The service identifier for this proxy type.
+        name: The unique name for this distributed object.
+        context: The proxy context providing access to client services.
+
+    Attributes:
+        name: The name of this distributed object.
+        service_name: The service identifier.
+        is_destroyed: Whether this proxy has been destroyed.
+
+    Example:
+        >>> class MyProxy(Proxy):
+        ...     SERVICE_NAME = "hz:impl:myService"
+        ...
+        ...     def my_method(self):
+        ...         self._check_not_destroyed()
+        ...         # Implementation
+    """
 
     def __init__(
         self,
@@ -81,6 +224,13 @@ class Proxy(DistributedObject):
         name: str,
         context: Optional[ProxyContext] = None,
     ):
+        """Initialize the proxy.
+
+        Args:
+            service_name: The service identifier for this proxy type.
+            name: The unique name for this distributed object.
+            context: The proxy context providing access to client services.
+        """
         self._service_name = service_name
         self._name = name
         self._context = context
@@ -89,14 +239,29 @@ class Proxy(DistributedObject):
 
     @property
     def name(self) -> str:
+        """Get the name of this distributed object.
+
+        Returns:
+            The unique name identifying this object.
+        """
         return self._name
 
     @property
     def service_name(self) -> str:
+        """Get the service name for this proxy.
+
+        Returns:
+            The service identifier string.
+        """
         return self._service_name
 
     @property
     def is_destroyed(self) -> bool:
+        """Check if this proxy has been destroyed.
+
+        Returns:
+            True if the proxy has been destroyed, False otherwise.
+        """
         return self._destroyed
 
     def _check_not_destroyed(self) -> None:
