@@ -21,6 +21,10 @@ from hazelcast.processor import EntryProcessor
 from hazelcast.protocol.codec import MapCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
 from hazelcast.projection import Projection
+try:
+    from hazelcast.predicate import Predicate
+except ImportError:
+    Predicate = None
 
 if TYPE_CHECKING:
     from hazelcast.near_cache import NearCache
@@ -31,6 +35,150 @@ if TYPE_CHECKING:
 
 K = TypeVar("K")
 V = TypeVar("V")
+
+
+class IndexType:
+    """Index type constants for map indexing."""
+
+    SORTED = 0
+    HASH = 1
+    BITMAP = 2
+
+
+class IndexConfig:
+    """Configuration for a map index.
+
+    Attributes:
+        name: The name of the index (optional).
+        index_type: The type of index (SORTED, HASH, or BITMAP).
+        attributes: List of attribute names to index.
+    """
+
+    def __init__(
+        self,
+        attributes: List[str],
+        index_type: int = IndexType.SORTED,
+        name: Optional[str] = None,
+    ):
+        self._name = name
+        self._type = index_type
+        self._attributes = attributes
+
+    @property
+    def name(self) -> Optional[str]:
+        return self._name
+
+    @property
+    def type(self) -> int:
+        return self._type
+
+    @property
+    def attributes(self) -> List[str]:
+        return self._attributes
+
+
+class EntryView(Generic[K, V]):
+    """A read-only view of a map entry with additional metadata.
+
+    Provides detailed information about a map entry including statistics
+    like hit count, creation time, last access time, etc.
+
+    Attributes:
+        key: The entry key.
+        value: The entry value.
+        cost: Memory cost of the entry in bytes.
+        creation_time: Time when the entry was created (ms since epoch).
+        expiration_time: Time when the entry will expire (ms since epoch).
+        hits: Number of times the entry has been accessed.
+        last_access_time: Last time the entry was accessed (ms since epoch).
+        last_stored_time: Last time the entry was stored to map store.
+        last_update_time: Last time the entry was updated (ms since epoch).
+        version: Version of the entry.
+        ttl: Time to live in milliseconds.
+        max_idle: Maximum idle time in milliseconds.
+    """
+
+    def __init__(
+        self,
+        key: K,
+        value: V,
+        cost: int = 0,
+        creation_time: int = 0,
+        expiration_time: int = 0,
+        hits: int = 0,
+        last_access_time: int = 0,
+        last_stored_time: int = 0,
+        last_update_time: int = 0,
+        version: int = 0,
+        ttl: int = 0,
+        max_idle: int = 0,
+    ):
+        self._key = key
+        self._value = value
+        self._cost = cost
+        self._creation_time = creation_time
+        self._expiration_time = expiration_time
+        self._hits = hits
+        self._last_access_time = last_access_time
+        self._last_stored_time = last_stored_time
+        self._last_update_time = last_update_time
+        self._version = version
+        self._ttl = ttl
+        self._max_idle = max_idle
+
+    @property
+    def key(self) -> K:
+        return self._key
+
+    @property
+    def value(self) -> V:
+        return self._value
+
+    @property
+    def cost(self) -> int:
+        return self._cost
+
+    @property
+    def creation_time(self) -> int:
+        return self._creation_time
+
+    @property
+    def expiration_time(self) -> int:
+        return self._expiration_time
+
+    @property
+    def hits(self) -> int:
+        return self._hits
+
+    @property
+    def last_access_time(self) -> int:
+        return self._last_access_time
+
+    @property
+    def last_stored_time(self) -> int:
+        return self._last_stored_time
+
+    @property
+    def last_update_time(self) -> int:
+        return self._last_update_time
+
+    @property
+    def version(self) -> int:
+        return self._version
+
+    @property
+    def ttl(self) -> int:
+        return self._ttl
+
+    @property
+    def max_idle(self) -> int:
+        return self._max_idle
+
+    def __repr__(self) -> str:
+        return (
+            f"EntryView(key={self._key!r}, value={self._value!r}, "
+            f"hits={self._hits}, version={self._version})"
+        )
 
 
 class EntryEvent(Generic[K, V]):
@@ -1138,7 +1286,7 @@ class MapProxy(Proxy, Generic[K, V]):
     def execute_on_entries(
         self,
         entry_processor: EntryProcessor[K, V],
-        predicate: Any = None,
+        predicate: Optional["Predicate"] = None,
     ) -> Dict[K, Any]:
         """Execute an entry processor on entries matching a predicate.
 
@@ -1167,7 +1315,7 @@ class MapProxy(Proxy, Generic[K, V]):
     def execute_on_entries_async(
         self,
         entry_processor: EntryProcessor[K, V],
-        predicate: Any = None,
+        predicate: Optional["Predicate"] = None,
     ) -> Future:
         """Execute an entry processor on entries asynchronously.
 
@@ -1184,6 +1332,21 @@ class MapProxy(Proxy, Generic[K, V]):
             self._near_cache.invalidate_all()
 
         processor_data = self._to_data(entry_processor)
+
+        if predicate is not None:
+            predicate_data = self._to_data(predicate)
+            request = MapCodec.encode_execute_with_predicate_request(
+                self._name, processor_data, predicate_data
+            )
+
+            def handle_predicate_response(response: "ClientMessage") -> Dict[K, Any]:
+                entries = MapCodec.decode_execute_with_predicate_response(response)
+                return {
+                    self._to_object(k): self._to_object(v)
+                    for k, v in entries
+                }
+
+            return self._invoke(request, handle_predicate_response)
 
         request = MapCodec.encode_execute_on_all_keys_request(self._name, processor_data)
 
@@ -1485,6 +1648,277 @@ class MapProxy(Proxy, Generic[K, V]):
         request = MapCodec.encode_load_all_request(self._name, keys_data, replace_existing)
 
         return self._invoke(request)
+
+    def set_ttl(self, key: K, ttl: float) -> bool:
+        """Update the TTL of an existing entry.
+
+        Sets a new time to live for an entry without updating its value.
+        The entry will be evicted after the TTL expires.
+
+        Args:
+            key: The key whose TTL should be updated.
+            ttl: New time to live in seconds. Use 0 to make the entry
+                live indefinitely.
+
+        Returns:
+            True if the entry exists and TTL was updated, False otherwise.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> my_map.put("key", "value", ttl=60)
+            >>> my_map.set_ttl("key", 120)  # Extend TTL to 2 minutes
+        """
+        return self.set_ttl_async(key, ttl).result()
+
+    def set_ttl_async(self, key: K, ttl: float) -> Future:
+        """Update the TTL of an existing entry asynchronously.
+
+        Args:
+            key: The key whose TTL should be updated.
+            ttl: New time to live in seconds.
+
+        Returns:
+            A Future that will contain True if successful.
+        """
+        self._check_not_destroyed()
+
+        key_data = self._to_data(key)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else 0
+
+        request = MapCodec.encode_set_ttl_request(self._name, key_data, ttl_millis)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_set_ttl_response(response)
+
+        return self._invoke(request, handle_response)
+
+    def get_entry_view(self, key: K) -> Optional[EntryView[K, V]]:
+        """Get detailed metadata about a map entry.
+
+        Returns an EntryView containing the entry's value along with
+        statistics like hit count, creation time, last access time, etc.
+
+        Args:
+            key: The key to get the entry view for.
+
+        Returns:
+            An EntryView if the key exists, None otherwise.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> view = my_map.get_entry_view("key")
+            >>> if view:
+            ...     print(f"Hits: {view.hits}, TTL: {view.ttl}")
+        """
+        return self.get_entry_view_async(key).result()
+
+    def get_entry_view_async(self, key: K) -> Future:
+        """Get detailed metadata about a map entry asynchronously.
+
+        Args:
+            key: The key to get the entry view for.
+
+        Returns:
+            A Future that will contain the EntryView or None.
+        """
+        self._check_not_destroyed()
+
+        key_data = self._to_data(key)
+        request = MapCodec.encode_get_entry_view_request(self._name, key_data, 0)
+
+        def handle_response(response: "ClientMessage") -> Optional[EntryView[K, V]]:
+            data = MapCodec.decode_get_entry_view_response(response)
+            if data is None:
+                return None
+            return EntryView(
+                key=self._to_object(data["key"]) if data["key"] else key,
+                value=self._to_object(data["value"]) if data["value"] else None,
+                cost=data["cost"],
+                creation_time=data["creation_time"],
+                expiration_time=data["expiration_time"],
+                hits=data["hits"],
+                last_access_time=data["last_access_time"],
+                last_stored_time=data["last_stored_time"],
+                last_update_time=data["last_update_time"],
+                version=data["version"],
+                ttl=data["ttl"],
+                max_idle=data["max_idle"],
+            )
+
+        return self._invoke(request, handle_response)
+
+    def submit_to_key(
+        self,
+        key: K,
+        entry_processor: EntryProcessor[K, V],
+    ) -> Future:
+        """Submit an entry processor to the key owner asynchronously.
+
+        Similar to execute_on_key but explicitly designed for async usage.
+        The processor runs atomically on the partition that owns the key.
+
+        Args:
+            key: The key whose entry will be processed.
+            entry_processor: The entry processor to execute.
+
+        Returns:
+            A Future that will contain the result.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> future = my_map.submit_to_key("counter", IncrementProcessor(5))
+            >>> result = future.result()
+        """
+        self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
+        key_data = self._to_data(key)
+        processor_data = self._to_data(entry_processor)
+
+        request = MapCodec.encode_submit_to_key_request(
+            self._name, key_data, processor_data, 0
+        )
+
+        def handle_response(response: "ClientMessage") -> Any:
+            data = MapCodec.decode_submit_to_key_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
+
+    def add_index(
+        self,
+        attributes: List[str],
+        index_type: int = IndexType.SORTED,
+        name: Optional[str] = None,
+    ) -> None:
+        """Add an index to the map for faster queries.
+
+        Indexes improve query performance when using predicates that
+        filter on the indexed attributes.
+
+        Args:
+            attributes: List of attribute names to index.
+            index_type: Type of index (SORTED, HASH, or BITMAP).
+            name: Optional name for the index.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> my_map.add_index(["age"], index_type=IndexType.SORTED)
+            >>> my_map.add_index(["name"], index_type=IndexType.HASH)
+        """
+        self.add_index_async(attributes, index_type, name).result()
+
+    def add_index_async(
+        self,
+        attributes: List[str],
+        index_type: int = IndexType.SORTED,
+        name: Optional[str] = None,
+    ) -> Future:
+        """Add an index to the map asynchronously.
+
+        Args:
+            attributes: List of attribute names to index.
+            index_type: Type of index.
+            name: Optional name for the index.
+
+        Returns:
+            A Future that completes when the index is added.
+        """
+        self._check_not_destroyed()
+
+        config = IndexConfig(attributes, index_type, name)
+        config_data = self._to_data(config)
+
+        request = MapCodec.encode_add_index_request(self._name, config_data)
+
+        return self._invoke(request)
+
+    def add_interceptor(self, interceptor: Any) -> str:
+        """Add an interceptor to intercept map operations.
+
+        Interceptors can modify or reject map operations before they
+        are applied. They run on the cluster members.
+
+        Args:
+            interceptor: The interceptor instance to add.
+
+        Returns:
+            A registration ID for removing the interceptor.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> reg_id = my_map.add_interceptor(MyInterceptor())
+            >>> # Later:
+            >>> my_map.remove_interceptor(reg_id)
+        """
+        return self.add_interceptor_async(interceptor).result()
+
+    def add_interceptor_async(self, interceptor: Any) -> Future:
+        """Add an interceptor asynchronously.
+
+        Args:
+            interceptor: The interceptor instance to add.
+
+        Returns:
+            A Future that will contain the registration ID.
+        """
+        self._check_not_destroyed()
+
+        interceptor_data = self._to_data(interceptor)
+
+        request = MapCodec.encode_add_interceptor_request(self._name, interceptor_data)
+
+        def handle_response(response: "ClientMessage") -> str:
+            return MapCodec.decode_add_interceptor_response(response)
+
+        return self._invoke(request, handle_response)
+
+    def remove_interceptor(self, registration_id: str) -> bool:
+        """Remove a previously added interceptor.
+
+        Args:
+            registration_id: The registration ID from add_interceptor.
+
+        Returns:
+            True if the interceptor was removed, False if not found.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> removed = my_map.remove_interceptor(reg_id)
+        """
+        return self.remove_interceptor_async(registration_id).result()
+
+    def remove_interceptor_async(self, registration_id: str) -> Future:
+        """Remove an interceptor asynchronously.
+
+        Args:
+            registration_id: The registration ID from add_interceptor.
+
+        Returns:
+            A Future that will contain True if removed.
+        """
+        self._check_not_destroyed()
+
+        request = MapCodec.encode_remove_interceptor_request(self._name, registration_id)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_remove_interceptor_response(response)
+
+        return self._invoke(request, handle_response)
 
     def __len__(self) -> int:
         return self.size()
