@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 SERVICE_NAME_MAP = "hz:impl:mapService"
 SERVICE_NAME_EXECUTOR = "hz:impl:executorService"
 SERVICE_NAME_CARDINALITY_ESTIMATOR = "hz:impl:cardinalityEstimatorService"
+SERVICE_NAME_FLAKE_ID = "hz:impl:flakeIdGeneratorService"
 SERVICE_NAME_QUEUE = "hz:impl:queueService"
 SERVICE_NAME_SET = "hz:impl:setService"
 SERVICE_NAME_LIST = "hz:impl:listService"
@@ -816,6 +817,33 @@ class HazelcastClient:
         return self._get_or_create_proxy(
             SERVICE_NAME_CARDINALITY_ESTIMATOR, name, CardinalityEstimator
         )
+
+    def get_flake_id_generator(self, name: str) -> "FlakeIdGenerator":
+        """Get or create a distributed FlakeIdGenerator.
+
+        Returns a proxy to a distributed ID generator that produces
+        cluster-wide unique, roughly time-ordered 64-bit IDs.
+
+        FlakeIdGenerator is useful for generating unique identifiers
+        for entities like orders, users, or events without coordination
+        overhead.
+
+        Args:
+            name: Name of the distributed FlakeID generator.
+
+        Returns:
+            FlakeIdGenerator instance for ID generation.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> id_gen = client.get_flake_id_generator("order-ids")
+            >>> order_id = id_gen.new_id()
+            >>> print(f"New order ID: {order_id}")
+        """
+        from hazelcast.proxy.flake_id import FlakeIdGenerator
+        return self._get_or_create_proxy(SERVICE_NAME_FLAKE_ID, name, FlakeIdGenerator)
 
     def get_pn_counter(self, name: str) -> "PNCounter":
         """Get or create a distributed PNCounter.

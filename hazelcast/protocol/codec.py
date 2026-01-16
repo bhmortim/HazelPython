@@ -3159,6 +3159,98 @@ class MultiMapCodec:
         return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
 
 
+# PNCounter protocol constants
+PN_COUNTER_GET = 0x200100
+PN_COUNTER_ADD = 0x200200
+PN_COUNTER_GET_REPLICA_COUNT = 0x200300
+
+
+class PNCounterCodec:
+    """Codec for PNCounter protocol messages."""
+
+    @staticmethod
+    def encode_get_request(name: str, replica_timestamps: List[Tuple[str, int]]) -> "ClientMessage":
+        """Encode a PNCounter.get request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, PN_COUNTER_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_response(msg: "ClientMessage") -> Tuple[int, List[Tuple[str, int]]]:
+        """Decode a PNCounter.get response.
+
+        Returns:
+            Tuple of (value, replica_timestamps).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0, []
+
+        value = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+        return value, []
+
+    @staticmethod
+    def encode_add_request(
+        name: str, delta: int, get_before_update: bool, replica_timestamps: List[Tuple[str, int]]
+    ) -> "ClientMessage":
+        """Encode a PNCounter.add request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, PN_COUNTER_ADD)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, delta)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, 1 if get_before_update else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_add_response(msg: "ClientMessage") -> Tuple[int, List[Tuple[str, int]]]:
+        """Decode a PNCounter.add response.
+
+        Returns:
+            Tuple of (value, replica_timestamps).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0, []
+
+        value = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+        return value, []
+
+    @staticmethod
+    def encode_get_replica_count_request(name: str) -> "ClientMessage":
+        """Encode a PNCounter.getReplicaCount request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, PN_COUNTER_GET_REPLICA_COUNT)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_replica_count_response(msg: "ClientMessage") -> int:
+        """Decode a PNCounter.getReplicaCount response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
 # CP Subsystem protocol constants
 CP_ATOMIC_LONG_ADD_AND_GET = 0x090200
 CP_ATOMIC_LONG_COMPARE_AND_SET = 0x090300
