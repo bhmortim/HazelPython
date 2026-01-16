@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from hazelcast.cp.sync import CountDownLatch, Semaphore, FencedLock
     from hazelcast.sql.service import SqlService
     from hazelcast.jet.service import JetService
+    from hazelcast.transaction import TransactionContext, TransactionOptions
 
 
 SERVICE_NAME_MAP = "hz:impl:mapService"
@@ -955,6 +956,51 @@ class HazelcastClient:
                 self._connection_manager,
             )
         return self._sql_service
+
+    def new_transaction_context(
+        self, options: "TransactionOptions" = None
+    ) -> "TransactionContext":
+        """Create a new transaction context.
+
+        Creates a new TransactionContext for executing transactional
+        operations across multiple distributed data structures with
+        ACID guarantees.
+
+        Args:
+            options: Optional transaction configuration including timeout,
+                durability, and commit type (ONE_PHASE or TWO_PHASE).
+                If None, default options are used.
+
+        Returns:
+            A new TransactionContext instance.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            Basic usage with context manager::
+
+                with client.new_transaction_context() as ctx:
+                    txn_map = ctx.get_map("my-map")
+                    txn_map.put("key", "value")
+                    # Auto-commits on success
+
+            Two-phase commit::
+
+                from hazelcast import TransactionOptions, TransactionType
+
+                options = TransactionOptions(
+                    timeout=60.0,
+                    transaction_type=TransactionType.TWO_PHASE,
+                )
+                with client.new_transaction_context(options) as ctx:
+                    txn_map = ctx.get_map("my-map")
+                    txn_map.put("key", "value")
+        """
+        self._check_running()
+
+        from hazelcast.transaction import TransactionContext
+        return TransactionContext(self._proxy_context, options)
 
     def get_jet(self) -> "JetService":
         """Get the Jet service for stream processing.

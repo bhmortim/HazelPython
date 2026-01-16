@@ -89,6 +89,21 @@ from hazelcast.listener import (
     DistributedObjectListener,
     DistributedObjectEvent,
 )
+from hazelcast.transaction import (
+    TransactionType,
+    TransactionState,
+    TransactionOptions,
+    TransactionContext,
+    TransactionException,
+    TransactionNotActiveException,
+    TransactionTimedOutException,
+    TransactionalProxy,
+    TransactionalMap,
+    TransactionalSet,
+    TransactionalList,
+    TransactionalQueue,
+    TransactionalMultiMap,
+)
 
 __all__ = [
     # Core
@@ -183,6 +198,20 @@ __all__ = [
     "MembershipEvent",
     "DistributedObjectListener",
     "DistributedObjectEvent",
+    # Transactions
+    "TransactionType",
+    "TransactionState",
+    "TransactionOptions",
+    "TransactionContext",
+    "TransactionException",
+    "TransactionNotActiveException",
+    "TransactionTimedOutException",
+    "TransactionalProxy",
+    "TransactionalMap",
+    "TransactionalSet",
+    "TransactionalList",
+    "TransactionalQueue",
+    "TransactionalMultiMap",
 ]
 
 __version__ = "0.1.0"
