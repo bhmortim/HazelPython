@@ -35,6 +35,19 @@ from hazelcast.protocol.codec import (
     FlakeIdGeneratorCodec,
     IdBatch,
     StringCodec,
+    ClientCodec,
+    CLIENT_AUTHENTICATION,
+    CLIENT_AUTHENTICATION_CUSTOM,
+    CLIENT_ADD_CLUSTER_VIEW_LISTENER,
+    CLIENT_CREATE_PROXY,
+    CLIENT_DESTROY_PROXY,
+    CLIENT_GET_DISTRIBUTED_OBJECTS,
+    CLIENT_PING,
+    CLIENT_GET_PARTITIONS,
+    CLIENT_SEND_SCHEMA,
+    CLIENT_FETCH_SCHEMA,
+    AUTH_STATUS_AUTHENTICATED,
+    AUTH_STATUS_CREDENTIALS_FAILED,
     BYTE_SIZE,
     BOOLEAN_SIZE,
     SHORT_SIZE,
@@ -1216,6 +1229,310 @@ class TestCardinalityEstimatorCodec:
 
         result = CardinalityEstimatorCodec.decode_estimate_response(msg)
         assert result == 12345678
+
+
+class TestClientCodec:
+    """Tests for ClientCodec protocol messages."""
+
+    def test_encode_authentication_request(self):
+        client_uuid = uuid.uuid4()
+        msg = ClientCodec.encode_authentication_request(
+            cluster_name="dev",
+            username="admin",
+            password="secret",
+            client_uuid=client_uuid,
+            client_type="PY",
+            serialization_version=1,
+            client_hazelcast_version="5.0.0",
+            client_name="test-client",
+            labels=["label1", "label2"],
+        )
+
+        assert msg.get_message_type() == CLIENT_AUTHENTICATION
+        assert len(msg) >= 1
+
+    def test_encode_authentication_request_null_credentials(self):
+        client_uuid = uuid.uuid4()
+        msg = ClientCodec.encode_authentication_request(
+            cluster_name="dev",
+            username=None,
+            password=None,
+            client_uuid=client_uuid,
+            client_type="PY",
+            serialization_version=1,
+            client_hazelcast_version="5.0.0",
+            client_name="test-client",
+            labels=[],
+        )
+
+        assert msg.get_message_type() == CLIENT_AUTHENTICATION
+
+    def test_decode_authentication_response_success(self):
+        member_uuid = uuid.uuid4()
+        cluster_id = uuid.uuid4()
+
+        buffer = bytearray(RESPONSE_HEADER_SIZE + BYTE_SIZE + UUID_SIZE + BYTE_SIZE + INT_SIZE + UUID_SIZE + BOOLEAN_SIZE)
+        offset = RESPONSE_HEADER_SIZE
+        struct.pack_into("<B", buffer, offset, AUTH_STATUS_AUTHENTICATED)
+        offset += BYTE_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, member_uuid)
+        offset += UUID_SIZE
+        struct.pack_into("<B", buffer, offset, 1)
+        offset += BYTE_SIZE
+        struct.pack_into("<i", buffer, offset, 271)
+        offset += INT_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, cluster_id)
+        offset += UUID_SIZE
+        struct.pack_into("<B", buffer, offset, 1)
+
+        msg = ClientMessage.create_for_decode([Frame(bytes(buffer), 0)])
+
+        status, resp_member_uuid, ser_ver, part_count, resp_cluster_id, failover = (
+            ClientCodec.decode_authentication_response(msg)
+        )
+
+        assert status == AUTH_STATUS_AUTHENTICATED
+        assert resp_member_uuid == member_uuid
+        assert ser_ver == 1
+        assert part_count == 271
+        assert resp_cluster_id == cluster_id
+        assert failover is True
+
+    def test_decode_authentication_response_failed(self):
+        buffer = bytearray(RESPONSE_HEADER_SIZE + BYTE_SIZE)
+        struct.pack_into("<B", buffer, RESPONSE_HEADER_SIZE, AUTH_STATUS_CREDENTIALS_FAILED)
+
+        msg = ClientMessage.create_for_decode([Frame(bytes(buffer), 0)])
+
+        status, member_uuid, ser_ver, part_count, cluster_id, failover = (
+            ClientCodec.decode_authentication_response(msg)
+        )
+
+        assert status == AUTH_STATUS_CREDENTIALS_FAILED
+
+    def test_decode_authentication_response_empty(self):
+        msg = ClientMessage.create_for_encode()
+
+        status, member_uuid, ser_ver, part_count, cluster_id, failover = (
+            ClientCodec.decode_authentication_response(msg)
+        )
+
+        assert status == AUTH_STATUS_CREDENTIALS_FAILED
+
+    def test_encode_authentication_custom_request(self):
+        client_uuid = uuid.uuid4()
+        credentials = b"custom_token_data"
+
+        msg = ClientCodec.encode_authentication_custom_request(
+            cluster_name="dev",
+            credentials=credentials,
+            client_uuid=client_uuid,
+            client_type="PY",
+            serialization_version=1,
+            client_hazelcast_version="5.0.0",
+            client_name="test-client",
+            labels=["secure"],
+        )
+
+        assert msg.get_message_type() == CLIENT_AUTHENTICATION_CUSTOM
+        assert len(msg) >= 1
+
+    def test_decode_authentication_custom_response(self):
+        buffer = bytearray(RESPONSE_HEADER_SIZE + BYTE_SIZE)
+        struct.pack_into("<B", buffer, RESPONSE_HEADER_SIZE, AUTH_STATUS_AUTHENTICATED)
+
+        msg = ClientMessage.create_for_decode([Frame(bytes(buffer), 0)])
+
+        status, _, _, _, _, _ = ClientCodec.decode_authentication_custom_response(msg)
+        assert status == AUTH_STATUS_AUTHENTICATED
+
+    def test_encode_add_cluster_view_listener_request(self):
+        msg = ClientCodec.encode_add_cluster_view_listener_request()
+
+        assert msg.get_message_type() == CLIENT_ADD_CLUSTER_VIEW_LISTENER
+        assert len(msg) == 1
+
+    def test_encode_create_proxy_request(self):
+        msg = ClientCodec.encode_create_proxy_request("my-map", "hz:impl:mapService")
+
+        assert msg.get_message_type() == CLIENT_CREATE_PROXY
+        assert len(msg) == 3
+
+    def test_encode_destroy_proxy_request(self):
+        msg = ClientCodec.encode_destroy_proxy_request("my-map", "hz:impl:mapService")
+
+        assert msg.get_message_type() == CLIENT_DESTROY_PROXY
+        assert len(msg) == 3
+
+    def test_encode_get_distributed_objects_request(self):
+        msg = ClientCodec.encode_get_distributed_objects_request()
+
+        assert msg.get_message_type() == CLIENT_GET_DISTRIBUTED_OBJECTS
+        assert len(msg) == 1
+
+    def test_decode_get_distributed_objects_response_with_items(self):
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytearray(RESPONSE_HEADER_SIZE), 0))
+        msg.add_frame(BEGIN_FRAME)
+        msg.add_frame(Frame(b"hz:impl:mapService", 0))
+        msg.add_frame(Frame(b"my-map", 0))
+        msg.add_frame(Frame(b"hz:impl:queueService", 0))
+        msg.add_frame(Frame(b"my-queue", 0))
+        msg.add_frame(END_FRAME)
+
+        msg.reset_read_index()
+        result = ClientCodec.decode_get_distributed_objects_response(msg)
+
+        assert len(result) == 2
+        assert result[0] == ("hz:impl:mapService", "my-map")
+        assert result[1] == ("hz:impl:queueService", "my-queue")
+
+    def test_decode_get_distributed_objects_response_empty(self):
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytearray(RESPONSE_HEADER_SIZE), 0))
+
+        msg.reset_read_index()
+        result = ClientCodec.decode_get_distributed_objects_response(msg)
+
+        assert result == []
+
+    def test_encode_ping_request(self):
+        msg = ClientCodec.encode_ping_request()
+
+        assert msg.get_message_type() == CLIENT_PING
+        assert len(msg) == 1
+
+    def test_encode_get_partitions_request(self):
+        msg = ClientCodec.encode_get_partitions_request()
+
+        assert msg.get_message_type() == CLIENT_GET_PARTITIONS
+        assert len(msg) == 1
+
+    def test_decode_get_partitions_response_with_data(self):
+        member_uuid = uuid.uuid4()
+
+        buffer = bytearray(RESPONSE_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<i", buffer, RESPONSE_HEADER_SIZE, 42)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer), 0))
+        msg.add_frame(BEGIN_FRAME)
+
+        uuid_buffer = bytearray(UUID_SIZE)
+        FixSizedTypesCodec.encode_uuid(uuid_buffer, 0, member_uuid)
+        msg.add_frame(Frame(bytes(uuid_buffer), 0))
+
+        partition_buffer = bytearray(INT_SIZE + 3 * INT_SIZE)
+        struct.pack_into("<i", partition_buffer, 0, 3)
+        struct.pack_into("<i", partition_buffer, INT_SIZE, 0)
+        struct.pack_into("<i", partition_buffer, 2 * INT_SIZE, 1)
+        struct.pack_into("<i", partition_buffer, 3 * INT_SIZE, 2)
+        msg.add_frame(Frame(bytes(partition_buffer), 0))
+
+        msg.add_frame(END_FRAME)
+
+        msg.reset_read_index()
+        partitions, state_version = ClientCodec.decode_get_partitions_response(msg)
+
+        assert state_version == 42
+        assert len(partitions) == 1
+        assert partitions[0][0] == member_uuid
+        assert partitions[0][1] == [0, 1, 2]
+
+    def test_decode_get_partitions_response_empty(self):
+        buffer = bytearray(RESPONSE_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<i", buffer, RESPONSE_HEADER_SIZE, 0)
+
+        msg = ClientMessage.create_for_decode([Frame(bytes(buffer), 0)])
+
+        partitions, state_version = ClientCodec.decode_get_partitions_response(msg)
+
+        assert state_version == 0
+        assert partitions == []
+
+    def test_encode_send_schema_request(self):
+        schema_data = b"compact_schema_binary_data"
+        msg = ClientCodec.encode_send_schema_request(schema_data)
+
+        assert msg.get_message_type() == CLIENT_SEND_SCHEMA
+        assert len(msg) == 2
+
+    def test_decode_send_schema_response_with_uuids(self):
+        uuid1 = uuid.uuid4()
+        uuid2 = uuid.uuid4()
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytearray(RESPONSE_HEADER_SIZE), 0))
+        msg.add_frame(BEGIN_FRAME)
+
+        uuid_buffer1 = bytearray(UUID_SIZE)
+        FixSizedTypesCodec.encode_uuid(uuid_buffer1, 0, uuid1)
+        msg.add_frame(Frame(bytes(uuid_buffer1), 0))
+
+        uuid_buffer2 = bytearray(UUID_SIZE)
+        FixSizedTypesCodec.encode_uuid(uuid_buffer2, 0, uuid2)
+        msg.add_frame(Frame(bytes(uuid_buffer2), 0))
+
+        msg.add_frame(END_FRAME)
+
+        msg.reset_read_index()
+        result = ClientCodec.decode_send_schema_response(msg)
+
+        assert len(result) == 2
+        assert uuid1 in result
+        assert uuid2 in result
+
+    def test_decode_send_schema_response_empty(self):
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytearray(RESPONSE_HEADER_SIZE), 0))
+
+        msg.reset_read_index()
+        result = ClientCodec.decode_send_schema_response(msg)
+
+        assert result == []
+
+    def test_encode_fetch_schema_request(self):
+        schema_id = 123456789
+        msg = ClientCodec.encode_fetch_schema_request(schema_id)
+
+        assert msg.get_message_type() == CLIENT_FETCH_SCHEMA
+        assert len(msg) == 1
+
+        msg.reset_read_index()
+        frame = msg.next_frame()
+        decoded_id = struct.unpack_from("<q", frame.content, REQUEST_HEADER_SIZE)[0]
+        assert decoded_id == schema_id
+
+    def test_decode_fetch_schema_response_with_data(self):
+        schema_data = b"fetched_schema_binary"
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytearray(RESPONSE_HEADER_SIZE), 0))
+        msg.add_frame(Frame(schema_data, 0))
+
+        msg.reset_read_index()
+        result = ClientCodec.decode_fetch_schema_response(msg)
+
+        assert result == schema_data
+
+    def test_decode_fetch_schema_response_null(self):
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytearray(RESPONSE_HEADER_SIZE), 0))
+        msg.add_frame(NULL_FRAME)
+
+        msg.reset_read_index()
+        result = ClientCodec.decode_fetch_schema_response(msg)
+
+        assert result is None
+
+    def test_decode_fetch_schema_response_empty(self):
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytearray(RESPONSE_HEADER_SIZE), 0))
+
+        msg.reset_read_index()
+        result = ClientCodec.decode_fetch_schema_response(msg)
+
+        assert result is None
 
 
 class TestEdgeCases:

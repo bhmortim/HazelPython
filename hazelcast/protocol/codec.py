@@ -5703,6 +5703,426 @@ class VectorCodec:
         return msg
 
 
+# Client protocol constants
+CLIENT_AUTHENTICATION = 0x000100
+CLIENT_AUTHENTICATION_CUSTOM = 0x000200
+CLIENT_ADD_CLUSTER_VIEW_LISTENER = 0x000300
+CLIENT_CREATE_PROXY = 0x000400
+CLIENT_DESTROY_PROXY = 0x000500
+CLIENT_GET_DISTRIBUTED_OBJECTS = 0x000600
+CLIENT_PING = 0x000900
+CLIENT_GET_PARTITIONS = 0x001100
+CLIENT_SEND_SCHEMA = 0x001400
+CLIENT_FETCH_SCHEMA = 0x001500
+
+# Authentication status codes
+AUTH_STATUS_AUTHENTICATED = 0
+AUTH_STATUS_CREDENTIALS_FAILED = 1
+AUTH_STATUS_SERIALIZATION_VERSION_MISMATCH = 2
+AUTH_STATUS_NOT_ALLOWED_IN_CLUSTER = 3
+
+
+class ClientCodec:
+    """Codec for Client protocol messages."""
+
+    @staticmethod
+    def encode_authentication_request(
+        cluster_name: str,
+        username: Optional[str],
+        password: Optional[str],
+        client_uuid: uuid_module.UUID,
+        client_type: str,
+        serialization_version: int,
+        client_hazelcast_version: str,
+        client_name: str,
+        labels: List[str],
+    ) -> "ClientMessage":
+        """Encode a Client.authentication request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + BYTE_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_AUTHENTICATION)
+        struct.pack_into("<i", buffer, 12, -1)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE, client_uuid)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE + UUID_SIZE, serialization_version)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, cluster_name)
+        if username is not None:
+            StringCodec.encode(msg, username)
+        else:
+            msg.add_frame(NULL_FRAME)
+        if password is not None:
+            StringCodec.encode(msg, password)
+        else:
+            msg.add_frame(NULL_FRAME)
+        StringCodec.encode(msg, client_type)
+        StringCodec.encode(msg, client_hazelcast_version)
+        StringCodec.encode(msg, client_name)
+        _encode_string_list(msg, labels)
+        return msg
+
+    @staticmethod
+    def decode_authentication_response(
+        msg: "ClientMessage",
+    ) -> Tuple[int, Optional[uuid_module.UUID], int, int, Optional[uuid_module.UUID], bool]:
+        """Decode a Client.authentication response.
+
+        Returns:
+            Tuple of (status, member_uuid, serialization_version, partition_count, cluster_id, failover_supported).
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return AUTH_STATUS_CREDENTIALS_FAILED, None, 0, 0, None, False
+
+        content = frame.content
+        offset = RESPONSE_HEADER_SIZE
+
+        if len(content) < offset + BYTE_SIZE:
+            return AUTH_STATUS_CREDENTIALS_FAILED, None, 0, 0, None, False
+
+        status = struct.unpack_from("<B", content, offset)[0]
+        offset += BYTE_SIZE
+
+        member_uuid = None
+        if len(content) >= offset + UUID_SIZE:
+            member_uuid, offset = FixSizedTypesCodec.decode_uuid(content, offset)
+
+        serialization_version = 0
+        if len(content) >= offset + BYTE_SIZE:
+            serialization_version = struct.unpack_from("<B", content, offset)[0]
+            offset += BYTE_SIZE
+
+        partition_count = 0
+        if len(content) >= offset + INT_SIZE:
+            partition_count = struct.unpack_from("<i", content, offset)[0]
+            offset += INT_SIZE
+
+        cluster_id = None
+        if len(content) >= offset + UUID_SIZE:
+            cluster_id, offset = FixSizedTypesCodec.decode_uuid(content, offset)
+
+        failover_supported = False
+        if len(content) >= offset + BOOLEAN_SIZE:
+            failover_supported = struct.unpack_from("<B", content, offset)[0] != 0
+
+        return status, member_uuid, serialization_version, partition_count, cluster_id, failover_supported
+
+    @staticmethod
+    def encode_authentication_custom_request(
+        cluster_name: str,
+        credentials: bytes,
+        client_uuid: uuid_module.UUID,
+        client_type: str,
+        serialization_version: int,
+        client_hazelcast_version: str,
+        client_name: str,
+        labels: List[str],
+    ) -> "ClientMessage":
+        """Encode a Client.authenticationCustom request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + BYTE_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_AUTHENTICATION_CUSTOM)
+        struct.pack_into("<i", buffer, 12, -1)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE, client_uuid)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE + UUID_SIZE, serialization_version)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, cluster_name)
+        msg.add_frame(Frame(credentials))
+        StringCodec.encode(msg, client_type)
+        StringCodec.encode(msg, client_hazelcast_version)
+        StringCodec.encode(msg, client_name)
+        _encode_string_list(msg, labels)
+        return msg
+
+    @staticmethod
+    def decode_authentication_custom_response(
+        msg: "ClientMessage",
+    ) -> Tuple[int, Optional[uuid_module.UUID], int, int, Optional[uuid_module.UUID], bool]:
+        """Decode a Client.authenticationCustom response.
+
+        Returns:
+            Tuple of (status, member_uuid, serialization_version, partition_count, cluster_id, failover_supported).
+        """
+        return ClientCodec.decode_authentication_response(msg)
+
+    @staticmethod
+    def encode_add_cluster_view_listener_request() -> "ClientMessage":
+        """Encode a Client.addClusterViewListener request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_ADD_CLUSTER_VIEW_LISTENER)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def encode_create_proxy_request(name: str, service_name: str) -> "ClientMessage":
+        """Encode a Client.createProxy request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_CREATE_PROXY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        StringCodec.encode(msg, service_name)
+        return msg
+
+    @staticmethod
+    def encode_destroy_proxy_request(name: str, service_name: str) -> "ClientMessage":
+        """Encode a Client.destroyProxy request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_DESTROY_PROXY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        StringCodec.encode(msg, service_name)
+        return msg
+
+    @staticmethod
+    def encode_get_distributed_objects_request() -> "ClientMessage":
+        """Encode a Client.getDistributedObjects request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_GET_DISTRIBUTED_OBJECTS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_distributed_objects_response(
+        msg: "ClientMessage",
+    ) -> List[Tuple[str, str]]:
+        """Decode a Client.getDistributedObjects response.
+
+        Returns:
+            List of (service_name, name) tuples.
+        """
+        msg.next_frame()
+        result = []
+
+        frame = msg.peek_next_frame()
+        if frame is None:
+            return result
+
+        msg.next_frame()
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            service_frame = msg.next_frame()
+            name_frame = msg.next_frame()
+
+            if service_frame and name_frame:
+                service_name = service_frame.content.decode("utf-8") if not service_frame.is_null_frame else ""
+                name = name_frame.content.decode("utf-8") if not name_frame.is_null_frame else ""
+                result.append((service_name, name))
+
+        return result
+
+    @staticmethod
+    def encode_ping_request() -> "ClientMessage":
+        """Encode a Client.ping request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_PING)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def encode_get_partitions_request() -> "ClientMessage":
+        """Encode a Client.getPartitions request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_GET_PARTITIONS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_partitions_response(
+        msg: "ClientMessage",
+    ) -> Tuple[List[Tuple[uuid_module.UUID, List[int]]], int]:
+        """Decode a Client.getPartitions response.
+
+        Returns:
+            Tuple of (partitions, partition_state_version).
+            partitions is a list of (member_uuid, partition_ids) tuples.
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return [], 0
+
+        content = frame.content
+        partition_state_version = 0
+        if len(content) >= RESPONSE_HEADER_SIZE + INT_SIZE:
+            partition_state_version = struct.unpack_from("<i", content, RESPONSE_HEADER_SIZE)[0]
+
+        partitions = []
+        frame = msg.peek_next_frame()
+        if frame is None:
+            return partitions, partition_state_version
+
+        msg.next_frame()
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            uuid_frame = msg.next_frame()
+            if uuid_frame is None or len(uuid_frame.content) < UUID_SIZE:
+                break
+
+            member_uuid, _ = FixSizedTypesCodec.decode_uuid(uuid_frame.content, 0)
+            if member_uuid is None:
+                continue
+
+            partition_ids = []
+            partitions_frame = msg.next_frame()
+            if partitions_frame and not partitions_frame.is_null_frame:
+                content = partitions_frame.content
+                offset = 0
+                if len(content) >= INT_SIZE:
+                    count = struct.unpack_from("<i", content, offset)[0]
+                    offset += INT_SIZE
+                    for _ in range(count):
+                        if offset + INT_SIZE <= len(content):
+                            pid = struct.unpack_from("<i", content, offset)[0]
+                            partition_ids.append(pid)
+                            offset += INT_SIZE
+
+            partitions.append((member_uuid, partition_ids))
+
+        return partitions, partition_state_version
+
+    @staticmethod
+    def encode_send_schema_request(schema_data: bytes) -> "ClientMessage":
+        """Encode a Client.sendSchema request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_SEND_SCHEMA)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        msg.add_frame(Frame(schema_data))
+        return msg
+
+    @staticmethod
+    def decode_send_schema_response(msg: "ClientMessage") -> List[uuid_module.UUID]:
+        """Decode a Client.sendSchema response.
+
+        Returns:
+            List of member UUIDs that replicated the schema.
+        """
+        msg.next_frame()
+        result = []
+
+        frame = msg.peek_next_frame()
+        if frame is None:
+            return result
+
+        msg.next_frame()
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            uuid_frame = msg.next_frame()
+            if uuid_frame and len(uuid_frame.content) >= UUID_SIZE:
+                member_uuid, _ = FixSizedTypesCodec.decode_uuid(uuid_frame.content, 0)
+                if member_uuid:
+                    result.append(member_uuid)
+
+        return result
+
+    @staticmethod
+    def encode_fetch_schema_request(schema_id: int) -> "ClientMessage":
+        """Encode a Client.fetchSchema request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CLIENT_FETCH_SCHEMA)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, schema_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_fetch_schema_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Client.fetchSchema response.
+
+        Returns:
+            Schema data or None if not found.
+        """
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+
+def _encode_string_list(msg: "ClientMessage", items: List[str]) -> None:
+    """Encode a list of strings into the message."""
+    from hazelcast.protocol.client_message import Frame, BEGIN_FRAME, END_FRAME
+
+    msg.add_frame(BEGIN_FRAME)
+    for item in items:
+        encoded = item.encode("utf-8")
+        msg.add_frame(Frame(bytearray(encoded)))
+    msg.add_frame(END_FRAME)
+
+
+def _decode_string_list(msg: "ClientMessage") -> List[str]:
+    """Decode a list of strings from the message."""
+    result = []
+    frame = msg.next_frame()
+    if frame is None:
+        return result
+
+    while msg.has_next_frame():
+        frame = msg.peek_next_frame()
+        if frame is None or frame.is_end_data_structure_frame:
+            msg.skip_frame()
+            break
+        frame = msg.next_frame()
+        if frame is not None and not frame.is_null_frame:
+            result.append(frame.content.decode("utf-8"))
+
+    return result
+
+
 # Cache (JCache JSR-107) protocol constants
 CACHE_GET = 0x130100
 CACHE_CONTAINS_KEY = 0x130200

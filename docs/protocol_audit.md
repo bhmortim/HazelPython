@@ -6,7 +6,7 @@ This document compares the Python client protocol implementation against the Jav
 
 | Category | Total Operations | Implemented | Missing | Coverage |
 |----------|------------------|-------------|---------|----------|
-| Client Operations | 15+ | 0 | 15+ | 0% |
+| Client Operations | 15+ | 10 | 13 | ~43% |
 | Map | 50+ | 45 | 5+ | ~90% |
 | MultiMap | 21 | 21 | 0 | 100% |
 | Queue | 17 | 17 | 0 | 100% |
@@ -40,21 +40,21 @@ This document compares the Python client protocol implementation against the Jav
 
 ## Detailed Gap Analysis
 
-### Client Operations (0x0000xx) - **CRITICAL GAPS**
+### Client Operations (0x0000xx) - **PARTIALLY IMPLEMENTED**
 
 These are fundamental client protocol operations required for proper client lifecycle.
 
 | Message Type ID | Operation | Python Status | Notes |
 |-----------------|-----------|---------------|-------|
-| 0x000100 | Authentication | ❌ Missing | Required for cluster connection |
-| 0x000200 | AuthenticationCustom | ❌ Missing | Custom credential authentication |
-| 0x000300 | AddClusterViewListener | ❌ Missing | Cluster topology updates |
-| 0x000400 | CreateProxy | ❌ Missing | Distributed object creation |
-| 0x000500 | DestroyProxy | ❌ Missing | Distributed object destruction |
-| 0x000600 | GetDistributedObjects | ❌ Missing | List all distributed objects |
+| 0x000100 | Authentication | ✅ Implemented | Required for cluster connection |
+| 0x000200 | AuthenticationCustom | ✅ Implemented | Custom credential authentication |
+| 0x000300 | AddClusterViewListener | ✅ Implemented | Cluster topology updates |
+| 0x000400 | CreateProxy | ✅ Implemented | Distributed object creation |
+| 0x000500 | DestroyProxy | ✅ Implemented | Distributed object destruction |
+| 0x000600 | GetDistributedObjects | ✅ Implemented | List all distributed objects |
 | 0x000700 | AddDistributedObjectListener | ❌ Missing | Object creation/destruction events |
 | 0x000800 | RemoveDistributedObjectListener | ❌ Missing | Remove object listener |
-| 0x000900 | Ping | ❌ Missing | Heartbeat/ping |
+| 0x000900 | Ping | ✅ Implemented | Heartbeat/ping |
 | 0x000A00 | Statistics | ❌ Missing | Client statistics publishing |
 | 0x000B00 | DeployClasses | ❌ Missing | Class deployment |
 | 0x000C00 | CreateProxies | ❌ Missing | Batch proxy creation |
@@ -62,11 +62,11 @@ These are fundamental client protocol operations required for proper client life
 | 0x000E00 | TriggerPartitionAssignment | ❌ Missing | Partition assignment trigger |
 | 0x000F00 | AddPartitionLostListener | ❌ Missing | Partition loss events |
 | 0x001000 | RemovePartitionLostListener | ❌ Missing | Remove partition listener |
-| 0x001100 | GetPartitions | ❌ Missing | Get partition table |
+| 0x001100 | GetPartitions | ✅ Implemented | Get partition table |
 | 0x001200 | AddMigrationListener | ❌ Missing | Migration events |
 | 0x001300 | RemoveMigrationListener | ❌ Missing | Remove migration listener |
-| 0x001400 | SendSchema | ❌ Missing | Compact serialization schema |
-| 0x001500 | FetchSchema | ❌ Missing | Fetch serialization schema |
+| 0x001400 | SendSchema | ✅ Implemented | Compact serialization schema |
+| 0x001500 | FetchSchema | ✅ Implemented | Fetch serialization schema |
 | 0x001600 | SendAllSchemas | ❌ Missing | Batch schema sending |
 | 0x001700 | TpcAuthentication | ❌ Missing | TPC authentication |
 
