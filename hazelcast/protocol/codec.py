@@ -4313,6 +4313,170 @@ class SemaphoreCodec:
         return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
 
 
+# CPMap protocol constants
+CP_MAP_GET = 0x230100
+CP_MAP_PUT = 0x230200
+CP_MAP_SET = 0x230300
+CP_MAP_REMOVE = 0x230400
+CP_MAP_DELETE = 0x230500
+CP_MAP_COMPARE_AND_SET = 0x230600
+
+
+class CPMapCodec:
+    """Codec for CP Map protocol messages."""
+
+    @staticmethod
+    def encode_get_request(group_id: str, name: str, key: bytes) -> "ClientMessage":
+        """Encode a CPMap.get request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_MAP_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_get_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a CPMap.get response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_put_request(
+        group_id: str, name: str, key: bytes, value: bytes
+    ) -> "ClientMessage":
+        """Encode a CPMap.put request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_MAP_PUT)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_put_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a CPMap.put response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_set_request(
+        group_id: str, name: str, key: bytes, value: bytes
+    ) -> "ClientMessage":
+        """Encode a CPMap.set request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_MAP_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def encode_remove_request(group_id: str, name: str, key: bytes) -> "ClientMessage":
+        """Encode a CPMap.remove request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_MAP_REMOVE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_remove_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a CPMap.remove response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_delete_request(group_id: str, name: str, key: bytes) -> "ClientMessage":
+        """Encode a CPMap.delete request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_MAP_DELETE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def encode_compare_and_set_request(
+        group_id: str,
+        name: str,
+        key: bytes,
+        expected: Optional[bytes],
+        update: Optional[bytes],
+    ) -> "ClientMessage":
+        """Encode a CPMap.compareAndSet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_MAP_COMPARE_AND_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        if expected is not None:
+            msg.add_frame(Frame(expected))
+        else:
+            msg.add_frame(NULL_FRAME)
+        if update is not None:
+            msg.add_frame(Frame(update))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_compare_and_set_response(msg: "ClientMessage") -> bool:
+        """Decode a CPMap.compareAndSet response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+
 class CountDownLatchCodec:
     """Codec for CP CountDownLatch protocol messages."""
 

@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from hazelcast.cp.atomic import AtomicLong, AtomicReference
     from hazelcast.proxy.cardinality_estimator import CardinalityEstimator
     from hazelcast.cp.sync import CountDownLatch, Semaphore, FencedLock
+    from hazelcast.cp.cp_map import CPMap
     from hazelcast.sql.service import SqlService
     from hazelcast.jet.service import JetService
     from hazelcast.transaction import TransactionContext, TransactionOptions
@@ -73,6 +74,7 @@ SERVICE_NAME_ATOMIC_REFERENCE = "hz:raft:atomicRefService"
 SERVICE_NAME_COUNT_DOWN_LATCH = "hz:raft:countDownLatchService"
 SERVICE_NAME_SEMAPHORE = "hz:raft:semaphoreService"
 SERVICE_NAME_FENCED_LOCK = "hz:raft:lockService"
+SERVICE_NAME_CP_MAP = "hz:raft:mapService"
 
 
 class ClientState(Enum):
@@ -1062,6 +1064,33 @@ class HazelcastClient:
         from hazelcast.cp.sync import FencedLock
         return self._get_or_create_proxy(SERVICE_NAME_FENCED_LOCK, name, FencedLock)
 
+    def get_cp_map(self, name: str) -> "CPMap":
+        """Get or create a CP Map.
+
+        Returns a proxy to a CP subsystem distributed map with
+        strong consistency guarantees.
+
+        Args:
+            name: Name of the CP map in the CP subsystem.
+
+        Returns:
+            CPMap instance for map operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Note:
+            Requires CP subsystem to be enabled on the cluster
+            (minimum 3 members).
+
+        Example:
+            >>> cp_map = client.get_cp_map("my-cp-map")
+            >>> cp_map.put("key", "value")
+            >>> value = cp_map.get("key")
+        """
+        from hazelcast.cp.cp_map import CPMap
+        return self._get_or_create_proxy(SERVICE_NAME_CP_MAP, name, CPMap)
+
     def get_sql(self) -> "SqlService":
         """Get the SQL service for executing queries.
 
@@ -1162,8 +1191,14 @@ class HazelcastClient:
             self._jet_service = JetService(
                 invocation_service=self._invocation_service,
                 serialization_service=self._serialization_service,
+        return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
+=======
             )
         return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
 =======
         return self._jet_service
 
