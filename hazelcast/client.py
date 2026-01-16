@@ -7,7 +7,7 @@ import uuid
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from hazelcast.config import ClientConfig
+from hazelcast.config import ClientConfig, StatisticsConfig
 from hazelcast.exceptions import (
     ClientOfflineException,
     IllegalStateException,
@@ -194,6 +194,7 @@ class HazelcastClient:
         self._sql_service = None
         self._jet_service = None
         self._cache_manager = None
+        self._management_center_service = None
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread: Optional[threading.Thread] = None
@@ -513,6 +514,23 @@ class HazelcastClient:
             listener_service=self._listener_service,
         )
 
+        self._init_management_center_service()
+
+    def _init_management_center_service(self) -> None:
+        """Initialize the Management Center service."""
+        from hazelcast.management import ManagementCenterService
+
+        self._management_center_service = ManagementCenterService(
+            config=self._config.statistics,
+            metrics_registry=self._metrics_registry,
+            client_name=self._client_name,
+            client_uuid=self._client_uuid,
+            cluster_name=self._config.cluster_name,
+        )
+
+        if self._config.statistics.enabled:
+            self._management_center_service.start()
+
     def connect(self) -> "HazelcastClient":
         """Alias for start() - connect to the cluster.
 
@@ -596,6 +614,12 @@ class HazelcastClient:
 
     def _shutdown_services(self) -> None:
         """Shutdown all client services."""
+        if self._management_center_service:
+            try:
+                self._management_center_service.shutdown()
+            except Exception:
+                pass
+
         if self._invocation_service:
             try:
                 self._invocation_service.shutdown()
@@ -1288,6 +1312,26 @@ class HazelcastClient:
         self._check_running()
         from hazelcast.transaction import TransactionContext
         return TransactionContext(self._proxy_context, options)
+
+    def get_management_center_service(self) -> "ManagementCenterService":
+        """Get the Management Center service.
+
+        Returns the Management Center service for accessing client
+        statistics and controlling statistics publishing.
+
+        Returns:
+            ManagementCenterService instance.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> mc = client.get_management_center_service()
+            >>> stats = mc.collect_statistics()
+            >>> print(f"Active connections: {stats.connections_active}")
+        """
+        self._check_running()
+        return self._management_center_service
 
     def get_jet(self) -> "JetService":
         """Get the Jet service for stream processing.

@@ -1021,6 +1021,65 @@ class ClientUserCodeDeploymentConfig:
         )
 
 
+class StatisticsConfig:
+    """Configuration for client statistics collection and reporting.
+
+    Controls whether the client collects and publishes statistics to
+    Hazelcast Management Center for monitoring and diagnostics.
+
+    Attributes:
+        enabled: Whether statistics collection is enabled.
+        period_seconds: How often to publish statistics (in seconds).
+
+    Example:
+        Enable statistics with custom period::
+
+            config = StatisticsConfig()
+            config.enabled = True
+            config.period_seconds = 5.0
+    """
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        period_seconds: float = 3.0,
+    ):
+        self._enabled = enabled
+        self._period_seconds = period_seconds
+        self._validate()
+
+    def _validate(self) -> None:
+        if self._period_seconds <= 0:
+            raise ConfigurationException("period_seconds must be positive")
+
+    @property
+    def enabled(self) -> bool:
+        """Get whether statistics collection is enabled."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    @property
+    def period_seconds(self) -> float:
+        """Get the statistics publishing period in seconds."""
+        return self._period_seconds
+
+    @period_seconds.setter
+    def period_seconds(self, value: float) -> None:
+        self._period_seconds = value
+        self._validate()
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "StatisticsConfig":
+        """Create StatisticsConfig from a dictionary."""
+        return cls(
+            enabled=data.get("enabled", False),
+            period_seconds=data.get("period_seconds", 3.0),
+        )
+
+
 class EventJournalConfig:
     """Configuration for event journal.
 
@@ -1449,6 +1508,7 @@ class ClientConfig:
         self._near_caches: Dict[str, NearCacheConfig] = {}
         self._labels: List[str] = []
         self._discovery: DiscoveryConfig = DiscoveryConfig()
+        self._statistics: StatisticsConfig = StatisticsConfig()
 
     @property
     def cluster_name(self) -> str:
@@ -1588,6 +1648,16 @@ class ClientConfig:
         """Set the discovery configuration."""
         self._discovery = value
 
+    @property
+    def statistics(self) -> StatisticsConfig:
+        """Get the statistics configuration."""
+        return self._statistics
+
+    @statistics.setter
+    def statistics(self, value: StatisticsConfig) -> None:
+        """Set the statistics configuration."""
+        self._statistics = value
+
     @classmethod
     def from_dict(cls, data: dict) -> "ClientConfig":
         """Create ClientConfig from a dictionary."""
@@ -1622,6 +1692,9 @@ class ClientConfig:
 
         if "discovery" in data:
             config.discovery = DiscoveryConfig.from_dict(data["discovery"])
+
+        if "statistics" in data:
+            config.statistics = StatisticsConfig.from_dict(data["statistics"])
 
         return config
 
