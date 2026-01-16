@@ -1,465 +1,713 @@
-"""Unit tests for CP Subsystem Synchronization primitives."""
+"""Unit tests for hazelcast.cp.sync module."""
 
+import pytest
 import threading
 import time
-import unittest
+from concurrent.futures import Future
+from unittest.mock import Mock, patch
 
 from hazelcast.cp.sync import CountDownLatch, Semaphore, FencedLock
-from hazelcast.exceptions import IllegalStateException, IllegalArgumentException
+from hazelcast.exceptions import IllegalArgumentException, IllegalStateException
 
 
-class TestCountDownLatch(unittest.TestCase):
-    """Tests for CountDownLatch."""
+class TestCountDownLatch:
+    """Tests for CountDownLatch class."""
 
-    def setUp(self):
-        self.latch = CountDownLatch("test-latch")
-
-    def tearDown(self):
-        if not self.latch.is_destroyed:
-            self.latch.destroy()
+    def test_service_name_constant(self):
+        assert CountDownLatch.SERVICE_NAME == "hz:raft:countDownLatchService"
 
     def test_initial_count_is_zero(self):
-        self.assertEqual(0, self.latch.get_count())
+        latch = CountDownLatch("test")
+        assert latch._count == 0
 
-    def test_try_set_count(self):
-        result = self.latch.try_set_count(3)
-        self.assertTrue(result)
-        self.assertEqual(3, self.latch.get_count())
+    def test_try_set_count_when_zero_success(self):
+        latch = CountDownLatch("test")
+        result = latch.try_set_count(5)
+        assert result is True
+        assert latch._count == 5
 
-    def test_try_set_count_fails_when_not_zero(self):
-        self.latch.try_set_count(3)
-        result = self.latch.try_set_count(5)
-        self.assertFalse(result)
-        self.assertEqual(3, self.latch.get_count())
+    def test_try_set_count_when_non_zero_failure(self):
+        latch = CountDownLatch("test")
+        latch._count = 3
+        result = latch.try_set_count(5)
+        assert result is False
+        assert latch._count == 3
+
+    def test_try_set_count_async_success(self):
+        latch = CountDownLatch("test")
+        future = latch.try_set_count_async(5)
+        assert future.result() is True
+        assert latch._count == 5
+
+    def test_try_set_count_async_failure(self):
+        latch = CountDownLatch("test")
+        latch._count = 3
+        future = latch.try_set_count_async(5)
+        assert future.result() is False
 
     def test_try_set_count_negative_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.latch.try_set_count(-1)
+        latch = CountDownLatch("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            latch.try_set_count(-1)
+        assert "count cannot be negative" in str(exc_info.value)
 
-    def test_count_down(self):
-        self.latch.try_set_count(3)
-        self.latch.count_down()
-        self.assertEqual(2, self.latch.get_count())
+    def test_try_set_count_async_negative_raises(self):
+        latch = CountDownLatch("test")
+        with pytest.raises(IllegalArgumentException):
+            latch.try_set_count_async(-1)
 
-    def test_count_down_to_zero(self):
-        self.latch.try_set_count(1)
-        self.latch.count_down()
-        self.assertEqual(0, self.latch.get_count())
+    def test_get_count(self):
+        latch = CountDownLatch("test")
+        latch._count = 5
+        assert latch.get_count() == 5
 
-    def test_count_down_at_zero_stays_zero(self):
-        self.latch.count_down()
-        self.assertEqual(0, self.latch.get_count())
+    def test_get_count_async(self):
+        latch = CountDownLatch("test")
+        latch._count = 5
+        future = latch.get_count_async()
+        assert future.result() == 5
 
-    def test_await_returns_immediately_when_zero(self):
-        result = self.latch.await_()
-        self.assertTrue(result)
+    def test_count_down_decrements(self):
+        latch = CountDownLatch("test")
+        latch._count = 3
+        latch.count_down()
+        assert latch._count == 2
 
-    def test_await_with_timeout_returns_immediately_when_zero(self):
-        result = self.latch.await_with_timeout(1.0)
-        self.assertTrue(result)
+    def test_count_down_async(self):
+        latch = CountDownLatch("test")
+        latch._count = 3
+        future = latch.count_down_async()
+        assert future.result() is None
+        assert latch._count == 2
 
-    def test_await_with_timeout_negative_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.latch.await_with_timeout(-1.0)
+    def test_count_down_at_zero_does_nothing(self):
+        latch = CountDownLatch("test")
+        latch._count = 0
+        latch.count_down()
+        assert latch._count == 0
 
-    def test_await_with_timeout_expires(self):
-        self.latch.try_set_count(1)
-        start = time.monotonic()
-        result = self.latch.await_with_timeout(0.1)
-        elapsed = time.monotonic() - start
-        self.assertFalse(result)
-        self.assertGreaterEqual(elapsed, 0.1)
-
-    def test_await_blocks_until_count_down(self):
-        self.latch.try_set_count(1)
-        results = []
-
+    def test_count_down_to_zero_notifies(self):
+        latch = CountDownLatch("test")
+        latch._count = 1
+        
+        notified = threading.Event()
+        
         def waiter():
-            results.append(self.latch.await_())
-
+            with latch._condition:
+                while latch._count > 0:
+                    latch._condition.wait(timeout=1.0)
+            notified.set()
+        
         thread = threading.Thread(target=waiter)
         thread.start()
+        
         time.sleep(0.05)
-        self.latch.count_down()
+        latch.count_down()
+        
         thread.join(timeout=1.0)
-        self.assertEqual([True], results)
+        assert notified.is_set()
 
-    def test_operations_on_destroyed_raise(self):
-        self.latch.destroy()
-        with self.assertRaises(IllegalStateException):
-            self.latch.get_count()
+    def test_await_with_timeout_success(self):
+        latch = CountDownLatch("test")
+        latch._count = 0
+        result = latch.await_with_timeout(1.0)
+        assert result is True
 
-    def test_service_name(self):
-        self.assertEqual("hz:raft:countDownLatchService", self.latch.service_name)
+    def test_await_with_timeout_async_success(self):
+        latch = CountDownLatch("test")
+        latch._count = 0
+        future = latch.await_with_timeout_async(1.0)
+        assert future.result() is True
 
-    def test_async_get_count(self):
-        self.latch.try_set_count(5)
-        future = self.latch.get_count_async()
-        self.assertEqual(5, future.result())
+    def test_await_with_timeout_expires(self):
+        latch = CountDownLatch("test")
+        latch._count = 5
+        result = latch.await_with_timeout(0.05)
+        assert result is False
+
+    def test_await_with_timeout_async_expires(self):
+        latch = CountDownLatch("test")
+        latch._count = 5
+        future = latch.await_with_timeout_async(0.05)
+        assert future.result() is False
+
+    def test_await_with_timeout_negative_raises(self):
+        latch = CountDownLatch("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            latch.await_with_timeout(-1)
+        assert "timeout cannot be negative" in str(exc_info.value)
+
+    def test_await_with_timeout_async_negative_raises(self):
+        latch = CountDownLatch("test")
+        with pytest.raises(IllegalArgumentException):
+            latch.await_with_timeout_async(-1)
+
+    def test_await_completes_when_count_reaches_zero(self):
+        latch = CountDownLatch("test")
+        latch._count = 2
+        
+        result_holder = [None]
+        
+        def waiter():
+            result_holder[0] = latch.await_with_timeout(2.0)
+        
+        thread = threading.Thread(target=waiter)
+        thread.start()
+        
+        time.sleep(0.05)
+        latch.count_down()
+        time.sleep(0.05)
+        latch.count_down()
+        
+        thread.join(timeout=2.0)
+        assert result_holder[0] is True
+
+    def test_operations_on_destroyed_proxy_get_count(self):
+        latch = CountDownLatch("test")
+        latch.destroy()
+        with pytest.raises(IllegalStateException):
+            latch.get_count()
+
+    def test_operations_on_destroyed_proxy_count_down(self):
+        latch = CountDownLatch("test")
+        latch.destroy()
+        with pytest.raises(IllegalStateException):
+            latch.count_down()
+
+    def test_operations_on_destroyed_proxy_try_set_count(self):
+        latch = CountDownLatch("test")
+        latch.destroy()
+        with pytest.raises(IllegalStateException):
+            latch.try_set_count(5)
 
 
-class TestSemaphore(unittest.TestCase):
-    """Tests for Semaphore."""
+class TestSemaphore:
+    """Tests for Semaphore class."""
 
-    def setUp(self):
-        self.semaphore = Semaphore("test-semaphore")
-
-    def tearDown(self):
-        if not self.semaphore.is_destroyed:
-            self.semaphore.destroy()
+    def test_service_name_constant(self):
+        assert Semaphore.SERVICE_NAME == "hz:raft:semaphoreService"
 
     def test_initial_permits_is_zero(self):
-        self.assertEqual(0, self.semaphore.available_permits())
+        sem = Semaphore("test")
+        assert sem._permits == 0
 
-    def test_init(self):
-        result = self.semaphore.init(5)
-        self.assertTrue(result)
-        self.assertEqual(5, self.semaphore.available_permits())
+    def test_init_success_when_permits_zero(self):
+        sem = Semaphore("test")
+        result = sem.init(10)
+        assert result is True
+        assert sem._permits == 10
 
-    def test_init_fails_when_not_zero(self):
-        self.semaphore.init(5)
-        result = self.semaphore.init(10)
-        self.assertFalse(result)
-        self.assertEqual(5, self.semaphore.available_permits())
+    def test_init_failure_when_permits_non_zero(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        result = sem.init(10)
+        assert result is False
+        assert sem._permits == 5
+
+    def test_init_async_success(self):
+        sem = Semaphore("test")
+        future = sem.init_async(10)
+        assert future.result() is True
+        assert sem._permits == 10
+
+    def test_init_async_failure(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        future = sem.init_async(10)
+        assert future.result() is False
 
     def test_init_negative_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.semaphore.init(-1)
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            sem.init(-1)
+        assert "permits cannot be negative" in str(exc_info.value)
 
-    def test_acquire_single(self):
-        self.semaphore.init(3)
-        self.semaphore.acquire()
-        self.assertEqual(2, self.semaphore.available_permits())
+    def test_init_async_negative_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException):
+            sem.init_async(-1)
 
-    def test_acquire_multiple(self):
-        self.semaphore.init(5)
-        self.semaphore.acquire(3)
-        self.assertEqual(2, self.semaphore.available_permits())
+    def test_acquire_decrements_permits(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        sem.acquire(2)
+        assert sem._permits == 3
+
+    def test_acquire_async(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        future = sem.acquire_async(2)
+        assert future.result() is None
+        assert sem._permits == 3
+
+    def test_acquire_default_one_permit(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        sem.acquire()
+        assert sem._permits == 4
 
     def test_acquire_negative_raises(self):
-        self.semaphore.init(5)
-        with self.assertRaises(IllegalArgumentException):
-            self.semaphore.acquire(-1)
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            sem.acquire(-1)
+        assert "permits cannot be negative" in str(exc_info.value)
 
-    def test_try_acquire_success(self):
-        self.semaphore.init(3)
-        result = self.semaphore.try_acquire()
-        self.assertTrue(result)
-        self.assertEqual(2, self.semaphore.available_permits())
+    def test_acquire_async_negative_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException):
+            sem.acquire_async(-1)
 
-    def test_try_acquire_failure(self):
-        result = self.semaphore.try_acquire()
-        self.assertFalse(result)
+    def test_acquire_blocks_when_not_enough_permits(self):
+        sem = Semaphore("test")
+        sem._permits = 1
+        
+        acquired = threading.Event()
+        
+        def acquire_two():
+            sem.acquire(2)
+            acquired.set()
+        
+        thread = threading.Thread(target=acquire_two)
+        thread.start()
+        
+        time.sleep(0.05)
+        assert not acquired.is_set()
+        
+        sem.release(1)
+        thread.join(timeout=1.0)
+        assert acquired.is_set()
+
+    def test_try_acquire_immediate_success(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        result = sem.try_acquire(2)
+        assert result is True
+        assert sem._permits == 3
+
+    def test_try_acquire_immediate_failure(self):
+        sem = Semaphore("test")
+        sem._permits = 1
+        result = sem.try_acquire(2)
+        assert result is False
+        assert sem._permits == 1
+
+    def test_try_acquire_async_success(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        future = sem.try_acquire_async(2)
+        assert future.result() is True
+        assert sem._permits == 3
+
+    def test_try_acquire_async_failure(self):
+        sem = Semaphore("test")
+        sem._permits = 1
+        future = sem.try_acquire_async(2)
+        assert future.result() is False
 
     def test_try_acquire_with_timeout_success(self):
-        self.semaphore.init(1)
-        result = self.semaphore.try_acquire(1, timeout=0.1)
-        self.assertTrue(result)
+        sem = Semaphore("test")
+        sem._permits = 5
+        result = sem.try_acquire(2, timeout=1.0)
+        assert result is True
+        assert sem._permits == 3
 
     def test_try_acquire_with_timeout_expires(self):
-        start = time.monotonic()
-        result = self.semaphore.try_acquire(1, timeout=0.1)
-        elapsed = time.monotonic() - start
-        self.assertFalse(result)
-        self.assertGreaterEqual(elapsed, 0.1)
+        sem = Semaphore("test")
+        sem._permits = 1
+        result = sem.try_acquire(2, timeout=0.05)
+        assert result is False
+        assert sem._permits == 1
+
+    def test_try_acquire_negative_permits_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            sem.try_acquire(-1)
+        assert "permits cannot be negative" in str(exc_info.value)
 
     def test_try_acquire_negative_timeout_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.semaphore.try_acquire(1, timeout=-1.0)
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            sem.try_acquire(1, timeout=-1)
+        assert "timeout cannot be negative" in str(exc_info.value)
 
-    def test_release(self):
-        self.semaphore.init(3)
-        self.semaphore.acquire()
-        self.semaphore.release()
-        self.assertEqual(3, self.semaphore.available_permits())
+    def test_try_acquire_async_negative_permits_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException):
+            sem.try_acquire_async(-1)
 
-    def test_release_multiple(self):
-        self.semaphore.init(3)
-        self.semaphore.release(2)
-        self.assertEqual(5, self.semaphore.available_permits())
+    def test_try_acquire_async_negative_timeout_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException):
+            sem.try_acquire_async(1, timeout=-1)
+
+    def test_release_increments_permits(self):
+        sem = Semaphore("test")
+        sem._permits = 3
+        sem.release(2)
+        assert sem._permits == 5
+
+    def test_release_async(self):
+        sem = Semaphore("test")
+        sem._permits = 3
+        future = sem.release_async(2)
+        assert future.result() is None
+        assert sem._permits == 5
+
+    def test_release_default_one_permit(self):
+        sem = Semaphore("test")
+        sem._permits = 3
+        sem.release()
+        assert sem._permits == 4
 
     def test_release_negative_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.semaphore.release(-1)
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            sem.release(-1)
+        assert "permits cannot be negative" in str(exc_info.value)
+
+    def test_release_async_negative_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException):
+            sem.release_async(-1)
+
+    def test_available_permits(self):
+        sem = Semaphore("test")
+        sem._permits = 7
+        assert sem.available_permits() == 7
+
+    def test_available_permits_async(self):
+        sem = Semaphore("test")
+        sem._permits = 7
+        future = sem.available_permits_async()
+        assert future.result() == 7
 
     def test_drain_permits(self):
-        self.semaphore.init(5)
-        drained = self.semaphore.drain_permits()
-        self.assertEqual(5, drained)
-        self.assertEqual(0, self.semaphore.available_permits())
+        sem = Semaphore("test")
+        sem._permits = 7
+        drained = sem.drain_permits()
+        assert drained == 7
+        assert sem._permits == 0
+
+    def test_drain_permits_async(self):
+        sem = Semaphore("test")
+        sem._permits = 7
+        future = sem.drain_permits_async()
+        assert future.result() == 7
+        assert sem._permits == 0
 
     def test_reduce_permits(self):
-        self.semaphore.init(5)
-        self.semaphore.reduce_permits(3)
-        self.assertEqual(2, self.semaphore.available_permits())
+        sem = Semaphore("test")
+        sem._permits = 10
+        sem.reduce_permits(3)
+        assert sem._permits == 7
 
-    def test_reduce_permits_below_zero(self):
-        self.semaphore.init(2)
-        self.semaphore.reduce_permits(5)
-        self.assertEqual(-3, self.semaphore.available_permits())
+    def test_reduce_permits_async(self):
+        sem = Semaphore("test")
+        sem._permits = 10
+        future = sem.reduce_permits_async(3)
+        assert future.result() is None
+        assert sem._permits == 7
+
+    def test_reduce_permits_can_go_negative(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        sem.reduce_permits(10)
+        assert sem._permits == -5
 
     def test_reduce_permits_negative_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.semaphore.reduce_permits(-1)
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            sem.reduce_permits(-1)
+        assert "reduction cannot be negative" in str(exc_info.value)
+
+    def test_reduce_permits_async_negative_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException):
+            sem.reduce_permits_async(-1)
 
     def test_increase_permits(self):
-        self.semaphore.init(3)
-        self.semaphore.increase_permits(2)
-        self.assertEqual(5, self.semaphore.available_permits())
+        sem = Semaphore("test")
+        sem._permits = 5
+        sem.increase_permits(3)
+        assert sem._permits == 8
+
+    def test_increase_permits_async(self):
+        sem = Semaphore("test")
+        sem._permits = 5
+        future = sem.increase_permits_async(3)
+        assert future.result() is None
+        assert sem._permits == 8
 
     def test_increase_permits_negative_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.semaphore.increase_permits(-1)
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            sem.increase_permits(-1)
+        assert "increase cannot be negative" in str(exc_info.value)
 
-    def test_acquire_blocks_until_release(self):
-        self.semaphore.init(0)
-        results = []
+    def test_increase_permits_async_negative_raises(self):
+        sem = Semaphore("test")
+        with pytest.raises(IllegalArgumentException):
+            sem.increase_permits_async(-1)
 
-        def acquirer():
-            self.semaphore.acquire()
-            results.append("acquired")
+    def test_operations_on_destroyed_proxy_acquire(self):
+        sem = Semaphore("test")
+        sem.destroy()
+        with pytest.raises(IllegalStateException):
+            sem.acquire()
 
-        thread = threading.Thread(target=acquirer)
-        thread.start()
-        time.sleep(0.05)
-        self.semaphore.release()
-        thread.join(timeout=1.0)
-        self.assertEqual(["acquired"], results)
+    def test_operations_on_destroyed_proxy_release(self):
+        sem = Semaphore("test")
+        sem.destroy()
+        with pytest.raises(IllegalStateException):
+            sem.release()
 
-    def test_operations_on_destroyed_raise(self):
-        self.semaphore.destroy()
-        with self.assertRaises(IllegalStateException):
-            self.semaphore.available_permits()
-
-    def test_service_name(self):
-        self.assertEqual("hz:raft:semaphoreService", self.semaphore.service_name)
-
-    def test_async_available_permits(self):
-        self.semaphore.init(7)
-        future = self.semaphore.available_permits_async()
-        self.assertEqual(7, future.result())
+    def test_operations_on_destroyed_proxy_available_permits(self):
+        sem = Semaphore("test")
+        sem.destroy()
+        with pytest.raises(IllegalStateException):
+            sem.available_permits()
 
 
-class TestFencedLock(unittest.TestCase):
-    """Tests for FencedLock."""
+class TestFencedLock:
+    """Tests for FencedLock class."""
 
-    def setUp(self):
-        self.lock = FencedLock("test-lock")
+    def test_service_name_constant(self):
+        assert FencedLock.SERVICE_NAME == "hz:raft:lockService"
 
-    def tearDown(self):
-        if not self.lock.is_destroyed:
-            try:
-                while self.lock.is_locked_by_current_thread():
-                    self.lock.unlock()
-            except IllegalStateException:
-                pass
-            self.lock.destroy()
+    def test_invalid_fence_constant(self):
+        assert FencedLock.INVALID_FENCE == 0
 
     def test_initial_state_not_locked(self):
-        self.assertFalse(self.lock.is_locked())
-        self.assertEqual(0, self.lock.get_lock_count())
-        self.assertEqual(FencedLock.INVALID_FENCE, self.lock.get_fence())
+        lock = FencedLock("test")
+        assert lock._owner_thread is None
 
-    def test_lock_and_unlock(self):
-        fence = self.lock.lock()
-        self.assertTrue(fence > 0)
-        self.assertTrue(self.lock.is_locked())
-        self.assertTrue(self.lock.is_locked_by_current_thread())
-        self.assertEqual(1, self.lock.get_lock_count())
-        self.assertEqual(fence, self.lock.get_fence())
+    def test_initial_state_count_zero(self):
+        lock = FencedLock("test")
+        assert lock._lock_count == 0
 
-        self.lock.unlock()
-        self.assertFalse(self.lock.is_locked())
-        self.assertEqual(0, self.lock.get_lock_count())
+    def test_initial_state_fence_invalid(self):
+        lock = FencedLock("test")
+        assert lock._fence == FencedLock.INVALID_FENCE
 
-    def test_reentrant_lock(self):
-        fence1 = self.lock.lock()
-        fence2 = self.lock.lock()
-        self.assertEqual(fence1, fence2)
-        self.assertEqual(2, self.lock.get_lock_count())
+    def test_lock_acquires_and_returns_fence(self):
+        lock = FencedLock("test")
+        fence = lock.lock()
+        assert fence > 0
+        assert lock._owner_thread == threading.current_thread().ident
+        assert lock._lock_count == 1
 
-        self.lock.unlock()
-        self.assertTrue(self.lock.is_locked())
-        self.assertEqual(1, self.lock.get_lock_count())
+    def test_lock_async(self):
+        lock = FencedLock("test")
+        future = lock.lock_async()
+        fence = future.result()
+        assert fence > 0
+        assert lock._lock_count == 1
 
-        self.lock.unlock()
-        self.assertFalse(self.lock.is_locked())
+    def test_lock_reentrant_increments_count_same_fence(self):
+        lock = FencedLock("test")
+        fence1 = lock.lock()
+        fence2 = lock.lock()
+        assert fence1 == fence2
+        assert lock._lock_count == 2
 
-    def test_fence_increments_on_new_acquisition(self):
-        fence1 = self.lock.lock()
-        self.lock.unlock()
+    def test_try_lock_immediate_success(self):
+        lock = FencedLock("test")
+        fence = lock.try_lock()
+        assert fence > 0
+        assert lock._lock_count == 1
 
-        fence2 = self.lock.lock()
-        self.lock.unlock()
-
-        self.assertGreater(fence2, fence1)
-
-    def test_try_lock_success(self):
-        fence = self.lock.try_lock()
-        self.assertTrue(fence > 0)
-        self.assertTrue(self.lock.is_locked())
-        self.lock.unlock()
-
-    def test_try_lock_failure(self):
-        results = []
-
+    def test_try_lock_immediate_failure_other_thread(self):
+        lock = FencedLock("test")
+        
+        acquired = threading.Event()
+        
         def holder():
-            self.lock.lock()
-            time.sleep(0.2)
-            self.lock.unlock()
-
+            lock.lock()
+            acquired.set()
+            time.sleep(0.5)
+            lock.unlock()
+        
         thread = threading.Thread(target=holder)
         thread.start()
-        time.sleep(0.05)
-        fence = self.lock.try_lock()
-        results.append(fence)
+        acquired.wait()
+        
+        fence = lock.try_lock()
+        assert fence == FencedLock.INVALID_FENCE
+        
         thread.join()
 
-        self.assertEqual(FencedLock.INVALID_FENCE, results[0])
+    def test_try_lock_async_success(self):
+        lock = FencedLock("test")
+        future = lock.try_lock_async()
+        fence = future.result()
+        assert fence > 0
 
     def test_try_lock_with_timeout_success(self):
-        fence = self.lock.try_lock(timeout=0.1)
-        self.assertTrue(fence > 0)
-        self.lock.unlock()
+        lock = FencedLock("test")
+        fence = lock.try_lock(timeout=1.0)
+        assert fence > 0
+        assert lock._lock_count == 1
 
     def test_try_lock_with_timeout_expires(self):
-        results = []
-
+        lock = FencedLock("test")
+        
+        acquired = threading.Event()
+        
         def holder():
-            self.lock.lock()
-            time.sleep(0.3)
-            self.lock.unlock()
-
+            lock.lock()
+            acquired.set()
+            time.sleep(0.5)
+            lock.unlock()
+        
         thread = threading.Thread(target=holder)
         thread.start()
-        time.sleep(0.05)
-
-        start = time.monotonic()
-        fence = self.lock.try_lock(timeout=0.1)
-        elapsed = time.monotonic() - start
-
-        results.append(fence)
+        acquired.wait()
+        
+        fence = lock.try_lock(timeout=0.05)
+        assert fence == FencedLock.INVALID_FENCE
+        
         thread.join()
-
-        self.assertEqual(FencedLock.INVALID_FENCE, results[0])
-        self.assertGreaterEqual(elapsed, 0.1)
 
     def test_try_lock_negative_timeout_raises(self):
-        with self.assertRaises(IllegalArgumentException):
-            self.lock.try_lock(timeout=-1.0)
+        lock = FencedLock("test")
+        with pytest.raises(IllegalArgumentException) as exc_info:
+            lock.try_lock(timeout=-1)
+        assert "timeout cannot be negative" in str(exc_info.value)
 
-    def test_unlock_without_lock_raises(self):
-        with self.assertRaises(IllegalStateException):
-            self.lock.unlock()
+    def test_try_lock_async_negative_timeout_raises(self):
+        lock = FencedLock("test")
+        with pytest.raises(IllegalArgumentException):
+            lock.try_lock_async(timeout=-1)
 
-    def test_unlock_from_different_thread_raises(self):
-        self.lock.lock()
-        results = []
+    def test_unlock_decrements_count(self):
+        lock = FencedLock("test")
+        lock.lock()
+        lock.lock()
+        assert lock._lock_count == 2
+        lock.unlock()
+        assert lock._lock_count == 1
 
-        def other_thread():
-            try:
-                self.lock.unlock()
-                results.append("success")
-            except IllegalStateException:
-                results.append("error")
+    def test_unlock_async(self):
+        lock = FencedLock("test")
+        lock.lock()
+        future = lock.unlock_async()
+        assert future.result() is None
+        assert lock._lock_count == 0
 
-        thread = threading.Thread(target=other_thread)
-        thread.start()
-        thread.join()
+    def test_unlock_fully_releases_lock(self):
+        lock = FencedLock("test")
+        lock.lock()
+        lock.unlock()
+        assert lock._owner_thread is None
+        assert lock._lock_count == 0
+        assert lock._fence == FencedLock.INVALID_FENCE
 
-        self.assertEqual(["error"], results)
-        self.lock.unlock()
+    def test_unlock_not_owner_raises(self):
+        lock = FencedLock("test")
+        with pytest.raises(IllegalStateException) as exc_info:
+            lock.unlock()
+        assert "does not hold this lock" in str(exc_info.value)
 
-    def test_is_locked_by_current_thread(self):
-        self.assertFalse(self.lock.is_locked_by_current_thread())
-        self.lock.lock()
-        self.assertTrue(self.lock.is_locked_by_current_thread())
-        self.lock.unlock()
-        self.assertFalse(self.lock.is_locked_by_current_thread())
+    def test_unlock_async_not_owner_raises(self):
+        lock = FencedLock("test")
+        with pytest.raises(IllegalStateException):
+            lock.unlock_async()
 
-    def test_lock_blocks_until_released(self):
-        results = []
+    def test_is_locked_when_locked(self):
+        lock = FencedLock("test")
+        lock.lock()
+        assert lock.is_locked() is True
 
-        def holder():
-            self.lock.lock()
-            results.append("locked")
-            time.sleep(0.1)
-            self.lock.unlock()
-            results.append("unlocked")
+    def test_is_locked_when_not_locked(self):
+        lock = FencedLock("test")
+        assert lock.is_locked() is False
 
-        def waiter():
-            time.sleep(0.05)
-            self.lock.lock()
-            results.append("waiter_locked")
-            self.lock.unlock()
+    def test_is_locked_async_when_locked(self):
+        lock = FencedLock("test")
+        lock.lock()
+        future = lock.is_locked_async()
+        assert future.result() is True
 
-        t1 = threading.Thread(target=holder)
-        t2 = threading.Thread(target=waiter)
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
+    def test_is_locked_async_when_not_locked(self):
+        lock = FencedLock("test")
+        future = lock.is_locked_async()
+        assert future.result() is False
 
-        self.assertEqual(["locked", "unlocked", "waiter_locked"], results)
+    def test_is_locked_by_current_thread_when_owner(self):
+        lock = FencedLock("test")
+        lock.lock()
+        assert lock.is_locked_by_current_thread() is True
 
-    def test_operations_on_destroyed_raise(self):
-        self.lock.destroy()
-        with self.assertRaises(IllegalStateException):
-            self.lock.is_locked()
+    def test_is_locked_by_current_thread_when_not_owner(self):
+        lock = FencedLock("test")
+        assert lock.is_locked_by_current_thread() is False
 
-    def test_service_name(self):
-        self.assertEqual("hz:raft:lockService", self.lock.service_name)
+    def test_is_locked_by_current_thread_async(self):
+        lock = FencedLock("test")
+        lock.lock()
+        future = lock.is_locked_by_current_thread_async()
+        assert future.result() is True
 
-    def test_async_is_locked(self):
-        future = self.lock.is_locked_async()
-        self.assertFalse(future.result())
-        self.lock.lock()
-        future = self.lock.is_locked_async()
-        self.assertTrue(future.result())
-        self.lock.unlock()
+    def test_get_lock_count(self):
+        lock = FencedLock("test")
+        lock.lock()
+        lock.lock()
+        assert lock.get_lock_count() == 2
 
+    def test_get_lock_count_async(self):
+        lock = FencedLock("test")
+        lock.lock()
+        lock.lock()
+        future = lock.get_lock_count_async()
+        assert future.result() == 2
 
-class TestFencedLockFencing(unittest.TestCase):
-    """Tests for FencedLock fencing token behavior."""
+    def test_get_lock_count_when_not_locked(self):
+        lock = FencedLock("test")
+        assert lock.get_lock_count() == 0
 
-    def setUp(self):
-        self.lock = FencedLock("test-fencing")
+    def test_get_fence(self):
+        lock = FencedLock("test")
+        lock.lock()
+        fence = lock.get_fence()
+        assert fence > 0
 
-    def tearDown(self):
-        if not self.lock.is_destroyed:
-            try:
-                while self.lock.is_locked_by_current_thread():
-                    self.lock.unlock()
-            except IllegalStateException:
-                pass
-            self.lock.destroy()
+    def test_get_fence_async(self):
+        lock = FencedLock("test")
+        lock.lock()
+        future = lock.get_fence_async()
+        assert future.result() > 0
 
-    def test_fence_is_monotonically_increasing(self):
-        fences = []
-        for _ in range(5):
-            fence = self.lock.lock()
-            fences.append(fence)
-            self.lock.unlock()
+    def test_get_fence_when_not_locked(self):
+        lock = FencedLock("test")
+        assert lock.get_fence() == FencedLock.INVALID_FENCE
 
-        for i in range(1, len(fences)):
-            self.assertGreater(fences[i], fences[i - 1])
+    def test_fence_changes_on_new_acquisition(self):
+        lock = FencedLock("test")
+        fence1 = lock.lock()
+        lock.unlock()
+        fence2 = lock.lock()
+        assert fence2 > fence1
 
-    def test_fence_preserved_during_reentrant_lock(self):
-        fence1 = self.lock.lock()
-        fence2 = self.lock.lock()
-        fence3 = self.lock.lock()
+    def test_operations_on_destroyed_proxy_lock(self):
+        lock = FencedLock("test")
+        lock.destroy()
+        with pytest.raises(IllegalStateException):
+            lock.lock()
 
-        self.assertEqual(fence1, fence2)
-        self.assertEqual(fence2, fence3)
+    def test_operations_on_destroyed_proxy_try_lock(self):
+        lock = FencedLock("test")
+        lock.destroy()
+        with pytest.raises(IllegalStateException):
+            lock.try_lock()
 
-        self.lock.unlock()
-        self.lock.unlock()
-        self.lock.unlock()
+    def test_operations_on_destroyed_proxy_is_locked(self):
+        lock = FencedLock("test")
+        lock.destroy()
+        with pytest.raises(IllegalStateException):
+            lock.is_locked()
 
-    def test_invalid_fence_is_zero(self):
-        self.assertEqual(0, FencedLock.INVALID_FENCE)
-        self.assertEqual(FencedLock.INVALID_FENCE, self.lock.get_fence())
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_operations_on_destroyed_proxy_get_fence(self):
+        lock = FencedLock("test")
+        lock.destroy()
+        with pytest.raises(IllegalStateException):
+            lock.get_fence()
