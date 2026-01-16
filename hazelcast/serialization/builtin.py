@@ -1,6 +1,8 @@
 """Built-in serializers for Python primitive types."""
 
 import struct
+from datetime import datetime, date, time, timedelta
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from hazelcast.serialization.api import ObjectDataInput, ObjectDataOutput, Serializer
@@ -26,6 +28,10 @@ STRING_ARRAY_TYPE_ID = -16
 LIST_TYPE_ID = -17
 DICT_TYPE_ID = -18
 UUID_TYPE_ID = -19
+DATETIME_TYPE_ID = -20
+DATE_TYPE_ID = -21
+TIME_TYPE_ID = -22
+BIG_DECIMAL_TYPE_ID = -23
 
 
 class NoneSerializer(Serializer[None]):
@@ -230,6 +236,280 @@ class UUIDSerializer(Serializer):
         return uuid.UUID(int=int_val)
 
 
+class BooleanArraySerializer(Serializer[List[bool]]):
+    """Serializer for boolean array values."""
+
+    @property
+    def type_id(self) -> int:
+        return BOOLEAN_ARRAY_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: List[bool]) -> None:
+        if obj is None:
+            output.write_int(-1)
+            return
+        output.write_int(len(obj))
+        for item in obj:
+            output.write_boolean(item)
+
+    def read(self, input: ObjectDataInput) -> List[bool]:
+        length = input.read_int()
+        if length < 0:
+            return []
+        return [input.read_boolean() for _ in range(length)]
+
+
+class ShortArraySerializer(Serializer[List[int]]):
+    """Serializer for short array values."""
+
+    @property
+    def type_id(self) -> int:
+        return SHORT_ARRAY_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: List[int]) -> None:
+        if obj is None:
+            output.write_int(-1)
+            return
+        output.write_int(len(obj))
+        for item in obj:
+            output.write_short(item)
+
+    def read(self, input: ObjectDataInput) -> List[int]:
+        length = input.read_int()
+        if length < 0:
+            return []
+        return [input.read_short() for _ in range(length)]
+
+
+class IntArraySerializer(Serializer[List[int]]):
+    """Serializer for integer array values."""
+
+    @property
+    def type_id(self) -> int:
+        return INT_ARRAY_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: List[int]) -> None:
+        if obj is None:
+            output.write_int(-1)
+            return
+        output.write_int(len(obj))
+        for item in obj:
+            output.write_int(item)
+
+    def read(self, input: ObjectDataInput) -> List[int]:
+        length = input.read_int()
+        if length < 0:
+            return []
+        return [input.read_int() for _ in range(length)]
+
+
+class LongArraySerializer(Serializer[List[int]]):
+    """Serializer for long array values."""
+
+    @property
+    def type_id(self) -> int:
+        return LONG_ARRAY_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: List[int]) -> None:
+        if obj is None:
+            output.write_int(-1)
+            return
+        output.write_int(len(obj))
+        for item in obj:
+            output.write_long(item)
+
+    def read(self, input: ObjectDataInput) -> List[int]:
+        length = input.read_int()
+        if length < 0:
+            return []
+        return [input.read_long() for _ in range(length)]
+
+
+class FloatArraySerializer(Serializer[List[float]]):
+    """Serializer for float array values."""
+
+    @property
+    def type_id(self) -> int:
+        return FLOAT_ARRAY_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: List[float]) -> None:
+        if obj is None:
+            output.write_int(-1)
+            return
+        output.write_int(len(obj))
+        for item in obj:
+            output.write_float(item)
+
+    def read(self, input: ObjectDataInput) -> List[float]:
+        length = input.read_int()
+        if length < 0:
+            return []
+        return [input.read_float() for _ in range(length)]
+
+
+class DoubleArraySerializer(Serializer[List[float]]):
+    """Serializer for double array values."""
+
+    @property
+    def type_id(self) -> int:
+        return DOUBLE_ARRAY_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: List[float]) -> None:
+        if obj is None:
+            output.write_int(-1)
+            return
+        output.write_int(len(obj))
+        for item in obj:
+            output.write_double(item)
+
+    def read(self, input: ObjectDataInput) -> List[float]:
+        length = input.read_int()
+        if length < 0:
+            return []
+        return [input.read_double() for _ in range(length)]
+
+
+class StringArraySerializer(Serializer[List[str]]):
+    """Serializer for string array values."""
+
+    @property
+    def type_id(self) -> int:
+        return STRING_ARRAY_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: List[str]) -> None:
+        if obj is None:
+            output.write_int(-1)
+            return
+        output.write_int(len(obj))
+        for item in obj:
+            output.write_string(item)
+
+    def read(self, input: ObjectDataInput) -> List[str]:
+        length = input.read_int()
+        if length < 0:
+            return []
+        return [input.read_string() for _ in range(length)]
+
+
+class DateTimeSerializer(Serializer[datetime]):
+    """Serializer for datetime values."""
+
+    @property
+    def type_id(self) -> int:
+        return DATETIME_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: datetime) -> None:
+        output.write_int(obj.year)
+        output.write_byte(obj.month)
+        output.write_byte(obj.day)
+        output.write_byte(obj.hour)
+        output.write_byte(obj.minute)
+        output.write_byte(obj.second)
+        output.write_int(obj.microsecond)
+
+    def read(self, input: ObjectDataInput) -> datetime:
+        year = input.read_int()
+        month = input.read_byte()
+        day = input.read_byte()
+        hour = input.read_byte()
+        minute = input.read_byte()
+        second = input.read_byte()
+        microsecond = input.read_int()
+        return datetime(year, month, day, hour, minute, second, microsecond)
+
+
+class DateSerializer(Serializer[date]):
+    """Serializer for date values."""
+
+    @property
+    def type_id(self) -> int:
+        return DATE_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: date) -> None:
+        output.write_int(obj.year)
+        output.write_byte(obj.month)
+        output.write_byte(obj.day)
+
+    def read(self, input: ObjectDataInput) -> date:
+        year = input.read_int()
+        month = input.read_byte()
+        day = input.read_byte()
+        return date(year, month, day)
+
+
+class TimeSerializer(Serializer[time]):
+    """Serializer for time values."""
+
+    @property
+    def type_id(self) -> int:
+        return TIME_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: time) -> None:
+        output.write_byte(obj.hour)
+        output.write_byte(obj.minute)
+        output.write_byte(obj.second)
+        output.write_int(obj.microsecond)
+
+    def read(self, input: ObjectDataInput) -> time:
+        hour = input.read_byte()
+        minute = input.read_byte()
+        second = input.read_byte()
+        microsecond = input.read_int()
+        return time(hour, minute, second, microsecond)
+
+
+class BigDecimalSerializer(Serializer[Decimal]):
+    """Serializer for Decimal (BigDecimal) values."""
+
+    @property
+    def type_id(self) -> int:
+        return BIG_DECIMAL_TYPE_ID
+
+    def write(self, output: ObjectDataOutput, obj: Decimal) -> None:
+        sign, digits, exponent = obj.as_tuple()
+        unscaled = int("".join(map(str, digits))) if digits else 0
+        if sign:
+            unscaled = -unscaled
+        scale = -exponent if isinstance(exponent, int) else 0
+
+        unscaled_bytes = self._int_to_bytes(unscaled)
+        output.write_int(len(unscaled_bytes))
+        output.write_byte_array(unscaled_bytes)
+        output.write_int(scale)
+
+    def read(self, input: ObjectDataInput) -> Decimal:
+        length = input.read_int()
+        unscaled_bytes = input.read_byte_array()
+        scale = input.read_int()
+
+        unscaled = self._bytes_to_int(unscaled_bytes)
+        if scale >= 0:
+            return Decimal(unscaled) / (Decimal(10) ** scale)
+        else:
+            return Decimal(unscaled) * (Decimal(10) ** (-scale))
+
+    @staticmethod
+    def _int_to_bytes(value: int) -> bytes:
+        if value == 0:
+            return b"\x00"
+        negative = value < 0
+        if negative:
+            value = -value
+        byte_length = (value.bit_length() + 8) // 8
+        result = value.to_bytes(byte_length, byteorder="big", signed=True if negative else False)
+        if negative:
+            value = -value - 1
+            byte_length = (value.bit_length() + 8) // 8
+            result = (value ^ ((1 << (byte_length * 8)) - 1)).to_bytes(byte_length, "big")
+            result = bytes([(~b) & 0xFF for b in result])
+        return result
+
+    @staticmethod
+    def _bytes_to_int(data: bytes) -> int:
+        if not data:
+            return 0
+        return int.from_bytes(data, byteorder="big", signed=True)
+
+
 def get_builtin_serializers() -> Dict[int, Serializer]:
     """Get all built-in serializers indexed by type ID."""
     serializers = [
@@ -243,9 +523,20 @@ def get_builtin_serializers() -> Dict[int, Serializer]:
         DoubleSerializer(),
         StringSerializer(),
         ByteArraySerializer(),
+        BooleanArraySerializer(),
+        ShortArraySerializer(),
+        IntArraySerializer(),
+        LongArraySerializer(),
+        FloatArraySerializer(),
+        DoubleArraySerializer(),
+        StringArraySerializer(),
         ListSerializer(),
         DictSerializer(),
         UUIDSerializer(),
+        DateTimeSerializer(),
+        DateSerializer(),
+        TimeSerializer(),
+        BigDecimalSerializer(),
     ]
     return {s.type_id: s for s in serializers}
 
@@ -263,4 +554,8 @@ def get_type_serializer_mapping() -> Dict[type, Serializer]:
         list: ListSerializer(),
         tuple: ListSerializer(),
         dict: DictSerializer(),
+        datetime: DateTimeSerializer(),
+        date: DateSerializer(),
+        time: TimeSerializer(),
+        Decimal: BigDecimalSerializer(),
     }

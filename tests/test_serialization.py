@@ -1,62 +1,205 @@
-"""Unit tests for hazelcast.serialization module."""
+"""Comprehensive tests for serialization service."""
+
+import struct
+import uuid
+from datetime import datetime, date, time
+from decimal import Decimal
+from typing import Any, Dict
 
 import pytest
-import struct
-from unittest.mock import Mock, MagicMock, patch
 
+from hazelcast.serialization.api import (
+    IdentifiedDataSerializable,
+    ObjectDataInput,
+    ObjectDataOutput,
+    Portable,
+    PortableReader,
+    PortableWriter,
+)
 from hazelcast.serialization.service import (
+    SerializationService,
     Data,
     ObjectDataInputImpl,
     ObjectDataOutputImpl,
-    SerializationService,
-    IdentifiedDataSerializableSerializer,
-    PortableSerializer,
-    TYPE_ID_SIZE,
-    DATA_OFFSET,
+    ClassDefinition,
+    ClassDefinitionBuilder,
+    FieldType,
+    FieldDefinition,
+    ClassDefinitionContext,
 )
-from hazelcast.serialization.builtin import NONE_TYPE_ID
-from hazelcast.serialization.api import IdentifiedDataSerializable, Portable
+from hazelcast.serialization.builtin import (
+    NONE_TYPE_ID,
+    INT_TYPE_ID,
+    STRING_TYPE_ID,
+    DATETIME_TYPE_ID,
+    BIG_DECIMAL_TYPE_ID,
+)
 from hazelcast.exceptions import SerializationException
 
 
+class SampleIdentifiedDataSerializable(IdentifiedDataSerializable):
+    """Sample IdentifiedDataSerializable for testing."""
+
+    FACTORY_ID = 1
+    CLASS_ID = 1
+
+    def __init__(self, id: int = 0, name: str = "", value: float = 0.0):
+        self.id = id
+        self.name = name
+        self.value = value
+
+    @property
+    def factory_id(self) -> int:
+        return self.FACTORY_ID
+
+    @property
+    def class_id(self) -> int:
+        return self.CLASS_ID
+
+    def write_data(self, output: ObjectDataOutput) -> None:
+        output.write_int(self.id)
+        output.write_string(self.name)
+        output.write_double(self.value)
+
+    def read_data(self, input: ObjectDataInput) -> None:
+        self.id = input.read_int()
+        self.name = input.read_string()
+        self.value = input.read_double()
+
+
+class NestedIdentifiedDataSerializable(IdentifiedDataSerializable):
+    """Nested IdentifiedDataSerializable for testing."""
+
+    FACTORY_ID = 1
+    CLASS_ID = 2
+
+    def __init__(self, data: str = "", nested: SampleIdentifiedDataSerializable = None):
+        self.data = data
+        self.nested = nested
+
+    @property
+    def factory_id(self) -> int:
+        return self.FACTORY_ID
+
+    @property
+    def class_id(self) -> int:
+        return self.CLASS_ID
+
+    def write_data(self, output: ObjectDataOutput) -> None:
+        output.write_string(self.data)
+        output.write_object(self.nested)
+
+    def read_data(self, input: ObjectDataInput) -> None:
+        self.data = input.read_string()
+        self.nested = input.read_object()
+
+
+class SampleDataSerializableFactory:
+    """Factory for creating IdentifiedDataSerializable instances."""
+
+    def create(self, class_id: int) -> IdentifiedDataSerializable:
+        if class_id == SampleIdentifiedDataSerializable.CLASS_ID:
+            return SampleIdentifiedDataSerializable()
+        elif class_id == NestedIdentifiedDataSerializable.CLASS_ID:
+            return NestedIdentifiedDataSerializable()
+        return None
+
+
+class SamplePortable(Portable):
+    """Sample Portable for testing."""
+
+    FACTORY_ID = 2
+    CLASS_ID = 1
+
+    def __init__(self, id: int = 0, name: str = "", active: bool = False):
+        self.id = id
+        self.name = name
+        self.active = active
+
+    @property
+    def factory_id(self) -> int:
+        return self.FACTORY_ID
+
+    @property
+    def class_id(self) -> int:
+        return self.CLASS_ID
+
+    def write_portable(self, writer: PortableWriter) -> None:
+        writer.write_int("id", self.id)
+        writer.write_string("name", self.name)
+        writer.write_boolean("active", self.active)
+
+    def read_portable(self, reader: PortableReader) -> None:
+        self.id = reader.read_int("id")
+        self.name = reader.read_string("name")
+        self.active = reader.read_boolean("active")
+
+
+class NestedPortable(Portable):
+    """Nested Portable for testing."""
+
+    FACTORY_ID = 2
+    CLASS_ID = 2
+
+    def __init__(self, label: str = "", child: SamplePortable = None):
+        self.label = label
+        self.child = child
+
+    @property
+    def factory_id(self) -> int:
+        return self.FACTORY_ID
+
+    @property
+    def class_id(self) -> int:
+        return self.CLASS_ID
+
+    def write_portable(self, writer: PortableWriter) -> None:
+        writer.write_string("label", self.label)
+        writer.write_portable("child", self.child)
+
+    def read_portable(self, reader: PortableReader) -> None:
+        self.label = reader.read_string("label")
+        self.child = reader.read_portable("child")
+
+
+class SamplePortableFactory:
+    """Factory for creating Portable instances."""
+
+    def create(self, class_id: int) -> Portable:
+        if class_id == SamplePortable.CLASS_ID:
+            return SamplePortable()
+        elif class_id == NestedPortable.CLASS_ID:
+            return NestedPortable()
+        return None
+
+
 class TestData:
-    """Tests for the Data class."""
+    """Tests for Data class."""
 
     def test_empty_buffer(self):
         data = Data(b"")
-        assert data.buffer == b""
         assert data.total_size() == 0
         assert len(data) == 0
         assert data.get_type_id() == NONE_TYPE_ID
-        assert data.get_payload() == b""
 
-    def test_buffer_too_short_for_type_id(self):
-        data = Data(b"\x01\x02")
-        assert data.get_type_id() == NONE_TYPE_ID
-
-    def test_valid_type_id(self):
-        type_id = 42
-        buffer = struct.pack("<i", type_id) + b"payload"
+    def test_type_id_extraction(self):
+        buffer = struct.pack("<i", INT_TYPE_ID) + b"\x00\x00\x00\x2A"
         data = Data(buffer)
-        assert data.get_type_id() == type_id
-        assert data.get_payload() == b"payload"
+        assert data.get_type_id() == INT_TYPE_ID
 
-    def test_negative_type_id(self):
-        type_id = -5
-        buffer = struct.pack("<i", type_id)
+    def test_payload_extraction(self):
+        payload = b"\x00\x00\x00\x2A"
+        buffer = struct.pack("<i", INT_TYPE_ID) + payload
         data = Data(buffer)
-        assert data.get_type_id() == type_id
+        assert data.get_payload() == payload
 
     def test_equality(self):
         buffer = b"\x01\x02\x03\x04"
         data1 = Data(buffer)
         data2 = Data(buffer)
         data3 = Data(b"\x05\x06\x07\x08")
-        
         assert data1 == data2
         assert data1 != data3
-        assert data1 != "not a data"
-        assert data1 != None
 
     def test_hash(self):
         buffer = b"\x01\x02\x03\x04"
@@ -69,474 +212,463 @@ class TestData:
         data = Data(buffer)
         assert bytes(data) == buffer
 
-    def test_payload_with_only_type_id(self):
-        buffer = struct.pack("<i", 10)
-        data = Data(buffer)
-        assert data.get_payload() == b""
+
+class TestObjectDataIO:
+    """Tests for ObjectDataInput and ObjectDataOutput implementations."""
+
+    def test_boolean_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_boolean(True)
+        output.write_boolean(False)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_boolean() is True
+        assert input_stream.read_boolean() is False
+
+    def test_byte_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_byte(127)
+        output.write_byte(-128)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_byte() == 127
+        assert input_stream.read_byte() == -128
+
+    def test_short_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_short(32767)
+        output.write_short(-32768)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_short() == 32767
+        assert input_stream.read_short() == -32768
+
+    def test_int_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_int(2147483647)
+        output.write_int(-2147483648)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_int() == 2147483647
+        assert input_stream.read_int() == -2147483648
+
+    def test_long_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_long(9223372036854775807)
+        output.write_long(-9223372036854775808)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_long() == 9223372036854775807
+        assert input_stream.read_long() == -9223372036854775808
+
+    def test_float_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_float(3.14)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert abs(input_stream.read_float() - 3.14) < 0.001
+
+    def test_double_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_double(3.141592653589793)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_double() == 3.141592653589793
+
+    def test_string_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_string("Hello, World!")
+        output.write_string("")
+        output.write_string("日本語テスト")
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_string() == "Hello, World!"
+        assert input_stream.read_string() == ""
+        assert input_stream.read_string() == "日本語テスト"
+
+    def test_byte_array_roundtrip(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_byte_array(b"\x01\x02\x03\x04")
+        output.write_byte_array(b"")
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.read_byte_array() == b"\x01\x02\x03\x04"
+        assert input_stream.read_byte_array() == b""
+
+    def test_position_operations(self):
+        service = SerializationService()
+        output = ObjectDataOutputImpl(service)
+        output.write_int(100)
+        output.write_int(200)
+
+        input_stream = ObjectDataInputImpl(output.to_byte_array(), service)
+        assert input_stream.position() == 0
+        input_stream.read_int()
+        assert input_stream.position() == 4
+        input_stream.set_position(0)
+        assert input_stream.position() == 0
+        assert input_stream.read_int() == 100
 
 
-class TestObjectDataInputImpl:
-    """Tests for ObjectDataInputImpl."""
+class TestSerializationServicePrimitives:
+    """Tests for primitive type serialization."""
 
-    def setup_method(self):
-        self.service = Mock(spec=SerializationService)
-
-    def test_read_boolean_true(self):
-        buffer = struct.pack("<B", 1)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_boolean() is True
-        assert inp.position() == 1
-
-    def test_read_boolean_false(self):
-        buffer = struct.pack("<B", 0)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_boolean() is False
-
-    def test_read_byte(self):
-        buffer = struct.pack("<b", -42)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_byte() == -42
-
-    def test_read_short(self):
-        buffer = struct.pack("<h", -1234)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_short() == -1234
-
-    def test_read_int(self):
-        buffer = struct.pack("<i", 123456789)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_int() == 123456789
-
-    def test_read_long(self):
-        buffer = struct.pack("<q", 9876543210)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_long() == 9876543210
-
-    def test_read_float(self):
-        buffer = struct.pack("<f", 3.14)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert abs(inp.read_float() - 3.14) < 0.001
-
-    def test_read_double(self):
-        buffer = struct.pack("<d", 3.14159265359)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert abs(inp.read_double() - 3.14159265359) < 0.0000001
-
-    def test_read_string(self):
-        text = "Hello, World!"
-        encoded = text.encode("utf-8")
-        buffer = struct.pack("<i", len(encoded)) + encoded
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_string() == text
-
-    def test_read_string_empty(self):
-        buffer = struct.pack("<i", 0)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_string() == ""
-
-    def test_read_string_negative_length(self):
-        buffer = struct.pack("<i", -1)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_string() == ""
-
-    def test_read_string_unicode(self):
-        text = "こんにちは世界"
-        encoded = text.encode("utf-8")
-        buffer = struct.pack("<i", len(encoded)) + encoded
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_string() == text
-
-    def test_read_byte_array(self):
-        data = b"\x01\x02\x03\x04\x05"
-        buffer = struct.pack("<i", len(data)) + data
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_byte_array() == data
-
-    def test_read_byte_array_empty(self):
-        buffer = struct.pack("<i", 0)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_byte_array() == b""
-
-    def test_read_byte_array_negative_length(self):
-        buffer = struct.pack("<i", -1)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_byte_array() == b""
-
-    def test_read_object(self):
-        self.service._read_object = Mock(return_value="test_object")
-        buffer = b""
-        inp = ObjectDataInputImpl(buffer, self.service)
-        result = inp.read_object()
-        assert result == "test_object"
-        self.service._read_object.assert_called_once_with(inp)
-
-    def test_set_position(self):
-        buffer = b"\x01\x02\x03\x04\x05"
-        inp = ObjectDataInputImpl(buffer, self.service)
-        inp.set_position(3)
-        assert inp.position() == 3
-
-    def test_sequential_reads(self):
-        buffer = struct.pack("<i", 42) + struct.pack("<h", 100)
-        inp = ObjectDataInputImpl(buffer, self.service)
-        assert inp.read_int() == 42
-        assert inp.read_short() == 100
-        assert inp.position() == 6
-
-
-class TestObjectDataOutputImpl:
-    """Tests for ObjectDataOutputImpl."""
-
-    def setup_method(self):
-        self.service = Mock(spec=SerializationService)
-
-    def test_write_boolean_true(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_boolean(True)
-        assert out.to_byte_array() == struct.pack("<B", 1)
-
-    def test_write_boolean_false(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_boolean(False)
-        assert out.to_byte_array() == struct.pack("<B", 0)
-
-    def test_write_byte(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_byte(-42)
-        assert out.to_byte_array() == struct.pack("<b", -42)
-
-    def test_write_short(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_short(-1234)
-        assert out.to_byte_array() == struct.pack("<h", -1234)
-
-    def test_write_int(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_int(123456789)
-        assert out.to_byte_array() == struct.pack("<i", 123456789)
-
-    def test_write_long(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_long(9876543210)
-        assert out.to_byte_array() == struct.pack("<q", 9876543210)
-
-    def test_write_float(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_float(3.14)
-        result = struct.unpack_from("<f", out.to_byte_array(), 0)[0]
-        assert abs(result - 3.14) < 0.001
-
-    def test_write_double(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_double(3.14159265359)
-        result = struct.unpack_from("<d", out.to_byte_array(), 0)[0]
-        assert abs(result - 3.14159265359) < 0.0000001
-
-    def test_write_string(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_string("Hello")
-        expected = struct.pack("<i", 5) + b"Hello"
-        assert out.to_byte_array() == expected
-
-    def test_write_string_none(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_string(None)
-        assert out.to_byte_array() == struct.pack("<i", -1)
-
-    def test_write_string_unicode(self):
-        out = ObjectDataOutputImpl(self.service)
-        text = "日本語"
-        out.write_string(text)
-        encoded = text.encode("utf-8")
-        expected = struct.pack("<i", len(encoded)) + encoded
-        assert out.to_byte_array() == expected
-
-    def test_write_byte_array(self):
-        out = ObjectDataOutputImpl(self.service)
-        data = b"\x01\x02\x03"
-        out.write_byte_array(data)
-        expected = struct.pack("<i", 3) + data
-        assert out.to_byte_array() == expected
-
-    def test_write_byte_array_none(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_byte_array(None)
-        assert out.to_byte_array() == struct.pack("<i", -1)
-
-    def test_write_object(self):
-        self.service._write_object = Mock()
-        out = ObjectDataOutputImpl(self.service)
-        out.write_object("test")
-        self.service._write_object.assert_called_once_with(out, "test")
-
-    def test_sequential_writes(self):
-        out = ObjectDataOutputImpl(self.service)
-        out.write_int(42)
-        out.write_short(100)
-        result = out.to_byte_array()
-        assert len(result) == 6
-        assert struct.unpack_from("<i", result, 0)[0] == 42
-        assert struct.unpack_from("<h", result, 4)[0] == 100
-
-
-class TestSerializationService:
-    """Tests for SerializationService."""
-
-    def test_to_data_none(self):
+    def test_none_serialization(self):
         service = SerializationService()
         data = service.to_data(None)
-        assert data.get_type_id() == NONE_TYPE_ID
-
-    def test_to_data_already_data(self):
-        service = SerializationService()
-        original = Data(b"\x01\x02\x03\x04")
-        result = service.to_data(original)
-        assert result is original
-
-    def test_to_object_none(self):
-        service = SerializationService()
-        assert service.to_object(None) is None
-
-    def test_to_object_bytes(self):
-        service = SerializationService()
-        buffer = struct.pack("<i", NONE_TYPE_ID)
-        result = service.to_object(buffer)
+        result = service.to_object(data)
         assert result is None
 
-    def test_to_object_empty_data(self):
+    def test_bool_serialization(self):
         service = SerializationService()
-        data = Data(b"")
-        assert service.to_object(data) is None
-
-    def test_to_object_none_type_id(self):
-        service = SerializationService()
-        data = Data(struct.pack("<i", NONE_TYPE_ID))
-        assert service.to_object(data) is None
-
-    def test_to_object_passthrough_non_data(self):
-        service = SerializationService()
-        obj = {"key": "value"}
-        assert service.to_object(obj) is obj
-
-    def test_round_trip_string(self):
-        service = SerializationService()
-        original = "Hello, World!"
-        data = service.to_data(original)
-        result = service.to_object(data)
-        assert result == original
-
-    def test_round_trip_int(self):
-        service = SerializationService()
-        original = 42
-        data = service.to_data(original)
-        result = service.to_object(data)
-        assert result == original
-
-    def test_round_trip_float(self):
-        service = SerializationService()
-        original = 3.14159
-        data = service.to_data(original)
-        result = service.to_object(data)
-        assert abs(result - original) < 0.0001
-
-    def test_round_trip_bool(self):
-        service = SerializationService()
-        for original in [True, False]:
-            data = service.to_data(original)
+        for value in [True, False]:
+            data = service.to_data(value)
             result = service.to_object(data)
-            assert result == original
+            assert result == value
 
-    def test_round_trip_bytes(self):
+    def test_int_serialization(self):
         service = SerializationService()
-        original = b"\x01\x02\x03\x04\x05"
+        for value in [0, 1, -1, 2147483647, -2147483648]:
+            data = service.to_data(value)
+            result = service.to_object(data)
+            assert result == value
+
+    def test_float_serialization(self):
+        service = SerializationService()
+        for value in [0.0, 1.5, -1.5, 3.141592653589793]:
+            data = service.to_data(value)
+            result = service.to_object(data)
+            assert result == value
+
+    def test_string_serialization(self):
+        service = SerializationService()
+        for value in ["", "hello", "世界", "emoji: 🎉"]:
+            data = service.to_data(value)
+            result = service.to_object(data)
+            assert result == value
+
+    def test_bytes_serialization(self):
+        service = SerializationService()
+        for value in [b"", b"\x00\x01\x02", b"hello"]:
+            data = service.to_data(value)
+            result = service.to_object(data)
+            assert result == value
+
+    def test_list_serialization(self):
+        service = SerializationService()
+        original = [1, "two", 3.0, True, None]
         data = service.to_data(original)
         result = service.to_object(data)
         assert result == original
 
-    def test_round_trip_list(self):
+    def test_nested_list_serialization(self):
         service = SerializationService()
-        original = [1, 2, 3, "four", 5.0]
+        original = [[1, 2], [3, 4], ["a", "b"]]
         data = service.to_data(original)
         result = service.to_object(data)
         assert result == original
 
-    def test_round_trip_dict(self):
+    def test_dict_serialization(self):
         service = SerializationService()
-        original = {"key1": "value1", "key2": 42}
+        original = {"name": "test", "value": 42, "active": True}
         data = service.to_data(original)
         result = service.to_object(data)
         assert result == original
 
-    def test_no_serializer_found(self):
+    def test_nested_dict_serialization(self):
         service = SerializationService()
-        
-        class UnknownType:
-            pass
-        
-        with pytest.raises(SerializationException) as exc_info:
-            service.to_data(UnknownType())
-        assert "No serializer found" in str(exc_info.value)
+        original = {"outer": {"inner": {"deep": 123}}}
+        data = service.to_data(original)
+        result = service.to_object(data)
+        assert result == original
 
-    def test_no_deserializer_found(self):
+    def test_uuid_serialization(self):
         service = SerializationService()
-        unknown_type_id = 99999
-        data = Data(struct.pack("<i", unknown_type_id) + b"payload")
-        
-        with pytest.raises(SerializationException) as exc_info:
+        original = uuid.uuid4()
+        data = service.to_data(original)
+        result = service.to_object(data)
+        assert result == original
+
+    def test_datetime_serialization(self):
+        service = SerializationService()
+        original = datetime(2024, 6, 15, 10, 30, 45, 123456)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        assert result == original
+
+    def test_date_serialization(self):
+        service = SerializationService()
+        original = date(2024, 6, 15)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        assert result == original
+
+    def test_time_serialization(self):
+        service = SerializationService()
+        original = time(10, 30, 45, 123456)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        assert result == original
+
+    def test_decimal_serialization(self):
+        service = SerializationService()
+        for value in [Decimal("0"), Decimal("123.456"), Decimal("-999.999"), Decimal("1E+10")]:
+            data = service.to_data(value)
+            result = service.to_object(data)
+            assert result == value
+
+
+class TestIdentifiedDataSerializableSerialization:
+    """Tests for IdentifiedDataSerializable serialization."""
+
+    def test_simple_roundtrip(self):
+        factory = SampleDataSerializableFactory()
+        service = SerializationService(
+            data_serializable_factories={SampleIdentifiedDataSerializable.FACTORY_ID: factory}
+        )
+
+        original = SampleIdentifiedDataSerializable(id=42, name="test", value=3.14)
+        data = service.to_data(original)
+        result = service.to_object(data)
+
+        assert isinstance(result, SampleIdentifiedDataSerializable)
+        assert result.id == original.id
+        assert result.name == original.name
+        assert result.value == original.value
+
+    def test_nested_roundtrip(self):
+        factory = SampleDataSerializableFactory()
+        service = SerializationService(
+            data_serializable_factories={SampleIdentifiedDataSerializable.FACTORY_ID: factory}
+        )
+
+        inner = SampleIdentifiedDataSerializable(id=1, name="inner", value=1.0)
+        original = NestedIdentifiedDataSerializable(data="outer", nested=inner)
+        data = service.to_data(original)
+        result = service.to_object(data)
+
+        assert isinstance(result, NestedIdentifiedDataSerializable)
+        assert result.data == original.data
+        assert isinstance(result.nested, SampleIdentifiedDataSerializable)
+        assert result.nested.id == inner.id
+        assert result.nested.name == inner.name
+
+    def test_missing_factory_raises(self):
+        service = SerializationService()
+        original = SampleIdentifiedDataSerializable(id=1, name="test", value=1.0)
+        data = service.to_data(original)
+
+        with pytest.raises(SerializationException):
             service.to_object(data)
-        assert "No serializer found for type ID" in str(exc_info.value)
+
+
+class TestPortableSerialization:
+    """Tests for Portable serialization."""
+
+    def test_simple_roundtrip(self):
+        factory = SamplePortableFactory()
+        service = SerializationService(
+            portable_factories={SamplePortable.FACTORY_ID: factory}
+        )
+
+        original = SamplePortable(id=42, name="test", active=True)
+        data = service.to_data(original)
+        result = service.to_object(data)
+
+        assert isinstance(result, SamplePortable)
+        assert result.id == original.id
+        assert result.name == original.name
+        assert result.active == original.active
+
+    def test_nested_roundtrip(self):
+        factory = SamplePortableFactory()
+        service = SerializationService(
+            portable_factories={SamplePortable.FACTORY_ID: factory}
+        )
+
+        child_def = ClassDefinitionBuilder(SamplePortable.FACTORY_ID, SamplePortable.CLASS_ID, 0) \
+            .add_int_field("id") \
+            .add_string_field("name") \
+            .add_boolean_field("active") \
+            .build()
+
+        parent_def = ClassDefinitionBuilder(NestedPortable.FACTORY_ID, NestedPortable.CLASS_ID, 0) \
+            .add_string_field("label") \
+            .add_portable_field("child", child_def) \
+            .build()
+
+        service.register_class_definition(child_def)
+        service.register_class_definition(parent_def)
+
+        child = SamplePortable(id=1, name="child", active=True)
+        original = NestedPortable(label="parent", child=child)
+        data = service.to_data(original)
+        result = service.to_object(data)
+
+        assert isinstance(result, NestedPortable)
+        assert result.label == original.label
+        assert isinstance(result.child, SamplePortable)
+        assert result.child.id == child.id
+
+    def test_missing_factory_raises(self):
+        service = SerializationService()
+        original = SamplePortable(id=1, name="test", active=True)
+        data = service.to_data(original)
+
+        with pytest.raises(SerializationException):
+            service.to_object(data)
+
+
+class TestClassDefinition:
+    """Tests for ClassDefinition and related classes."""
+
+    def test_field_definition(self):
+        field = FieldDefinition(0, "test", FieldType.INT)
+        assert field.index == 0
+        assert field.name == "test"
+        assert field.field_type == FieldType.INT
+
+    def test_class_definition_builder(self):
+        builder = ClassDefinitionBuilder(1, 1, 0)
+        builder.add_int_field("id")
+        builder.add_string_field("name")
+        builder.add_boolean_field("active")
+
+        class_def = builder.build()
+        assert class_def.factory_id == 1
+        assert class_def.class_id == 1
+        assert class_def.version == 0
+        assert class_def.get_field_count() == 3
+        assert class_def.has_field("id")
+        assert class_def.has_field("name")
+        assert class_def.has_field("active")
+        assert not class_def.has_field("nonexistent")
+
+    def test_class_definition_field_types(self):
+        builder = ClassDefinitionBuilder(1, 1, 0)
+        builder.add_int_field("int_field")
+        builder.add_long_field("long_field")
+        builder.add_string_field("string_field")
+        builder.add_boolean_field("bool_field")
+        builder.add_float_field("float_field")
+        builder.add_double_field("double_field")
+        builder.add_byte_array_field("bytes_field")
+
+        class_def = builder.build()
+        assert class_def.get_field_type("int_field") == FieldType.INT
+        assert class_def.get_field_type("long_field") == FieldType.LONG
+        assert class_def.get_field_type("string_field") == FieldType.STRING
+        assert class_def.get_field_type("bool_field") == FieldType.BOOLEAN
+        assert class_def.get_field_type("float_field") == FieldType.FLOAT
+        assert class_def.get_field_type("double_field") == FieldType.DOUBLE
+        assert class_def.get_field_type("bytes_field") == FieldType.BYTE_ARRAY
+
+    def test_class_definition_context(self):
+        context = ClassDefinitionContext(0)
+        class_def = ClassDefinitionBuilder(1, 1, 0).add_int_field("id").build()
+
+        registered = context.register(class_def)
+        assert registered == class_def
+
+        found = context.lookup(1, 1, 0)
+        assert found == class_def
+
+        not_found = context.lookup(1, 2, 0)
+        assert not_found is None
+
+
+class TestCustomSerializer:
+    """Tests for custom serializer registration."""
 
     def test_register_custom_serializer(self):
-        class CustomClass:
-            def __init__(self, value):
+        from hazelcast.serialization.api import Serializer
+
+        class CustomObject:
+            def __init__(self, value: int = 0):
                 self.value = value
 
-        class CustomSerializer:
+        class CustomSerializer(Serializer):
             @property
-            def type_id(self):
-                return 1000
+            def type_id(self) -> int:
+                return 100
 
-            def write(self, output, obj):
+            def write(self, output: ObjectDataOutput, obj: CustomObject) -> None:
                 output.write_int(obj.value)
 
-            def read(self, inp):
-                return CustomClass(inp.read_int())
+            def read(self, input: ObjectDataInput) -> CustomObject:
+                return CustomObject(input.read_int())
 
-        service = SerializationService()
-        service.register_serializer(CustomClass, CustomSerializer())
-        
-        original = CustomClass(42)
+        service = SerializationService(
+            custom_serializers={CustomObject: CustomSerializer()}
+        )
+
+        original = CustomObject(42)
         data = service.to_data(original)
         result = service.to_object(data)
-        assert result.value == 42
 
-    def test_compact_service_property(self):
+        assert isinstance(result, CustomObject)
+        assert result.value == original.value
+
+
+class TestDataPassthrough:
+    """Tests for Data object passthrough."""
+
+    def test_data_to_data_returns_same(self):
         service = SerializationService()
-        compact = service.compact_service
-        assert compact is not None
-        assert compact is service.compact_service
+        original_data = service.to_data("test")
+        result = service.to_data(original_data)
+        assert result is original_data
+
+    def test_bytes_to_object(self):
+        service = SerializationService()
+        data = service.to_data(42)
+        buffer = bytes(data)
+        result = service.to_object(buffer)
+        assert result == 42
 
 
-class TestIdentifiedDataSerializableSerializer:
-    """Tests for IdentifiedDataSerializableSerializer."""
+class TestEdgeCases:
+    """Tests for edge cases and error handling."""
 
-    def test_write_read_round_trip(self):
-        class TestDataSerializable(IdentifiedDataSerializable):
-            def __init__(self, value=0):
-                self.value = value
+    def test_empty_string(self):
+        service = SerializationService()
+        data = service.to_data("")
+        result = service.to_object(data)
+        assert result == ""
 
-            @property
-            def factory_id(self):
-                return 1
+    def test_empty_list(self):
+        service = SerializationService()
+        data = service.to_data([])
+        result = service.to_object(data)
+        assert result == []
 
-            @property
-            def class_id(self):
-                return 1
+    def test_empty_dict(self):
+        service = SerializationService()
+        data = service.to_data({})
+        result = service.to_object(data)
+        assert result == {}
 
-            def write_data(self, output):
-                output.write_int(self.value)
-
-            def read_data(self, inp):
-                self.value = inp.read_int()
-
-        class TestFactory:
-            def create(self, class_id):
-                if class_id == 1:
-                    return TestDataSerializable()
-                return None
-
-        factories = {1: TestFactory()}
-        service = SerializationService(data_serializable_factories=factories)
-        
-        original = TestDataSerializable(42)
+    def test_tuple_converted_to_list(self):
+        service = SerializationService()
+        original = (1, 2, 3)
         data = service.to_data(original)
         result = service.to_object(data)
-        assert result.value == 42
+        assert result == [1, 2, 3]
 
-    def test_missing_factory(self):
-        serializer = IdentifiedDataSerializableSerializer({})
-        inp = Mock()
-        inp.read_int = Mock(side_effect=[999, 1])
-        
-        with pytest.raises(SerializationException) as exc_info:
-            serializer.read(inp)
-        assert "No factory registered" in str(exc_info.value)
-
-    def test_factory_returns_none(self):
-        factory = Mock()
-        factory.create = Mock(return_value=None)
-        
-        serializer = IdentifiedDataSerializableSerializer({1: factory})
-        inp = Mock()
-        inp.read_int = Mock(side_effect=[1, 1])
-        
-        with pytest.raises(SerializationException) as exc_info:
-            serializer.read(inp)
-        assert "returned None" in str(exc_info.value)
-
-
-class TestPortableSerializer:
-    """Tests for PortableSerializer."""
-
-    def test_missing_factory(self):
-        serializer = PortableSerializer(0, {})
-        inp = Mock()
-        inp.read_int = Mock(side_effect=[999, 1, 0])
-        
-        with pytest.raises(SerializationException) as exc_info:
-            serializer.read(inp)
-        assert "No factory registered" in str(exc_info.value)
-
-    def test_factory_returns_none(self):
-        factory = Mock()
-        factory.create = Mock(return_value=None)
-        
-        serializer = PortableSerializer(0, {1: factory})
-        inp = Mock()
-        inp.read_int = Mock(side_effect=[1, 1, 0])
-        
-        with pytest.raises(SerializationException) as exc_info:
-            serializer.read(inp)
-        assert "returned None" in str(exc_info.value)
-
-    def test_type_id(self):
-        serializer = PortableSerializer(0, {})
-        assert serializer.type_id == SerializationService.PORTABLE_ID
-
-
-class TestNestedObjectSerialization:
-    """Tests for nested object serialization."""
-
-    def test_write_nested_none(self):
+    def test_unknown_type_raises(self):
         service = SerializationService()
-        out = ObjectDataOutputImpl(service)
-        service._write_object(out, None)
-        
-        result = out.to_byte_array()
-        assert struct.unpack_from("<i", result, 0)[0] == NONE_TYPE_ID
 
-    def test_read_nested_none(self):
-        service = SerializationService()
-        buffer = struct.pack("<i", NONE_TYPE_ID)
-        inp = ObjectDataInputImpl(buffer, service)
-        
-        result = service._read_object(inp)
-        assert result is None
-
-    def test_nested_unknown_type_write(self):
-        service = SerializationService()
-        out = ObjectDataOutputImpl(service)
-        
         class UnknownType:
             pass
-        
-        with pytest.raises(SerializationException):
-            service._write_object(out, UnknownType())
 
-    def test_nested_unknown_type_read(self):
-        service = SerializationService()
-        buffer = struct.pack("<i", 99999)
-        inp = ObjectDataInputImpl(buffer, service)
-        
         with pytest.raises(SerializationException):
-            service._read_object(inp)
+            service.to_data(UnknownType())

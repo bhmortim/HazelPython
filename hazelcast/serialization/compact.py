@@ -101,20 +101,31 @@ class SchemaService:
 
     def __init__(self):
         self._schemas_by_id: Dict[int, Schema] = {}
-        self._schemas_by_type: Dict[str, Schema] = {}
+        self._schemas_by_type: Dict[str, List[Schema]] = {}
 
     def register(self, schema: Schema) -> None:
         """Register a schema."""
         self._schemas_by_id[schema.schema_id] = schema
-        self._schemas_by_type[schema.type_name] = schema
+        if schema.type_name not in self._schemas_by_type:
+            self._schemas_by_type[schema.type_name] = []
+        existing_versions = self._schemas_by_type[schema.type_name]
+        if schema not in existing_versions:
+            existing_versions.append(schema)
 
     def get_by_id(self, schema_id: int) -> Optional[Schema]:
         """Get a schema by its ID."""
         return self._schemas_by_id.get(schema_id)
 
     def get_by_type_name(self, type_name: str) -> Optional[Schema]:
-        """Get a schema by type name."""
-        return self._schemas_by_type.get(type_name)
+        """Get the latest schema by type name."""
+        versions = self._schemas_by_type.get(type_name)
+        if versions:
+            return versions[-1]
+        return None
+
+    def get_all_versions(self, type_name: str) -> List[Schema]:
+        """Get all schema versions for a type."""
+        return self._schemas_by_type.get(type_name, [])
 
     def has_schema(self, schema_id: int) -> bool:
         """Check if a schema is registered."""
@@ -123,6 +134,19 @@ class SchemaService:
     def all_schemas(self) -> List[Schema]:
         """Get all registered schemas."""
         return list(self._schemas_by_id.values())
+
+    def is_compatible(self, old_schema: Schema, new_schema: Schema) -> bool:
+        """Check if two schemas are compatible (new can read old)."""
+        if old_schema.type_name != new_schema.type_name:
+            return False
+        old_fields = {f.name: f for f in old_schema.fields}
+        new_fields = {f.name: f for f in new_schema.fields}
+        for name, old_field in old_fields.items():
+            if name in new_fields:
+                new_field = new_fields[name]
+                if old_field.field_type != new_field.field_type:
+                    return False
+        return True
 
 
 class DefaultCompactWriter(CompactWriter):
@@ -199,53 +223,78 @@ class DefaultCompactWriter(CompactWriter):
 
 
 class DefaultCompactReader(CompactReader):
-    """Default implementation of CompactReader."""
+    """Default implementation of CompactReader with schema evolution support."""
 
-    def __init__(self, schema: Schema, fields: Dict[str, Any]):
+    def __init__(
+        self,
+        schema: Schema,
+        fields: Dict[str, Any],
+        reader_schema: Schema = None,
+    ):
         self._schema = schema
         self._fields = fields
+        self._reader_schema = reader_schema or schema
+
+    def _get_field_value(self, field_name: str, default: Any) -> Any:
+        """Get field value with schema evolution support."""
+        if field_name in self._fields:
+            return self._fields[field_name]
+        reader_field = self._reader_schema.get_field(field_name)
+        if reader_field is None:
+            return default
+        return default
 
     def read_boolean(self, field_name: str) -> bool:
-        return self._fields.get(field_name, False)
+        return self._get_field_value(field_name, False)
 
     def read_int8(self, field_name: str) -> int:
-        return self._fields.get(field_name, 0)
+        return self._get_field_value(field_name, 0)
 
     def read_int16(self, field_name: str) -> int:
-        return self._fields.get(field_name, 0)
+        return self._get_field_value(field_name, 0)
 
     def read_int32(self, field_name: str) -> int:
-        return self._fields.get(field_name, 0)
+        return self._get_field_value(field_name, 0)
 
     def read_int64(self, field_name: str) -> int:
-        return self._fields.get(field_name, 0)
+        return self._get_field_value(field_name, 0)
 
     def read_float32(self, field_name: str) -> float:
-        return self._fields.get(field_name, 0.0)
+        return self._get_field_value(field_name, 0.0)
 
     def read_float64(self, field_name: str) -> float:
-        return self._fields.get(field_name, 0.0)
+        return self._get_field_value(field_name, 0.0)
 
     def read_string(self, field_name: str) -> str:
-        return self._fields.get(field_name, "")
+        value = self._get_field_value(field_name, None)
+        return value if value is not None else ""
 
     def read_compact(self, field_name: str) -> Any:
-        return self._fields.get(field_name)
+        return self._get_field_value(field_name, None)
 
     def read_array_of_boolean(self, field_name: str) -> list:
-        return self._fields.get(field_name, [])
+        return self._get_field_value(field_name, [])
 
     def read_array_of_int32(self, field_name: str) -> list:
-        return self._fields.get(field_name, [])
+        return self._get_field_value(field_name, [])
 
     def read_array_of_string(self, field_name: str) -> list:
-        return self._fields.get(field_name, [])
+        return self._get_field_value(field_name, [])
 
     def read_nullable_boolean(self, field_name: str) -> bool:
-        return self._fields.get(field_name)
+        return self._get_field_value(field_name, None)
 
     def read_nullable_int32(self, field_name: str) -> int:
-        return self._fields.get(field_name)
+        return self._get_field_value(field_name, None)
+
+    def get_field_kind(self, field_name: str) -> Optional[FieldKind]:
+        """Get the kind of a field, or None if not present."""
+        field = self._schema.get_field(field_name)
+        return field.kind if field else None
+
+    def has_field(self, field_name: str) -> bool:
+        """Check if a field exists in the schema."""
+        return field_name in self._fields
 
 
 class CompactStreamWriter:
@@ -415,18 +464,48 @@ class CompactSerializationService:
         return self._encode(schema, writer.fields, writer.field_types)
 
     def deserialize(self, data: bytes, type_name: str) -> Any:
-        """Deserialize bytes to an object."""
+        """Deserialize bytes to an object with schema evolution support."""
         serializer = self.get_serializer(type_name)
         if serializer is None:
             raise ValueError(f"No compact serializer registered for {type_name}")
 
         schema_id, fields = self._decode(data)
-        schema = self.get_schema(schema_id)
-        if schema is None:
-            schema = Schema(type_name=type_name, schema_id=schema_id)
+        writer_schema = self.get_schema(schema_id)
+        if writer_schema is None:
+            writer_schema = Schema(type_name=type_name, schema_id=schema_id)
 
-        reader = DefaultCompactReader(schema, fields)
+        reader_schema = self._schema_service.get_by_type_name(type_name)
+        if reader_schema is None:
+            reader_schema = writer_schema
+
+        reader = DefaultCompactReader(writer_schema, fields, reader_schema)
         return serializer.read(reader)
+
+    def deserialize_with_schema(
+        self, data: bytes, type_name: str, reader_schema: Schema
+    ) -> Any:
+        """Deserialize with explicit reader schema for evolution."""
+        serializer = self.get_serializer(type_name)
+        if serializer is None:
+            raise ValueError(f"No compact serializer registered for {type_name}")
+
+        schema_id, fields = self._decode(data)
+        writer_schema = self.get_schema(schema_id)
+        if writer_schema is None:
+            writer_schema = Schema(type_name=type_name, schema_id=schema_id)
+
+        reader = DefaultCompactReader(writer_schema, fields, reader_schema)
+        return serializer.read(reader)
+
+    def check_schema_compatibility(
+        self, old_schema_id: int, new_schema_id: int
+    ) -> bool:
+        """Check if schemas are compatible for evolution."""
+        old_schema = self.get_schema(old_schema_id)
+        new_schema = self.get_schema(new_schema_id)
+        if old_schema is None or new_schema is None:
+            return False
+        return self._schema_service.is_compatible(old_schema, new_schema)
 
     def _encode(self, schema: Schema, fields: Dict[str, Any], field_types: Dict[str, str]) -> bytes:
         """Encode schema and fields to bytes."""
