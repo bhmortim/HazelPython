@@ -1,13 +1,14 @@
 """CP Subsystem group management."""
 
 import threading
-from typing import Dict, List, Optional, Set, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 from enum import Enum
 
 from hazelcast.exceptions import IllegalStateException
 
 if TYPE_CHECKING:
     from hazelcast.proxy.base import ProxyContext
+    from hazelcast.protocol.client_message import ClientMessage
 
 
 class CPGroupStatus(Enum):
@@ -125,8 +126,13 @@ class CPGroupManager:
         >>> default_group = group_mgr.get_group("default")
     """
 
-    def __init__(self, context: Optional["ProxyContext"] = None):
+    def __init__(
+        self,
+        context: Optional["ProxyContext"] = None,
+        invocation_service: Optional[Callable[["ClientMessage"], "ClientMessage"]] = None,
+    ):
         self._context = context
+        self._invocation_service = invocation_service
         self._groups: Dict[str, CPGroup] = {}
         self._lock = threading.Lock()
         self._closed = False
@@ -218,6 +224,125 @@ class CPGroupManager:
         """Clear all groups from the manager."""
         with self._lock:
             self._groups.clear()
+
+    def create_cp_group(self, name: str) -> CPGroup:
+        """Create a CP group on the cluster.
+
+        Args:
+            name: The name for the CP group.
+
+        Returns:
+            The created CPGroup.
+
+        Raises:
+            IllegalStateException: If the manager is closed.
+        """
+        self._check_not_closed()
+
+        group_name, seed, group_id = self._create_cp_group_on_cluster(name)
+        group = CPGroup(group_name or name, str(group_id) if group_id else name)
+
+        with self._lock:
+            self._groups[group.name] = group
+
+        return group
+
+    def _create_cp_group_on_cluster(self, name: str) -> Tuple[str, int, int]:
+        """Create a CP group on the cluster via protocol.
+
+        Args:
+            name: The name for the CP group.
+
+        Returns:
+            Tuple of (group_name, seed, group_id).
+        """
+        if self._invocation_service is not None:
+            from hazelcast.protocol.codec import CPGroupCodec
+
+            request = CPGroupCodec.encode_create_cp_group_request(name)
+            response = self._invocation_service(request)
+            return CPGroupCodec.decode_create_cp_group_response(response)
+
+        return name, 0, hash(name)
+
+    def destroy_cp_object(
+        self, group_id: str, service_name: str, object_name: str
+    ) -> None:
+        """Destroy a CP object on the cluster.
+
+        Args:
+            group_id: The CP group identifier.
+            service_name: The service name of the CP object.
+            object_name: The name of the CP object.
+
+        Raises:
+            IllegalStateException: If the manager is closed.
+        """
+        self._check_not_closed()
+        self._destroy_cp_object_on_cluster(group_id, service_name, object_name)
+
+    def _destroy_cp_object_on_cluster(
+        self, group_id: str, service_name: str, object_name: str
+    ) -> None:
+        """Destroy a CP object on the cluster via protocol.
+
+        Args:
+            group_id: The CP group identifier.
+            service_name: The service name of the CP object.
+            object_name: The name of the CP object.
+        """
+        if self._invocation_service is not None:
+            from hazelcast.protocol.codec import CPGroupCodec
+
+            request = CPGroupCodec.encode_destroy_cp_object_request(
+                group_id, service_name, object_name
+            )
+            self._invocation_service(request)
+
+    def get_cp_group_ids_from_cluster(self) -> List[Tuple[str, int, int]]:
+        """Get all CP group IDs from the cluster.
+
+        Returns:
+            List of (group_name, seed, group_id) tuples.
+
+        Raises:
+            IllegalStateException: If the manager is closed.
+        """
+        self._check_not_closed()
+
+        if self._invocation_service is not None:
+            from hazelcast.protocol.codec import CPGroupCodec
+
+            request = CPGroupCodec.encode_get_cp_group_ids_request()
+            response = self._invocation_service(request)
+            return CPGroupCodec.decode_get_cp_group_ids_response(response)
+
+        return []
+
+    def get_cp_object_infos_from_cluster(
+        self, group_id: str
+    ) -> List[Tuple[str, str]]:
+        """Get CP object infos from the cluster for a group.
+
+        Args:
+            group_id: The CP group identifier.
+
+        Returns:
+            List of (service_name, object_name) tuples.
+
+        Raises:
+            IllegalStateException: If the manager is closed.
+        """
+        self._check_not_closed()
+
+        if self._invocation_service is not None:
+            from hazelcast.protocol.codec import CPGroupCodec
+
+            request = CPGroupCodec.encode_get_cp_object_infos_request(group_id)
+            response = self._invocation_service(request)
+            return CPGroupCodec.decode_get_cp_object_infos_response(response)
+
+        return []
 
     def shutdown(self) -> None:
         """Shutdown the group manager."""

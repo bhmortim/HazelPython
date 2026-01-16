@@ -6,13 +6,19 @@ import threading
 import unittest
 
 from hazelcast.cp.session import CPSession, CPSessionManager, CPSessionState
+from hazelcast.cp.group import CPGroup, CPGroupManager, CPGroupStatus, CPMember
 from hazelcast.protocol.codec import (
     CPSessionCodec,
+    CPGroupCodec,
     CP_SESSION_CREATE,
     CP_SESSION_CLOSE,
     CP_SESSION_HEARTBEAT,
     CP_SESSION_GENERATE_THREAD_ID,
     CP_SESSION_GET_SESSIONS,
+    CP_GROUP_CREATE_CP_GROUP,
+    CP_GROUP_DESTROY_CP_OBJECT,
+    CP_GROUP_GET_CP_GROUP_IDS,
+    CP_GROUP_GET_CP_OBJECT_INFOS,
     RESPONSE_HEADER_SIZE,
     LONG_SIZE,
     BOOLEAN_SIZE,
@@ -347,6 +353,342 @@ class TestCPSessionCodec(unittest.TestCase):
         frame = msg.next_frame()
         msg_type = struct.unpack_from("<I", frame.buf, 0)[0]
         self.assertEqual(msg_type, CP_SESSION_GET_SESSIONS)
+
+
+class TestCPMember(unittest.TestCase):
+    """Tests for CPMember class."""
+
+    def test_member_creation(self):
+        """Test basic member creation."""
+        member = CPMember("uuid-123", "127.0.0.1:5701")
+        self.assertEqual(member.uuid, "uuid-123")
+        self.assertEqual(member.address, "127.0.0.1:5701")
+
+    def test_member_equality(self):
+        """Test member equality based on UUID."""
+        member1 = CPMember("uuid-123", "127.0.0.1:5701")
+        member2 = CPMember("uuid-123", "127.0.0.1:5702")
+        member3 = CPMember("uuid-456", "127.0.0.1:5701")
+
+        self.assertEqual(member1, member2)
+        self.assertNotEqual(member1, member3)
+
+    def test_member_hash(self):
+        """Test member hashing."""
+        member1 = CPMember("uuid-123", "127.0.0.1:5701")
+        member2 = CPMember("uuid-123", "127.0.0.1:5702")
+
+        self.assertEqual(hash(member1), hash(member2))
+
+    def test_member_repr(self):
+        """Test member string representation."""
+        member = CPMember("uuid-123", "127.0.0.1:5701")
+        repr_str = repr(member)
+        self.assertIn("uuid-123", repr_str)
+        self.assertIn("127.0.0.1:5701", repr_str)
+
+
+class TestCPGroup(unittest.TestCase):
+    """Tests for CPGroup class."""
+
+    def test_group_creation(self):
+        """Test basic group creation."""
+        group = CPGroup("default", "group-id-123")
+        self.assertEqual(group.name, "default")
+        self.assertEqual(group.group_id, "group-id-123")
+        self.assertEqual(group.status, CPGroupStatus.ACTIVE)
+        self.assertTrue(group.is_active())
+
+    def test_group_with_members(self):
+        """Test group creation with members."""
+        members = {CPMember("uuid-1", "addr1"), CPMember("uuid-2", "addr2")}
+        group = CPGroup("default", "group-id-123", members)
+        self.assertEqual(group.member_count, 2)
+        self.assertEqual(len(group.members), 2)
+
+    def test_group_members_copy(self):
+        """Test that members property returns a copy."""
+        members = {CPMember("uuid-1", "addr1")}
+        group = CPGroup("default", "group-id-123", members)
+        returned_members = group.members
+        returned_members.add(CPMember("uuid-2", "addr2"))
+        self.assertEqual(group.member_count, 1)
+
+    def test_group_default_name(self):
+        """Test default group name constant."""
+        self.assertEqual(CPGroup.DEFAULT_GROUP_NAME, "default")
+
+    def test_group_metadata_name(self):
+        """Test metadata group name constant."""
+        self.assertEqual(CPGroup.METADATA_GROUP_NAME, "METADATA")
+
+    def test_group_equality(self):
+        """Test group equality based on group_id."""
+        group1 = CPGroup("default", "group-id-123")
+        group2 = CPGroup("default", "group-id-123")
+        group3 = CPGroup("default", "group-id-456")
+
+        self.assertEqual(group1, group2)
+        self.assertNotEqual(group1, group3)
+
+    def test_group_hash(self):
+        """Test group hashing."""
+        group1 = CPGroup("default", "group-id-123")
+        group2 = CPGroup("other", "group-id-123")
+
+        self.assertEqual(hash(group1), hash(group2))
+
+    def test_group_repr(self):
+        """Test group string representation."""
+        group = CPGroup("default", "group-id-123")
+        repr_str = repr(group)
+        self.assertIn("default", repr_str)
+        self.assertIn("group-id-123", repr_str)
+        self.assertIn("ACTIVE", repr_str)
+
+
+class TestCPGroupManager(unittest.TestCase):
+    """Tests for CPGroupManager class."""
+
+    def test_manager_creation(self):
+        """Test manager creation."""
+        manager = CPGroupManager()
+        self.assertFalse(manager.is_closed)
+        self.assertEqual(len(manager.get_groups()), 0)
+
+    def test_register_group(self):
+        """Test group registration."""
+        manager = CPGroupManager()
+        group = CPGroup("default", "group-id-123")
+        manager.register_group(group)
+
+        self.assertTrue(manager.contains_group("default"))
+        self.assertEqual(manager.get_group("default"), group)
+
+    def test_get_group(self):
+        """Test getting a group by name."""
+        manager = CPGroupManager()
+        self.assertIsNone(manager.get_group("default"))
+
+        group = CPGroup("default", "group-id-123")
+        manager.register_group(group)
+        self.assertEqual(manager.get_group("default"), group)
+
+    def test_get_groups(self):
+        """Test getting all groups."""
+        manager = CPGroupManager()
+        manager.register_group(CPGroup("group1", "id1"))
+        manager.register_group(CPGroup("group2", "id2"))
+
+        groups = manager.get_groups()
+        self.assertEqual(len(groups), 2)
+
+    def test_get_active_groups(self):
+        """Test getting active groups."""
+        manager = CPGroupManager()
+        group1 = CPGroup("group1", "id1")
+        group2 = CPGroup("group2", "id2")
+        manager.register_group(group1)
+        manager.register_group(group2)
+
+        active = manager.get_active_groups()
+        self.assertEqual(len(active), 2)
+
+    def test_get_default_group(self):
+        """Test getting default group."""
+        manager = CPGroupManager()
+        self.assertIsNone(manager.get_default_group())
+
+        group = CPGroup(CPGroup.DEFAULT_GROUP_NAME, "id1")
+        manager.register_group(group)
+        self.assertEqual(manager.get_default_group(), group)
+
+    def test_get_metadata_group(self):
+        """Test getting metadata group."""
+        manager = CPGroupManager()
+        self.assertIsNone(manager.get_metadata_group())
+
+        group = CPGroup(CPGroup.METADATA_GROUP_NAME, "id1")
+        manager.register_group(group)
+        self.assertEqual(manager.get_metadata_group(), group)
+
+    def test_remove_group(self):
+        """Test removing a group."""
+        manager = CPGroupManager()
+        group = CPGroup("default", "id1")
+        manager.register_group(group)
+
+        removed = manager.remove_group("default")
+        self.assertEqual(removed, group)
+        self.assertIsNone(manager.get_group("default"))
+        self.assertIsNone(manager.remove_group("default"))
+
+    def test_clear(self):
+        """Test clearing all groups."""
+        manager = CPGroupManager()
+        manager.register_group(CPGroup("group1", "id1"))
+        manager.register_group(CPGroup("group2", "id2"))
+
+        manager.clear()
+        self.assertEqual(len(manager.get_groups()), 0)
+
+    def test_shutdown(self):
+        """Test manager shutdown."""
+        manager = CPGroupManager()
+        manager.register_group(CPGroup("default", "id1"))
+
+        manager.shutdown()
+        self.assertTrue(manager.is_closed)
+        self.assertEqual(len(manager.get_groups()), 0)
+
+    def test_operations_after_shutdown(self):
+        """Test that operations fail after shutdown."""
+        manager = CPGroupManager()
+        manager.shutdown()
+
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            manager.register_group(CPGroup("default", "id1"))
+
+    def test_create_cp_group(self):
+        """Test CP group creation."""
+        manager = CPGroupManager()
+        group = manager.create_cp_group("test-group")
+
+        self.assertIsNotNone(group)
+        self.assertEqual(group.name, "test-group")
+        self.assertTrue(manager.contains_group("test-group"))
+
+    def test_destroy_cp_object(self):
+        """Test CP object destruction (no error without invocation service)."""
+        manager = CPGroupManager()
+        manager.destroy_cp_object("group-id", "AtomicLong", "counter")
+
+    def test_get_cp_group_ids_from_cluster(self):
+        """Test getting CP group IDs (empty without invocation service)."""
+        manager = CPGroupManager()
+        ids = manager.get_cp_group_ids_from_cluster()
+        self.assertEqual(ids, [])
+
+    def test_get_cp_object_infos_from_cluster(self):
+        """Test getting CP object infos (empty without invocation service)."""
+        manager = CPGroupManager()
+        infos = manager.get_cp_object_infos_from_cluster("group-id")
+        self.assertEqual(infos, [])
+
+    def test_manager_repr(self):
+        """Test manager string representation."""
+        manager = CPGroupManager()
+        manager.register_group(CPGroup("default", "id1"))
+        repr_str = repr(manager)
+        self.assertIn("CPGroupManager", repr_str)
+        self.assertIn("groups=1", repr_str)
+
+    def test_thread_safety(self):
+        """Test thread-safe group management."""
+        manager = CPGroupManager()
+        errors = []
+
+        def register_group(name):
+            try:
+                group = CPGroup(name, f"id-{name}")
+                manager.register_group(group)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=register_group, args=(f"group{i}",))
+            for i in range(10)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(errors), 0)
+        self.assertEqual(len(manager.get_groups()), 10)
+
+
+class TestCPGroupCodec(unittest.TestCase):
+    """Tests for CPGroupCodec class."""
+
+    def test_encode_create_cp_group_request(self):
+        """Test encoding create CP group request."""
+        msg = CPGroupCodec.encode_create_cp_group_request("test-group")
+        self.assertIsNotNone(msg)
+
+        frame = msg.next_frame()
+        self.assertIsNotNone(frame)
+        msg_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(msg_type, CP_GROUP_CREATE_CP_GROUP)
+
+    def test_decode_create_cp_group_response(self):
+        """Test decoding create CP group response."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(RESPONSE_HEADER_SIZE + 2 * LONG_SIZE)
+        struct.pack_into("<q", buffer, RESPONSE_HEADER_SIZE, 12345)
+        struct.pack_into("<q", buffer, RESPONSE_HEADER_SIZE + LONG_SIZE, 67890)
+
+        msg = ClientMessage.create_for_decode()
+        msg.add_frame(Frame(bytes(buffer)))
+        msg.add_frame(Frame(b"test-group"))
+
+        group_name, seed, group_id = CPGroupCodec.decode_create_cp_group_response(msg)
+        self.assertEqual(group_name, "test-group")
+        self.assertEqual(seed, 12345)
+        self.assertEqual(group_id, 67890)
+
+    def test_encode_destroy_cp_object_request(self):
+        """Test encoding destroy CP object request."""
+        msg = CPGroupCodec.encode_destroy_cp_object_request(
+            "group-id", "AtomicLong", "counter"
+        )
+        self.assertIsNotNone(msg)
+
+        frame = msg.next_frame()
+        msg_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(msg_type, CP_GROUP_DESTROY_CP_OBJECT)
+
+    def test_encode_get_cp_group_ids_request(self):
+        """Test encoding get CP group IDs request."""
+        msg = CPGroupCodec.encode_get_cp_group_ids_request()
+        self.assertIsNotNone(msg)
+
+        frame = msg.next_frame()
+        msg_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(msg_type, CP_GROUP_GET_CP_GROUP_IDS)
+
+    def test_encode_get_cp_object_infos_request(self):
+        """Test encoding get CP object infos request."""
+        msg = CPGroupCodec.encode_get_cp_object_infos_request("group-id")
+        self.assertIsNotNone(msg)
+
+        frame = msg.next_frame()
+        msg_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(msg_type, CP_GROUP_GET_CP_OBJECT_INFOS)
+
+    def test_decode_empty_get_cp_group_ids_response(self):
+        """Test decoding empty get CP group IDs response."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(RESPONSE_HEADER_SIZE)
+        msg = ClientMessage.create_for_decode()
+        msg.add_frame(Frame(bytes(buffer)))
+
+        ids = CPGroupCodec.decode_get_cp_group_ids_response(msg)
+        self.assertEqual(ids, [])
+
+    def test_decode_empty_get_cp_object_infos_response(self):
+        """Test decoding empty get CP object infos response."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(RESPONSE_HEADER_SIZE)
+        msg = ClientMessage.create_for_decode()
+        msg.add_frame(Frame(bytes(buffer)))
+
+        infos = CPGroupCodec.decode_get_cp_object_infos_response(msg)
+        self.assertEqual(infos, [])
 
 
 class TestCPSessionLifecycle(unittest.TestCase):

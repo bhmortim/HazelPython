@@ -3499,6 +3499,12 @@ CP_SESSION_HEARTBEAT = 0x1F0300
 CP_SESSION_GENERATE_THREAD_ID = 0x1F0400
 CP_SESSION_GET_SESSIONS = 0x1F0500
 
+# CP Group protocol constants
+CP_GROUP_CREATE_CP_GROUP = 0x1E0100
+CP_GROUP_DESTROY_CP_OBJECT = 0x1E0200
+CP_GROUP_GET_CP_GROUP_IDS = 0x1E0300
+CP_GROUP_GET_CP_OBJECT_INFOS = 0x1E0400
+
 # CP Subsystem protocol constants
 CP_ATOMIC_LONG_ADD_AND_GET = 0x090200
 CP_ATOMIC_LONG_COMPARE_AND_SET = 0x090300
@@ -6128,6 +6134,199 @@ def _decode_string_list(msg: "ClientMessage") -> List[str]:
             result.append(frame.content.decode("utf-8"))
 
     return result
+
+
+class CPGroupCodec:
+    """Codec for CP Group protocol messages."""
+
+    @staticmethod
+    def encode_create_cp_group_request(proxy_name: str) -> "ClientMessage":
+        """Encode a CPGroup.createCPGroup request.
+
+        Args:
+            proxy_name: The name for the CP group proxy.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_GROUP_CREATE_CP_GROUP)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, proxy_name)
+        return msg
+
+    @staticmethod
+    def decode_create_cp_group_response(
+        msg: "ClientMessage",
+    ) -> Tuple[str, int, int]:
+        """Decode a CPGroup.createCPGroup response.
+
+        Returns:
+            Tuple of (group_name, seed, group_id).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + 2 * LONG_SIZE:
+            return "", 0, 0
+
+        offset = RESPONSE_HEADER_SIZE
+        seed = struct.unpack_from("<q", frame.content, offset)[0]
+        offset += LONG_SIZE
+        group_id = struct.unpack_from("<q", frame.content, offset)[0]
+
+        name_frame = msg.next_frame()
+        group_name = ""
+        if name_frame and not name_frame.is_null_frame:
+            group_name = name_frame.content.decode("utf-8")
+
+        return group_name, seed, group_id
+
+    @staticmethod
+    def encode_destroy_cp_object_request(
+        group_id: str, service_name: str, object_name: str
+    ) -> "ClientMessage":
+        """Encode a CPGroup.destroyCPObject request.
+
+        Args:
+            group_id: The CP group identifier.
+            service_name: The service name of the CP object.
+            object_name: The name of the CP object.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_GROUP_DESTROY_CP_OBJECT)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, service_name)
+        StringCodec.encode(msg, object_name)
+        return msg
+
+    @staticmethod
+    def encode_get_cp_group_ids_request() -> "ClientMessage":
+        """Encode a CPGroup.getCPGroupIds request.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_GROUP_GET_CP_GROUP_IDS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_cp_group_ids_response(
+        msg: "ClientMessage",
+    ) -> List[Tuple[str, int, int]]:
+        """Decode a CPGroup.getCPGroupIds response.
+
+        Returns:
+            List of (group_name, seed, group_id) tuples.
+        """
+        msg.next_frame()
+        result = []
+
+        frame = msg.peek_next_frame()
+        if frame is None:
+            return result
+
+        msg.next_frame()
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            group_frame = msg.next_frame()
+            if group_frame is None:
+                break
+
+            content = group_frame.content
+            if len(content) < 2 * LONG_SIZE:
+                continue
+
+            offset = 0
+            seed = struct.unpack_from("<q", content, offset)[0]
+            offset += LONG_SIZE
+            group_id = struct.unpack_from("<q", content, offset)[0]
+
+            name_frame = msg.next_frame()
+            group_name = ""
+            if name_frame and not name_frame.is_null_frame:
+                group_name = name_frame.content.decode("utf-8")
+
+            result.append((group_name, seed, group_id))
+
+        return result
+
+    @staticmethod
+    def encode_get_cp_object_infos_request(group_id: str) -> "ClientMessage":
+        """Encode a CPGroup.getCPObjectInfos request.
+
+        Args:
+            group_id: The CP group identifier.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_GROUP_GET_CP_OBJECT_INFOS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        return msg
+
+    @staticmethod
+    def decode_get_cp_object_infos_response(
+        msg: "ClientMessage",
+    ) -> List[Tuple[str, str]]:
+        """Decode a CPGroup.getCPObjectInfos response.
+
+        Returns:
+            List of (service_name, object_name) tuples.
+        """
+        msg.next_frame()
+        result = []
+
+        frame = msg.peek_next_frame()
+        if frame is None:
+            return result
+
+        msg.next_frame()
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            service_frame = msg.next_frame()
+            object_frame = msg.next_frame()
+
+            if service_frame and object_frame:
+                service_name = service_frame.content.decode("utf-8") if not service_frame.is_null_frame else ""
+                object_name = object_frame.content.decode("utf-8") if not object_frame.is_null_frame else ""
+                result.append((service_name, object_name))
+
+        return result
 
 
 class CPSessionCodec:

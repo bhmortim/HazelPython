@@ -28,7 +28,7 @@ This document compares the Python client protocol implementation against the Jav
 | CP CountDownLatch | 5 | 5 | 0 | 100% |
 | CP Map | 6 | 6 | 0 | 100% |
 | CP Session | 5 | 5 | 0 | 100% |
-| CP Group | 4 | 0 | 4 | 0% |
+| CP Group | 4 | 4 | 0 | 100% |
 | SQL | 4 | 3 | 1 | 75% |
 | Jet | 15+ | 0 | 15+ | 0% |
 | Cache (JCache) | 20 | 20 | 0 | 100% |
@@ -163,14 +163,14 @@ Required for proper CP subsystem functionality.
 | 0x1F0400 | GenerateThreadId | ✅ Implemented | Generate thread ID |
 | 0x1F0500 | GetSessions | ✅ Implemented | Get active sessions |
 
-### CP Group Operations (0x1E00xx) - **MISSING**
+### CP Group Operations (0x1E00xx) - **IMPLEMENTED**
 
 | Message Type ID | Operation | Python Status | Notes |
 |-----------------|-----------|---------------|-------|
-| 0x1E0100 | CreateCPGroup | ❌ Missing | Create CP group |
-| 0x1E0200 | DestroyCPObject | ❌ Missing | Destroy CP object |
-| 0x1E0300 | GetCPGroupIds | ❌ Missing | Get CP group IDs |
-| 0x1E0400 | GetCPObjectInfos | ❌ Missing | Get CP object infos |
+| 0x1E0100 | CreateCPGroup | ✅ Implemented | Create CP group |
+| 0x1E0200 | DestroyCPObject | ✅ Implemented | Destroy CP object |
+| 0x1E0300 | GetCPGroupIds | ✅ Implemented | Get CP group IDs |
+| 0x1E0400 | GetCPObjectInfos | ✅ Implemented | Get CP object infos |
 
 ### Jet Operations (0x FE00xx) - **MISSING**
 
