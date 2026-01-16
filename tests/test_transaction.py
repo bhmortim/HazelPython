@@ -12,6 +12,8 @@ from hazelcast.transaction import (
     TransactionException,
     TransactionNotActiveException,
     TransactionTimedOutException,
+)
+from hazelcast.proxy.transactional import (
     TransactionalProxy,
     TransactionalMap,
     TransactionalSet,
