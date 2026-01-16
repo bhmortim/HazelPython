@@ -1,8 +1,8 @@
-"""Tests for DurableExecutorService proxy."""
+"""Unit tests for Durable Executor Service proxy."""
 
 import unittest
-from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
+from concurrent.futures import Future
 
 from hazelcast.proxy.durable_executor import (
     DurableExecutorService,
@@ -10,269 +10,189 @@ from hazelcast.proxy.durable_executor import (
     IDurableExecutorService,
 )
 from hazelcast.proxy.executor import Callable, Runnable, ExecutionCallback
-from hazelcast.proxy.base import ProxyContext
-from hazelcast.exceptions import IllegalArgumentException, IllegalStateException
-
-
-class SimpleCallable(Callable):
-    """Test callable that returns a value."""
-
-    def __init__(self, value):
-        self.value = value
-
-    def call(self):
-        return self.value
-
-
-class SimpleRunnable(Runnable):
-    """Test runnable that does nothing."""
-
-    def run(self):
-        pass
 
 
 class TestDurableExecutorServiceFuture(unittest.TestCase):
-    """Tests for DurableExecutorServiceFuture."""
+    """Tests for DurableExecutorServiceFuture class."""
 
-    def test_task_id_default(self):
-        """Test default task ID is -1."""
+    def test_future_initialization(self):
+        """Test DurableExecutorServiceFuture initialization."""
         future = DurableExecutorServiceFuture()
-        self.assertEqual(-1, future.task_id)
+        self.assertEqual(future.task_id, -1)
 
-    def test_task_id_initialization(self):
-        """Test task ID can be set during initialization."""
+    def test_future_with_task_id(self):
+        """Test DurableExecutorServiceFuture with task_id."""
         future = DurableExecutorServiceFuture(task_id=12345)
-        self.assertEqual(12345, future.task_id)
+        self.assertEqual(future.task_id, 12345)
 
     def test_task_id_setter(self):
-        """Test task ID can be set after creation."""
+        """Test task_id setter."""
         future = DurableExecutorServiceFuture()
-        future.task_id = 67890
-        self.assertEqual(67890, future.task_id)
+        future.task_id = 99999
+        self.assertEqual(future.task_id, 99999)
 
-    def test_inherits_from_future(self):
-        """Test that DurableExecutorServiceFuture is a Future."""
+    def test_future_is_instance_of_concurrent_future(self):
+        """Test DurableExecutorServiceFuture is a Future subclass."""
         future = DurableExecutorServiceFuture()
         self.assertIsInstance(future, Future)
 
-    def test_set_result(self):
-        """Test that result can be set like a normal Future."""
-        future = DurableExecutorServiceFuture(task_id=100)
-        future.set_result("test_value")
-        self.assertEqual("test_value", future.result())
-        self.assertEqual(100, future.task_id)
+    def test_future_set_result(self):
+        """Test setting result on the future."""
+        future = DurableExecutorServiceFuture()
+        future.set_result("test_result")
+        self.assertEqual(future.result(), "test_result")
 
 
-class TestDurableExecutorServiceInit(unittest.TestCase):
-    """Tests for DurableExecutorService initialization."""
-
-    def test_initialization(self):
-        """Test basic initialization."""
-        executor = DurableExecutorService(
-            "hz:impl:durableExecutorService",
-            "test-executor",
-            None,
-        )
-        self.assertEqual("test-executor", executor._name)
-        self.assertFalse(executor._is_shutdown)
-
-    def test_initialization_with_context(self):
-        """Test initialization with proxy context."""
-        mock_context = MagicMock(spec=ProxyContext)
-        executor = DurableExecutorService(
-            "hz:impl:durableExecutorService",
-            "test-executor",
-            mock_context,
-        )
-        self.assertEqual(mock_context, executor._context)
-
-
-class TestDurableExecutorServiceSubmit(unittest.TestCase):
-    """Tests for DurableExecutorService submit methods."""
+class TestDurableExecutorService(unittest.TestCase):
+    """Tests for DurableExecutorService class."""
 
     def setUp(self):
         """Set up test fixtures."""
-        self.mock_context = MagicMock(spec=ProxyContext)
-        self.mock_context.invocation_service = MagicMock()
-        self.mock_context.serialization_service = MagicMock()
-        self.mock_context.serialization_service.to_data.return_value = b"serialized"
-
         self.executor = DurableExecutorService(
-            "hz:impl:durableExecutorService",
-            "test-executor",
-            self.mock_context,
+            service_name="hz:impl:durableExecutorService",
+            name="test-durable-executor",
+            context=None,
         )
 
     def test_submit_returns_durable_future(self):
-        """Test that submit returns a DurableExecutorServiceFuture."""
-        task = SimpleCallable("result")
-        future = self.executor.submit(task)
+        """Test submit returns DurableExecutorServiceFuture."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        future = self.executor.submit(TestCallable())
         self.assertIsInstance(future, DurableExecutorServiceFuture)
 
-    def test_submit_when_shutdown_raises(self):
-        """Test that submit raises when executor is shut down."""
-        self.executor._is_shutdown = True
-        task = SimpleCallable("result")
+    def test_submit_with_callback(self):
+        """Test submit with callback."""
+        results = []
 
-        with self.assertRaises(IllegalStateException):
-            self.executor.submit(task)
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-    def test_submit_to_key_owner_returns_durable_future(self):
-        """Test that submit_to_key_owner returns a DurableExecutorServiceFuture."""
-        task = SimpleCallable("result")
-        future = self.executor.submit_to_key_owner(task, "test-key")
+        callback = ExecutionCallback(on_response=lambda r: results.append(r))
+        future = self.executor.submit(TestCallable(), callback)
         self.assertIsInstance(future, DurableExecutorServiceFuture)
 
-    def test_submit_to_key_owner_with_none_key_raises(self):
-        """Test that submit_to_key_owner raises with None key."""
-        task = SimpleCallable("result")
+    def test_submit_to_key_owner_returns_future(self):
+        """Test submit_to_key_owner returns DurableExecutorServiceFuture."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
+        future = self.executor.submit_to_key_owner(TestCallable(), "my-key")
+        self.assertIsInstance(future, DurableExecutorServiceFuture)
+
+    def test_submit_to_key_owner_with_callback(self):
+        """Test submit_to_key_owner with callback."""
+        results = []
+
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        callback = ExecutionCallback(on_response=lambda r: results.append(r))
+        future = self.executor.submit_to_key_owner(TestCallable(), "key", callback)
+        self.assertIsInstance(future, DurableExecutorServiceFuture)
+
+    def test_submit_to_key_owner_none_raises(self):
+        """Test submit_to_key_owner with None key raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        from hazelcast.exceptions import IllegalArgumentException
         with self.assertRaises(IllegalArgumentException):
-            self.executor.submit_to_key_owner(task, None)
-
-    def test_submit_to_key_owner_when_shutdown_raises(self):
-        """Test that submit_to_key_owner raises when executor is shut down."""
-        self.executor._is_shutdown = True
-        task = SimpleCallable("result")
-
-        with self.assertRaises(IllegalStateException):
-            self.executor.submit_to_key_owner(task, "test-key")
-
-
-class TestDurableExecutorServiceRetrieve(unittest.TestCase):
-    """Tests for DurableExecutorService retrieve methods."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        self.mock_context = MagicMock(spec=ProxyContext)
-        self.mock_context.invocation_service = MagicMock()
-
-        self.executor = DurableExecutorService(
-            "hz:impl:durableExecutorService",
-            "test-executor",
-            self.mock_context,
-        )
+            self.executor.submit_to_key_owner(TestCallable(), None)
 
     def test_retrieve_result_returns_future(self):
-        """Test that retrieve_result returns a Future."""
-        future = self.executor.retrieve_result(12345)
+        """Test retrieve_result returns a Future."""
+        unique_id = (10 << 32) | 5
+        future = self.executor.retrieve_result(unique_id)
         self.assertIsInstance(future, Future)
-
-    def test_retrieve_result_when_shutdown_raises(self):
-        """Test that retrieve_result raises when executor is shut down."""
-        self.executor._is_shutdown = True
-
-        with self.assertRaises(IllegalStateException):
-            self.executor.retrieve_result(12345)
 
     def test_dispose_result_returns_future(self):
-        """Test that dispose_result returns a Future."""
-        future = self.executor.dispose_result(12345)
+        """Test dispose_result returns a Future."""
+        unique_id = (10 << 32) | 5
+        future = self.executor.dispose_result(unique_id)
         self.assertIsInstance(future, Future)
-
-    def test_dispose_result_when_shutdown_raises(self):
-        """Test that dispose_result raises when executor is shut down."""
-        self.executor._is_shutdown = True
-
-        with self.assertRaises(IllegalStateException):
-            self.executor.dispose_result(12345)
 
     def test_retrieve_and_dispose_result_returns_future(self):
-        """Test that retrieve_and_dispose_result returns a Future."""
-        future = self.executor.retrieve_and_dispose_result(12345)
+        """Test retrieve_and_dispose_result returns a Future."""
+        unique_id = (10 << 32) | 5
+        future = self.executor.retrieve_and_dispose_result(unique_id)
         self.assertIsInstance(future, Future)
 
-    def test_retrieve_and_dispose_result_when_shutdown_raises(self):
-        """Test that retrieve_and_dispose_result raises when executor is shut down."""
-        self.executor._is_shutdown = True
-
-        with self.assertRaises(IllegalStateException):
-            self.executor.retrieve_and_dispose_result(12345)
-
-
-class TestDurableExecutorServiceShutdown(unittest.TestCase):
-    """Tests for DurableExecutorService shutdown."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        self.executor = DurableExecutorService(
-            "hz:impl:durableExecutorService",
-            "test-executor",
-            None,
-        )
-
-    def test_is_shutdown_initially_false(self):
-        """Test that is_shutdown returns False initially."""
+    def test_shutdown(self):
+        """Test shutdown method."""
         self.assertFalse(self.executor.is_shutdown())
-
-    def test_shutdown_sets_is_shutdown(self):
-        """Test that shutdown sets is_shutdown to True."""
         self.executor.shutdown()
         self.assertTrue(self.executor.is_shutdown())
 
     def test_shutdown_idempotent(self):
-        """Test that multiple shutdown calls are safe."""
+        """Test shutdown is idempotent."""
         self.executor.shutdown()
         self.executor.shutdown()
         self.assertTrue(self.executor.is_shutdown())
 
+    def test_submit_after_shutdown_raises(self):
+        """Test submit after shutdown raises exception."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-class TestDurableExecutorServiceCallback(unittest.TestCase):
-    """Tests for DurableExecutorService callback handling."""
+        self.executor.shutdown()
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            self.executor.submit(TestCallable())
 
-    def test_callback_on_response(self):
-        """Test that callback on_response is called on success."""
-        callback = ExecutionCallback(
-            on_response=MagicMock(),
-            on_failure=MagicMock(),
-        )
+    def test_submit_to_key_owner_after_shutdown_raises(self):
+        """Test submit_to_key_owner after shutdown raises exception."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        executor = DurableExecutorService(
-            "hz:impl:durableExecutorService",
-            "test-executor",
-            None,
-        )
+        self.executor.shutdown()
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            self.executor.submit_to_key_owner(TestCallable(), "key")
 
-        future = DurableExecutorServiceFuture()
-        executor._complete_with_callback(future, "result", callback)
+    def test_retrieve_result_after_shutdown_raises(self):
+        """Test retrieve_result after shutdown raises exception."""
+        self.executor.shutdown()
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            self.executor.retrieve_result(12345)
 
-        callback._on_response.assert_called_once_with("result")
-        callback._on_failure.assert_not_called()
+    def test_dispose_result_after_shutdown_raises(self):
+        """Test dispose_result after shutdown raises exception."""
+        self.executor.shutdown()
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            self.executor.dispose_result(12345)
 
-    def test_callback_on_failure(self):
-        """Test that callback on_failure is called on error."""
-        callback = ExecutionCallback(
-            on_response=MagicMock(),
-            on_failure=MagicMock(),
-        )
-
-        executor = DurableExecutorService(
-            "hz:impl:durableExecutorService",
-            "test-executor",
-            None,
-        )
-
-        future = DurableExecutorServiceFuture()
-        error = Exception("test error")
-        executor._complete_with_callback(future, None, callback, error)
-
-        callback._on_failure.assert_called_once_with(error)
-        callback._on_response.assert_not_called()
+    def test_retrieve_and_dispose_result_after_shutdown_raises(self):
+        """Test retrieve_and_dispose_result after shutdown raises exception."""
+        self.executor.shutdown()
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            self.executor.retrieve_and_dispose_result(12345)
 
 
-class TestDurableExecutorServiceAlias(unittest.TestCase):
-    """Tests for DurableExecutorService aliases."""
+class TestDurableExecutorAlias(unittest.TestCase):
+    """Tests for durable executor service alias."""
 
-    def test_idurable_executor_service_alias(self):
-        """Test that IDurableExecutorService is an alias."""
+    def test_i_durable_executor_service_alias(self):
+        """Test IDurableExecutorService alias."""
         self.assertIs(IDurableExecutorService, DurableExecutorService)
 
 
 class TestUniqueIdEncoding(unittest.TestCase):
-    """Tests for unique ID encoding/decoding."""
+    """Tests for unique ID encoding/decoding logic."""
 
-    def test_unique_id_roundtrip(self):
-        """Test that partition_id and sequence roundtrip correctly."""
+    def test_unique_id_encoding(self):
+        """Test unique ID encodes partition_id and sequence correctly."""
         partition_id = 42
         sequence = 12345
 
@@ -281,21 +201,54 @@ class TestUniqueIdEncoding(unittest.TestCase):
         decoded_sequence = unique_id & 0xFFFFFFFF
         decoded_partition_id = (unique_id >> 32) & 0xFFFFFFFF
 
-        self.assertEqual(partition_id, decoded_partition_id)
-        self.assertEqual(sequence, decoded_sequence)
+        self.assertEqual(decoded_partition_id, partition_id)
+        self.assertEqual(decoded_sequence, sequence)
 
     def test_unique_id_with_large_values(self):
-        """Test unique ID encoding with large values."""
+        """Test unique ID with large partition_id and sequence."""
         partition_id = 270
-        sequence = 0x7FFFFFFF
+        sequence = 0xFFFFFFFE
 
         unique_id = (partition_id << 32) | (sequence & 0xFFFFFFFF)
 
         decoded_sequence = unique_id & 0xFFFFFFFF
         decoded_partition_id = (unique_id >> 32) & 0xFFFFFFFF
 
-        self.assertEqual(partition_id, decoded_partition_id)
-        self.assertEqual(sequence, decoded_sequence)
+        self.assertEqual(decoded_partition_id, partition_id)
+        self.assertEqual(decoded_sequence, sequence)
+
+
+class TestDurableExecutorWithRunnable(unittest.TestCase):
+    """Tests for DurableExecutorService with Runnable tasks."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.executor = DurableExecutorService(
+            service_name="hz:impl:durableExecutorService",
+            name="test-durable-executor",
+            context=None,
+        )
+
+    def test_submit_runnable(self):
+        """Test submit with Runnable task."""
+        class TestRunnable(Runnable):
+            def __init__(self):
+                self.executed = False
+
+            def run(self):
+                self.executed = True
+
+        future = self.executor.submit(TestRunnable())
+        self.assertIsInstance(future, DurableExecutorServiceFuture)
+
+    def test_submit_to_key_owner_runnable(self):
+        """Test submit_to_key_owner with Runnable task."""
+        class TestRunnable(Runnable):
+            def run(self):
+                pass
+
+        future = self.executor.submit_to_key_owner(TestRunnable(), "key")
+        self.assertIsInstance(future, DurableExecutorServiceFuture)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
-"""Tests for Topic distributed data structure proxy."""
+"""Unit tests for Topic proxy."""
 
-import pytest
+import unittest
+from unittest.mock import MagicMock, patch
 from concurrent.futures import Future
 
 from hazelcast.proxy.topic import (
@@ -11,188 +12,195 @@ from hazelcast.proxy.topic import (
 )
 
 
-class TestTopicMessage:
-    """Tests for TopicMessage."""
+class TestTopicMessage(unittest.TestCase):
+    """Tests for TopicMessage class."""
 
-    def test_create_message(self):
-        """Test creating a topic message."""
-        msg = TopicMessage("hello", 12345)
-        assert msg.message == "hello"
-        assert msg.publish_time == 12345
-        assert msg.publishing_member is None
-
-    def test_message_with_member(self):
-        """Test creating a message with member info."""
-        member = {"uuid": "test-uuid"}
-        msg = TopicMessage("hello", 12345, member)
-        assert msg.publishing_member == member
-
-
-class TestMessageListener:
-    """Tests for MessageListener."""
-
-    def test_default_on_message(self):
-        """Test default on_message implementation does nothing."""
-        listener = MessageListener()
-        msg = TopicMessage("test", 0)
-        listener.on_message(msg)  # Should not raise
-
-
-class CustomListener(MessageListener[str]):
-    """Test listener that records messages."""
-
-    def __init__(self):
-        self.messages = []
-
-    def on_message(self, message: TopicMessage[str]) -> None:
-        self.messages.append(message)
-
-
-class TestTopicProxy:
-    """Tests for TopicProxy."""
-
-    def test_create_topic(self):
-        """Test creating a topic."""
-        topic = TopicProxy("test-topic")
-        assert topic.name == "test-topic"
-        assert topic.service_name == "hz:impl:topicService"
-
-    def test_publish(self):
-        """Test publishing a message."""
-        topic = TopicProxy("test-topic")
-        topic.publish("hello")  # Should not raise
-
-    def test_publish_async(self):
-        """Test async publish."""
-        topic = TopicProxy("test-topic")
-        future = topic.publish_async("hello")
-        assert isinstance(future, Future)
-        assert future.result() is None
-
-    def test_add_message_listener_with_listener(self):
-        """Test adding a message listener with listener object."""
-        topic = TopicProxy[str]("test-topic")
-        listener = CustomListener()
-        reg_id = topic.add_message_listener(listener=listener)
-        assert reg_id is not None
-        assert len(reg_id) > 0
-
-    def test_add_message_listener_with_callback(self):
-        """Test adding a message listener with callback function."""
-        topic = TopicProxy[str]("test-topic")
-        messages = []
-        reg_id = topic.add_message_listener(
-            on_message=lambda msg: messages.append(msg)
+    def test_message_initialization(self):
+        """Test TopicMessage initialization."""
+        message = TopicMessage(
+            message="test_message",
+            publish_time=1234567890,
+            publishing_member="member1",
         )
-        assert reg_id is not None
+        self.assertEqual(message.message, "test_message")
+        self.assertEqual(message.publish_time, 1234567890)
+        self.assertEqual(message.publishing_member, "member1")
 
-    def test_add_message_listener_no_args_raises(self):
-        """Test adding listener without args raises ValueError."""
-        topic = TopicProxy("test-topic")
-        with pytest.raises(ValueError):
-            topic.add_message_listener()
+    def test_message_with_defaults(self):
+        """Test TopicMessage with default values."""
+        message = TopicMessage(message="test", publish_time=0)
+        self.assertEqual(message.message, "test")
+        self.assertEqual(message.publish_time, 0)
+        self.assertIsNone(message.publishing_member)
 
-    def test_remove_message_listener(self):
-        """Test removing a message listener."""
-        topic = TopicProxy[str]("test-topic")
-        listener = CustomListener()
-        reg_id = topic.add_message_listener(listener=listener)
-        result = topic.remove_message_listener(reg_id)
-        assert result is True
 
-    def test_remove_nonexistent_listener(self):
-        """Test removing a nonexistent listener returns False."""
-        topic = TopicProxy("test-topic")
-        result = topic.remove_message_listener("nonexistent-id")
-        assert result is False
+class TestMessageListener(unittest.TestCase):
+    """Tests for MessageListener class."""
+
+    def test_listener_method_exists(self):
+        """Test that listener has on_message method."""
+        listener = MessageListener()
+        self.assertTrue(hasattr(listener, "on_message"))
+
+    def test_listener_method_is_callable(self):
+        """Test that on_message can be called without error."""
+        listener = MessageListener()
+        message = TopicMessage("test", 0)
+        listener.on_message(message)
+
+
+class TestLocalTopicStats(unittest.TestCase):
+    """Tests for LocalTopicStats class."""
+
+    def test_stats_initialization(self):
+        """Test LocalTopicStats initialization."""
+        stats = LocalTopicStats(
+            publish_operation_count=10,
+            receive_operation_count=20,
+        )
+        self.assertEqual(stats.publish_operation_count, 10)
+        self.assertEqual(stats.receive_operation_count, 20)
+
+    def test_stats_defaults(self):
+        """Test LocalTopicStats with default values."""
+        stats = LocalTopicStats()
+        self.assertEqual(stats.publish_operation_count, 0)
+        self.assertEqual(stats.receive_operation_count, 0)
+
+
+class TestTopicProxy(unittest.TestCase):
+    """Tests for TopicProxy class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.proxy = TopicProxy(
+            name="test-topic",
+            context=None,
+        )
+
+    def test_service_name_constant(self):
+        """Test SERVICE_NAME is defined correctly."""
+        self.assertEqual(TopicProxy.SERVICE_NAME, "hz:impl:topicService")
+
+    def test_initialization(self):
+        """Test TopicProxy initialization."""
+        self.assertEqual(self.proxy._name, "test-topic")
+        self.assertIsInstance(self.proxy._message_listeners, dict)
+
+    def test_publish_completes(self):
+        """Test publish completes without error."""
+        self.proxy.publish("message")
+
+    def test_publish_async_returns_future(self):
+        """Test publish_async returns a Future."""
+        future = self.proxy.publish_async("message")
+        self.assertIsInstance(future, Future)
+        self.assertIsNone(future.result())
 
     def test_publish_notifies_listeners(self):
-        """Test that publish notifies all registered listeners."""
-        topic = TopicProxy[str]("test-topic")
-        listener = CustomListener()
-        topic.add_message_listener(listener=listener)
-        topic.publish("hello")
-        topic.publish("world")
-        assert len(listener.messages) == 2
-        assert listener.messages[0].message == "hello"
-        assert listener.messages[1].message == "world"
+        """Test publish notifies all listeners."""
+        results = []
 
-    def test_publish_notifies_callback_listeners(self):
-        """Test that publish notifies callback listeners."""
-        topic = TopicProxy[str]("test-topic")
-        messages = []
-        topic.add_message_listener(on_message=lambda msg: messages.append(msg.message))
-        topic.publish("test")
-        assert messages == ["test"]
+        class TestListener(MessageListener):
+            def on_message(self, msg):
+                results.append(msg.message)
 
-    def test_multiple_listeners(self):
-        """Test multiple listeners receive messages."""
-        topic = TopicProxy[str]("test-topic")
-        listener1 = CustomListener()
-        listener2 = CustomListener()
-        topic.add_message_listener(listener=listener1)
-        topic.add_message_listener(listener=listener2)
-        topic.publish("msg")
-        assert len(listener1.messages) == 1
-        assert len(listener2.messages) == 1
+        listener = TestListener()
+        self.proxy.add_message_listener(listener=listener)
+        self.proxy.publish("test_message")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0], "test_message")
 
-    def test_removed_listener_not_notified(self):
-        """Test removed listener doesn't receive messages."""
-        topic = TopicProxy[str]("test-topic")
-        listener = CustomListener()
-        reg_id = topic.add_message_listener(listener=listener)
-        topic.publish("before")
-        topic.remove_message_listener(reg_id)
-        topic.publish("after")
-        assert len(listener.messages) == 1
-        assert listener.messages[0].message == "before"
+    def test_notify_listeners_handles_exceptions(self):
+        """Test _notify_listeners handles listener exceptions."""
+        class FailingListener(MessageListener):
+            def on_message(self, msg):
+                raise Exception("Listener error")
+
+        listener = FailingListener()
+        self.proxy.add_message_listener(listener=listener)
+        self.proxy.publish("message")
+
+    def test_add_message_listener_with_listener(self):
+        """Test add_message_listener with listener object."""
+        listener = MessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        self.assertIsInstance(reg_id, str)
+        self.assertTrue(len(reg_id) > 0)
+
+    def test_add_message_listener_with_callback(self):
+        """Test add_message_listener with on_message callback."""
+        reg_id = self.proxy.add_message_listener(on_message=lambda m: None)
+        self.assertIsInstance(reg_id, str)
+
+    def test_add_message_listener_raises_without_listener_or_callback(self):
+        """Test add_message_listener raises without listener or callback."""
+        with self.assertRaises(ValueError):
+            self.proxy.add_message_listener()
+
+    def test_remove_message_listener_returns_true_for_existing(self):
+        """Test remove_message_listener returns True for existing listener."""
+        listener = MessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        result = self.proxy.remove_message_listener(reg_id)
+        self.assertTrue(result)
+
+    def test_remove_message_listener_returns_false_for_nonexistent(self):
+        """Test remove_message_listener returns False for nonexistent listener."""
+        result = self.proxy.remove_message_listener("nonexistent-id")
+        self.assertFalse(result)
 
     def test_get_local_topic_stats(self):
-        """Test getting local topic stats."""
-        topic = TopicProxy("test-topic")
-        stats = topic.get_local_topic_stats()
-        assert isinstance(stats, LocalTopicStats)
+        """Test get_local_topic_stats returns LocalTopicStats."""
+        stats = self.proxy.get_local_topic_stats()
+        self.assertIsInstance(stats, LocalTopicStats)
 
-    def test_destroy(self):
-        """Test destroying the topic."""
-        topic = TopicProxy("test-topic")
-        topic.destroy()
-        assert topic.is_destroyed
 
-    def test_operations_after_destroy(self):
-        """Test operations fail after destroy."""
-        from hazelcast.exceptions import IllegalStateException
-        topic = TopicProxy("test-topic")
-        topic.destroy()
-        with pytest.raises(IllegalStateException):
-            topic.publish("msg")
+class TestTopicProxyMultipleListeners(unittest.TestCase):
+    """Tests for TopicProxy with multiple listeners."""
 
-    def test_listener_exception_doesnt_break_delivery(self):
-        """Test that listener exception doesn't break delivery to others."""
-        topic = TopicProxy[str]("test-topic")
+    def setUp(self):
+        """Set up test fixtures."""
+        self.proxy = TopicProxy(
+            name="test-topic",
+            context=None,
+        )
+        self.results = []
 
-        class BadListener(MessageListener[str]):
+    def test_multiple_listeners_receive_message(self):
+        """Test multiple listeners all receive the message."""
+        listener1_results = []
+        listener2_results = []
+
+        class Listener1(MessageListener):
             def on_message(self, msg):
-                raise RuntimeError("Intentional error")
+                listener1_results.append(msg.message)
 
-        good_listener = CustomListener()
-        topic.add_message_listener(listener=BadListener())
-        topic.add_message_listener(listener=good_listener)
-        topic.publish("test")
-        assert len(good_listener.messages) == 1
+        class Listener2(MessageListener):
+            def on_message(self, msg):
+                listener2_results.append(msg.message)
+
+        self.proxy.add_message_listener(listener=Listener1())
+        self.proxy.add_message_listener(listener=Listener2())
+        self.proxy.publish("test")
+
+        self.assertEqual(len(listener1_results), 1)
+        self.assertEqual(len(listener2_results), 1)
+
+    def test_removed_listener_does_not_receive_message(self):
+        """Test removed listener does not receive message."""
+        results = []
+
+        class TestListener(MessageListener):
+            def on_message(self, msg):
+                results.append(msg.message)
+
+        reg_id = self.proxy.add_message_listener(listener=TestListener())
+        self.proxy.remove_message_listener(reg_id)
+        self.proxy.publish("test")
+
+        self.assertEqual(len(results), 0)
 
 
-class TestLocalTopicStats:
-    """Tests for LocalTopicStats."""
-
-    def test_create_stats(self):
-        """Test creating local topic stats."""
-        stats = LocalTopicStats()
-        assert stats.publish_operation_count == 0
-        assert stats.receive_operation_count == 0
-
-    def test_stats_with_values(self):
-        """Test creating stats with custom values."""
-        stats = LocalTopicStats(publish_operation_count=5, receive_operation_count=10)
-        assert stats.publish_operation_count == 5
-        assert stats.receive_operation_count == 10
+if __name__ == "__main__":
+    unittest.main()

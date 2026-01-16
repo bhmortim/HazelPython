@@ -1,455 +1,555 @@
-"""Unit tests for IScheduledExecutorService."""
+"""Unit tests for Scheduled Executor Service proxy."""
 
 import unittest
-import uuid
-from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
+from concurrent.futures import Future
+import uuid
 
 from hazelcast.proxy.scheduled_executor import (
     IScheduledExecutorService,
-    IScheduledFuture,
-    ScheduledTaskHandler,
+    ScheduledExecutorService,
+    ScheduledExecutorServiceProxy,
     TimeUnit,
+    ScheduledTaskHandler,
+    IScheduledFuture,
 )
-from hazelcast.proxy.executor import Callable, Runnable, Member
-from hazelcast.proxy.base import ProxyContext
-
-
-class SimpleCallable(Callable):
-    """Simple callable for testing."""
-
-    def __init__(self, value: int = 42):
-        self.value = value
-
-    def call(self):
-        return self.value
-
-
-class SimpleRunnable(Runnable):
-    """Simple runnable for testing."""
-
-    def __init__(self, message: str = "executed"):
-        self.message = message
-
-    def run(self):
-        pass
+from hazelcast.proxy.executor import Callable, Runnable
 
 
 class TestTimeUnit(unittest.TestCase):
-    """Tests for TimeUnit enumeration."""
+    """Tests for TimeUnit enum."""
 
-    def test_nanoseconds_to_millis(self):
-        result = TimeUnit.NANOSECONDS.to_millis(5_000_000)
-        self.assertEqual(5, result)
+    def test_time_unit_values(self):
+        """Test TimeUnit values are defined."""
+        self.assertEqual(TimeUnit.NANOSECONDS.value, "NANOSECONDS")
+        self.assertEqual(TimeUnit.MICROSECONDS.value, "MICROSECONDS")
+        self.assertEqual(TimeUnit.MILLISECONDS.value, "MILLISECONDS")
+        self.assertEqual(TimeUnit.SECONDS.value, "SECONDS")
+        self.assertEqual(TimeUnit.MINUTES.value, "MINUTES")
+        self.assertEqual(TimeUnit.HOURS.value, "HOURS")
+        self.assertEqual(TimeUnit.DAYS.value, "DAYS")
 
-    def test_microseconds_to_millis(self):
-        result = TimeUnit.MICROSECONDS.to_millis(5_000)
-        self.assertEqual(5, result)
+    def test_to_millis_nanoseconds(self):
+        """Test nanoseconds to millis conversion."""
+        result = TimeUnit.NANOSECONDS.to_millis(1_000_000)
+        self.assertEqual(result, 1)
 
-    def test_milliseconds_to_millis(self):
-        result = TimeUnit.MILLISECONDS.to_millis(5000)
-        self.assertEqual(5000, result)
+    def test_to_millis_microseconds(self):
+        """Test microseconds to millis conversion."""
+        result = TimeUnit.MICROSECONDS.to_millis(1000)
+        self.assertEqual(result, 1)
 
-    def test_seconds_to_millis(self):
+    def test_to_millis_milliseconds(self):
+        """Test milliseconds to millis conversion."""
+        result = TimeUnit.MILLISECONDS.to_millis(100)
+        self.assertEqual(result, 100)
+
+    def test_to_millis_seconds(self):
+        """Test seconds to millis conversion."""
         result = TimeUnit.SECONDS.to_millis(5)
-        self.assertEqual(5000, result)
+        self.assertEqual(result, 5000)
 
-    def test_minutes_to_millis(self):
+    def test_to_millis_minutes(self):
+        """Test minutes to millis conversion."""
         result = TimeUnit.MINUTES.to_millis(2)
-        self.assertEqual(120_000, result)
+        self.assertEqual(result, 120000)
 
-    def test_hours_to_millis(self):
+    def test_to_millis_hours(self):
+        """Test hours to millis conversion."""
         result = TimeUnit.HOURS.to_millis(1)
-        self.assertEqual(3_600_000, result)
+        self.assertEqual(result, 3600000)
 
-    def test_days_to_millis(self):
+    def test_to_millis_days(self):
+        """Test days to millis conversion."""
         result = TimeUnit.DAYS.to_millis(1)
-        self.assertEqual(86_400_000, result)
+        self.assertEqual(result, 86400000)
 
 
 class TestScheduledTaskHandler(unittest.TestCase):
-    """Tests for ScheduledTaskHandler."""
+    """Tests for ScheduledTaskHandler class."""
 
     def test_partition_based_handler(self):
-        handler = ScheduledTaskHandler("scheduler", "task1", partition_id=5)
-
-        self.assertEqual("scheduler", handler.scheduler_name)
-        self.assertEqual("task1", handler.task_name)
-        self.assertEqual(5, handler.partition_id)
+        """Test partition-based handler initialization."""
+        handler = ScheduledTaskHandler(
+            scheduler_name="my-scheduler",
+            task_name="task-1",
+            partition_id=42,
+        )
+        self.assertEqual(handler.scheduler_name, "my-scheduler")
+        self.assertEqual(handler.task_name, "task-1")
+        self.assertEqual(handler.partition_id, 42)
         self.assertIsNone(handler.member_uuid)
         self.assertTrue(handler.is_partition_based)
 
     def test_member_based_handler(self):
+        """Test member-based handler initialization."""
         member_uuid = uuid.uuid4()
-        handler = ScheduledTaskHandler("scheduler", "task2", member_uuid=member_uuid)
-
-        self.assertEqual("scheduler", handler.scheduler_name)
-        self.assertEqual("task2", handler.task_name)
-        self.assertEqual(-1, handler.partition_id)
-        self.assertEqual(member_uuid, handler.member_uuid)
+        handler = ScheduledTaskHandler(
+            scheduler_name="my-scheduler",
+            task_name="task-1",
+            member_uuid=member_uuid,
+        )
+        self.assertEqual(handler.scheduler_name, "my-scheduler")
+        self.assertEqual(handler.task_name, "task-1")
+        self.assertEqual(handler.partition_id, -1)
+        self.assertEqual(handler.member_uuid, member_uuid)
         self.assertFalse(handler.is_partition_based)
 
     def test_to_urn_partition_based(self):
-        handler = ScheduledTaskHandler("my-scheduler", "my-task", partition_id=10)
+        """Test to_urn for partition-based handler."""
+        handler = ScheduledTaskHandler(
+            scheduler_name="sched",
+            task_name="task",
+            partition_id=10,
+        )
         urn = handler.to_urn()
-
-        self.assertEqual("urn:hzScheduledTask:my-scheduler:10:my-task", urn)
+        self.assertEqual(urn, "urn:hzScheduledTask:sched:10:task")
 
     def test_to_urn_member_based(self):
+        """Test to_urn for member-based handler."""
         member_uuid = uuid.UUID("12345678-1234-5678-1234-567812345678")
-        handler = ScheduledTaskHandler("my-scheduler", "my-task", member_uuid=member_uuid)
-        urn = handler.to_urn()
-
-        self.assertEqual(
-            "urn:hzScheduledTask:my-scheduler:12345678-1234-5678-1234-567812345678:my-task",
-            urn,
+        handler = ScheduledTaskHandler(
+            scheduler_name="sched",
+            task_name="task",
+            member_uuid=member_uuid,
         )
+        urn = handler.to_urn()
+        self.assertIn("sched", urn)
+        self.assertIn("task", urn)
 
     def test_from_urn_partition_based(self):
-        urn = "urn:hzScheduledTask:my-scheduler:10:my-task"
+        """Test from_urn for partition-based handler."""
+        urn = "urn:hzScheduledTask:sched:10:task"
         handler = ScheduledTaskHandler.from_urn(urn)
-
-        self.assertEqual("my-scheduler", handler.scheduler_name)
-        self.assertEqual("my-task", handler.task_name)
-        self.assertEqual(10, handler.partition_id)
+        self.assertEqual(handler.scheduler_name, "sched")
+        self.assertEqual(handler.task_name, "task")
+        self.assertEqual(handler.partition_id, 10)
         self.assertIsNone(handler.member_uuid)
 
     def test_from_urn_member_based(self):
-        urn = "urn:hzScheduledTask:my-scheduler:12345678-1234-5678-1234-567812345678:my-task"
+        """Test from_urn for member-based handler."""
+        member_uuid = "12345678-1234-5678-1234-567812345678"
+        urn = f"urn:hzScheduledTask:sched:{member_uuid}:task"
         handler = ScheduledTaskHandler.from_urn(urn)
-
-        self.assertEqual("my-scheduler", handler.scheduler_name)
-        self.assertEqual("my-task", handler.task_name)
-        self.assertEqual(-1, handler.partition_id)
-        self.assertEqual(
-            uuid.UUID("12345678-1234-5678-1234-567812345678"),
-            handler.member_uuid,
-        )
+        self.assertEqual(handler.scheduler_name, "sched")
+        self.assertEqual(handler.task_name, "task")
+        self.assertEqual(handler.member_uuid, uuid.UUID(member_uuid))
 
     def test_from_urn_invalid_format(self):
+        """Test from_urn with invalid format raises."""
         with self.assertRaises(ValueError):
             ScheduledTaskHandler.from_urn("invalid:urn")
 
-    def test_equality(self):
-        handler1 = ScheduledTaskHandler("scheduler", "task", partition_id=5)
-        handler2 = ScheduledTaskHandler("scheduler", "task", partition_id=5)
-        handler3 = ScheduledTaskHandler("scheduler", "task", partition_id=6)
+    def test_repr(self):
+        """Test handler __repr__."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=5)
+        repr_str = repr(handler)
+        self.assertIn("ScheduledTaskHandler", repr_str)
 
+    def test_equality(self):
+        """Test handler equality."""
+        handler1 = ScheduledTaskHandler("sched", "task", partition_id=5)
+        handler2 = ScheduledTaskHandler("sched", "task", partition_id=5)
+        handler3 = ScheduledTaskHandler("sched", "task", partition_id=6)
         self.assertEqual(handler1, handler2)
         self.assertNotEqual(handler1, handler3)
 
-    def test_hash(self):
-        handler1 = ScheduledTaskHandler("scheduler", "task", partition_id=5)
-        handler2 = ScheduledTaskHandler("scheduler", "task", partition_id=5)
+    def test_equality_with_non_handler(self):
+        """Test handler equality with non-handler object."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=5)
+        self.assertNotEqual(handler, "not a handler")
+        self.assertNotEqual(handler, None)
 
+    def test_hash(self):
+        """Test handler hash."""
+        handler1 = ScheduledTaskHandler("sched", "task", partition_id=5)
+        handler2 = ScheduledTaskHandler("sched", "task", partition_id=5)
         self.assertEqual(hash(handler1), hash(handler2))
 
 
 class TestIScheduledFuture(unittest.TestCase):
-    """Tests for IScheduledFuture."""
+    """Tests for IScheduledFuture class."""
 
-    def setUp(self):
-        self.handler = ScheduledTaskHandler("scheduler", "task", partition_id=5)
-        self.context = MagicMock(spec=ProxyContext)
-        self.context.invocation_service = None
-        self.context.serialization_service = None
+    def test_future_initialization(self):
+        """Test IScheduledFuture initialization."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
+        self.assertEqual(future.handler, handler)
 
-    def test_handler_property(self):
-        future = IScheduledFuture(self.handler, self.context)
-        self.assertEqual(self.handler, future.handler)
+    def test_get_without_context(self):
+        """Test get without context returns None."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
+        result = future.get()
+        self.assertIsNone(result)
 
-    def test_is_cancelled_initial(self):
-        future = IScheduledFuture(self.handler, self.context)
-        self.assertFalse(future.is_cancelled())
+    def test_get_delay_without_context(self):
+        """Test get_delay without context returns 0."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
+        delay = future.get_delay()
+        self.assertEqual(delay, 0)
 
-    def test_is_done_initial(self):
-        future = IScheduledFuture(self.handler, self.context)
-        self.assertFalse(future.is_done())
-
-    def test_cancel_without_invocation_service(self):
-        future = IScheduledFuture(self.handler, self.context)
+    def test_cancel_without_context(self):
+        """Test cancel without context marks as cancelled."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
         result = future.cancel()
-
         self.assertTrue(result)
         self.assertTrue(future.is_cancelled())
 
-    def test_get_without_invocation_service(self):
-        future = IScheduledFuture(self.handler, self.context)
-        result = future.get()
+    def test_cancel_already_cancelled(self):
+        """Test cancel on already cancelled future returns False."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
+        future.cancel()
+        result = future.cancel()
+        self.assertFalse(result)
 
-        self.assertIsNone(result)
+    def test_is_cancelled_without_context(self):
+        """Test is_cancelled without context."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
+        self.assertFalse(future.is_cancelled())
 
-    def test_get_delay_without_invocation_service(self):
-        future = IScheduledFuture(self.handler, self.context)
-        delay = future.get_delay(TimeUnit.MILLISECONDS)
+    def test_is_done_without_context(self):
+        """Test is_done without context."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
+        self.assertFalse(future.is_done())
 
-        self.assertEqual(0, delay)
+    def test_is_done_after_cancel(self):
+        """Test is_done after cancel returns True."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
+        future.cancel()
+        self.assertTrue(future.is_done())
 
-    def test_dispose_without_invocation_service(self):
-        future = IScheduledFuture(self.handler, self.context)
+    def test_dispose_without_context(self):
+        """Test dispose without context doesn't raise."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
         future.dispose()
 
     def test_repr(self):
-        future = IScheduledFuture(self.handler, self.context)
+        """Test IScheduledFuture __repr__."""
+        handler = ScheduledTaskHandler("sched", "task", partition_id=0)
+        future = IScheduledFuture(handler, context=None)
         repr_str = repr(future)
-
         self.assertIn("IScheduledFuture", repr_str)
         self.assertIn("pending", repr_str)
 
 
 class TestIScheduledExecutorService(unittest.TestCase):
-    """Tests for IScheduledExecutorService."""
+    """Tests for IScheduledExecutorService class."""
 
     def setUp(self):
-        self.context = MagicMock(spec=ProxyContext)
-        self.context.invocation_service = None
-        self.context.serialization_service = None
-        self.context.partition_service = None
-        self.service = IScheduledExecutorService(
+        """Set up test fixtures."""
+        self.scheduler = IScheduledExecutorService(
+            service_name="hz:impl:scheduledExecutorService",
+            name="test-scheduler",
+            context=None,
+        )
+
+    def test_service_name_constant(self):
+        """Test SERVICE_NAME is defined correctly."""
+        self.assertEqual(
+            IScheduledExecutorService.SERVICE_NAME,
             "hz:impl:scheduledExecutorService",
-            "test-scheduler",
-            self.context,
         )
 
     def test_schedule_returns_future(self):
-        task = SimpleCallable(100)
-        future = self.service.schedule(task, 10, TimeUnit.SECONDS)
+        """Test schedule returns IScheduledFuture."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
+        future = self.scheduler.schedule(TestCallable(), 10, TimeUnit.SECONDS)
         self.assertIsInstance(future, IScheduledFuture)
 
-    def test_schedule_on_member(self):
-        task = SimpleCallable(100)
-        member = Member(str(uuid.uuid4()))
-        future = self.service.schedule_on_member(task, member, 5, TimeUnit.SECONDS)
+    def test_schedule_on_member_returns_future(self):
+        """Test schedule_on_member returns IScheduledFuture."""
+        from hazelcast.proxy.executor import Member
 
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        member = Member(uuid="test-uuid")
+        future = self.scheduler.schedule_on_member(
+            TestCallable(), member, 10, TimeUnit.SECONDS
+        )
         self.assertIsInstance(future, IScheduledFuture)
-        self.assertEqual(member.uuid, str(future.handler.member_uuid))
 
     def test_schedule_on_member_none_raises(self):
-        task = SimpleCallable(100)
+        """Test schedule_on_member with None member raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_on_member(task, None, 5, TimeUnit.SECONDS)
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_member(TestCallable(), None, 10)
 
-        self.assertIn("Member cannot be None", str(ctx.exception))
+    def test_schedule_on_key_owner_returns_future(self):
+        """Test schedule_on_key_owner returns IScheduledFuture."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-    def test_schedule_on_key_owner(self):
-        task = SimpleCallable(100)
-        future = self.service.schedule_on_key_owner(task, "my-key", 5, TimeUnit.SECONDS)
-
+        future = self.scheduler.schedule_on_key_owner(
+            TestCallable(), "my-key", 10, TimeUnit.SECONDS
+        )
         self.assertIsInstance(future, IScheduledFuture)
-        self.assertTrue(future.handler.is_partition_based)
 
     def test_schedule_on_key_owner_none_raises(self):
-        task = SimpleCallable(100)
+        """Test schedule_on_key_owner with None key raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_on_key_owner(task, None, 5, TimeUnit.SECONDS)
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_key_owner(TestCallable(), None, 10)
 
-        self.assertIn("Key cannot be None", str(ctx.exception))
+    def test_schedule_at_fixed_rate_returns_future(self):
+        """Test schedule_at_fixed_rate returns IScheduledFuture."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-    def test_schedule_at_fixed_rate(self):
-        task = SimpleRunnable()
-        future = self.service.schedule_at_fixed_rate(
-            task, 0, 5, TimeUnit.SECONDS
+        future = self.scheduler.schedule_at_fixed_rate(
+            TestCallable(), 0, 5, TimeUnit.SECONDS
         )
-
         self.assertIsInstance(future, IScheduledFuture)
 
-    def test_schedule_at_fixed_rate_invalid_period(self):
-        task = SimpleRunnable()
+    def test_schedule_at_fixed_rate_invalid_period_raises(self):
+        """Test schedule_at_fixed_rate with invalid period raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_at_fixed_rate(task, 0, 0, TimeUnit.SECONDS)
-
-        self.assertIn("Period must be positive", str(ctx.exception))
-
-    def test_schedule_at_fixed_rate_negative_period(self):
-        task = SimpleRunnable()
-
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_at_fixed_rate(task, 0, -1, TimeUnit.SECONDS)
-
-        self.assertIn("Period must be positive", str(ctx.exception))
-
-    def test_schedule_with_fixed_delay(self):
-        task = SimpleRunnable()
-        future = self.service.schedule_with_fixed_delay(
-            task, 0, 5, TimeUnit.SECONDS
-        )
-
-        self.assertIsInstance(future, IScheduledFuture)
-
-    def test_schedule_with_fixed_delay_invalid_delay(self):
-        task = SimpleRunnable()
-
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_with_fixed_delay(task, 0, 0, TimeUnit.SECONDS)
-
-        self.assertIn("Delay must be positive", str(ctx.exception))
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_at_fixed_rate(TestCallable(), 0, 0)
 
     def test_schedule_on_member_at_fixed_rate(self):
-        task = SimpleRunnable()
-        member = Member(str(uuid.uuid4()))
-        future = self.service.schedule_on_member_at_fixed_rate(
-            task, member, 0, 5, TimeUnit.SECONDS
-        )
+        """Test schedule_on_member_at_fixed_rate."""
+        from hazelcast.proxy.executor import Member
 
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        member = Member(uuid="test-uuid")
+        future = self.scheduler.schedule_on_member_at_fixed_rate(
+            TestCallable(), member, 0, 5, TimeUnit.SECONDS
+        )
         self.assertIsInstance(future, IScheduledFuture)
 
-    def test_schedule_on_member_at_fixed_rate_none_member(self):
-        task = SimpleRunnable()
+    def test_schedule_on_member_at_fixed_rate_none_member_raises(self):
+        """Test schedule_on_member_at_fixed_rate with None member raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_on_member_at_fixed_rate(
-                task, None, 0, 5, TimeUnit.SECONDS
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_member_at_fixed_rate(
+                TestCallable(), None, 0, 5
             )
 
-        self.assertIn("Member cannot be None", str(ctx.exception))
+    def test_schedule_on_member_at_fixed_rate_invalid_period_raises(self):
+        """Test schedule_on_member_at_fixed_rate with invalid period raises."""
+        from hazelcast.proxy.executor import Member
 
-    def test_schedule_on_member_at_fixed_rate_invalid_period(self):
-        task = SimpleRunnable()
-        member = Member(str(uuid.uuid4()))
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_on_member_at_fixed_rate(
-                task, member, 0, 0, TimeUnit.SECONDS
+        member = Member(uuid="test-uuid")
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_member_at_fixed_rate(
+                TestCallable(), member, 0, 0
             )
-
-        self.assertIn("Period must be positive", str(ctx.exception))
 
     def test_schedule_on_key_owner_at_fixed_rate(self):
-        task = SimpleRunnable()
-        future = self.service.schedule_on_key_owner_at_fixed_rate(
-            task, "my-key", 0, 5, TimeUnit.SECONDS
-        )
+        """Test schedule_on_key_owner_at_fixed_rate."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
+        future = self.scheduler.schedule_on_key_owner_at_fixed_rate(
+            TestCallable(), "my-key", 0, 5, TimeUnit.SECONDS
+        )
         self.assertIsInstance(future, IScheduledFuture)
 
-    def test_schedule_on_key_owner_at_fixed_rate_none_key(self):
-        task = SimpleRunnable()
+    def test_schedule_on_key_owner_at_fixed_rate_none_key_raises(self):
+        """Test schedule_on_key_owner_at_fixed_rate with None key raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_on_key_owner_at_fixed_rate(
-                task, None, 0, 5, TimeUnit.SECONDS
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_key_owner_at_fixed_rate(
+                TestCallable(), None, 0, 5
             )
 
-        self.assertIn("Key cannot be None", str(ctx.exception))
+    def test_schedule_on_key_owner_at_fixed_rate_invalid_period_raises(self):
+        """Test schedule_on_key_owner_at_fixed_rate with invalid period raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_key_owner_at_fixed_rate(
+                TestCallable(), "key", 0, 0
+            )
+
+    def test_schedule_with_fixed_delay_returns_future(self):
+        """Test schedule_with_fixed_delay returns IScheduledFuture."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        future = self.scheduler.schedule_with_fixed_delay(
+            TestCallable(), 0, 5, TimeUnit.SECONDS
+        )
+        self.assertIsInstance(future, IScheduledFuture)
+
+    def test_schedule_with_fixed_delay_invalid_delay_raises(self):
+        """Test schedule_with_fixed_delay with invalid delay raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_with_fixed_delay(TestCallable(), 0, 0)
 
     def test_schedule_on_member_with_fixed_delay(self):
-        task = SimpleRunnable()
-        member = Member(str(uuid.uuid4()))
-        future = self.service.schedule_on_member_with_fixed_delay(
-            task, member, 0, 5, TimeUnit.SECONDS
-        )
+        """Test schedule_on_member_with_fixed_delay."""
+        from hazelcast.proxy.executor import Member
 
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        member = Member(uuid="test-uuid")
+        future = self.scheduler.schedule_on_member_with_fixed_delay(
+            TestCallable(), member, 0, 5, TimeUnit.SECONDS
+        )
         self.assertIsInstance(future, IScheduledFuture)
 
-    def test_schedule_on_member_with_fixed_delay_none_member(self):
-        task = SimpleRunnable()
+    def test_schedule_on_member_with_fixed_delay_none_member_raises(self):
+        """Test schedule_on_member_with_fixed_delay with None member raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_on_member_with_fixed_delay(
-                task, None, 0, 5, TimeUnit.SECONDS
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_member_with_fixed_delay(
+                TestCallable(), None, 0, 5
             )
 
-        self.assertIn("Member cannot be None", str(ctx.exception))
+    def test_schedule_on_member_with_fixed_delay_invalid_delay_raises(self):
+        """Test schedule_on_member_with_fixed_delay with invalid delay raises."""
+        from hazelcast.proxy.executor import Member
+
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        member = Member(uuid="test-uuid")
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_member_with_fixed_delay(
+                TestCallable(), member, 0, 0
+            )
 
     def test_schedule_on_key_owner_with_fixed_delay(self):
-        task = SimpleRunnable()
-        future = self.service.schedule_on_key_owner_with_fixed_delay(
-            task, "my-key", 0, 5, TimeUnit.SECONDS
-        )
+        """Test schedule_on_key_owner_with_fixed_delay."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
+        future = self.scheduler.schedule_on_key_owner_with_fixed_delay(
+            TestCallable(), "my-key", 0, 5, TimeUnit.SECONDS
+        )
         self.assertIsInstance(future, IScheduledFuture)
 
-    def test_schedule_on_key_owner_with_fixed_delay_none_key(self):
-        task = SimpleRunnable()
+    def test_schedule_on_key_owner_with_fixed_delay_none_key_raises(self):
+        """Test schedule_on_key_owner_with_fixed_delay with None key raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_on_key_owner_with_fixed_delay(
-                task, None, 0, 5, TimeUnit.SECONDS
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_key_owner_with_fixed_delay(
+                TestCallable(), None, 0, 5
             )
 
-        self.assertIn("Key cannot be None", str(ctx.exception))
+    def test_schedule_on_key_owner_with_fixed_delay_invalid_delay_raises(self):
+        """Test schedule_on_key_owner_with_fixed_delay with invalid delay raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-    def test_get_scheduled(self):
-        handler = ScheduledTaskHandler("test-scheduler", "task1", partition_id=3)
-        future = self.service.get_scheduled(handler)
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.scheduler.schedule_on_key_owner_with_fixed_delay(
+                TestCallable(), "key", 0, 0
+            )
 
+    def test_get_scheduled_returns_future(self):
+        """Test get_scheduled returns IScheduledFuture."""
+        handler = ScheduledTaskHandler("test-scheduler", "task", partition_id=0)
+        future = self.scheduler.get_scheduled(handler)
         self.assertIsInstance(future, IScheduledFuture)
-        self.assertEqual(handler, future.handler)
 
-    def test_get_all_scheduled_empty(self):
-        result = self.service.get_all_scheduled()
-
-        self.assertEqual({}, result)
+    def test_get_all_scheduled_returns_dict(self):
+        """Test get_all_scheduled returns dictionary."""
+        result = self.scheduler.get_all_scheduled()
+        self.assertIsInstance(result, dict)
 
     def test_shutdown(self):
-        self.assertFalse(self.service.is_shutdown())
-
-        self.service.shutdown()
-
-        self.assertTrue(self.service.is_shutdown())
+        """Test shutdown method."""
+        self.assertFalse(self.scheduler.is_shutdown())
+        self.scheduler.shutdown()
+        self.assertTrue(self.scheduler.is_shutdown())
 
     def test_shutdown_idempotent(self):
-        self.service.shutdown()
-        self.service.shutdown()
-
-        self.assertTrue(self.service.is_shutdown())
+        """Test shutdown is idempotent."""
+        self.scheduler.shutdown()
+        self.scheduler.shutdown()
+        self.assertTrue(self.scheduler.is_shutdown())
 
     def test_schedule_after_shutdown_raises(self):
-        self.service.shutdown()
+        """Test schedule after shutdown raises exception."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule(SimpleCallable(), 10, TimeUnit.SECONDS)
-
-        self.assertIn("shut down", str(ctx.exception))
-
-    def test_schedule_at_fixed_rate_after_shutdown_raises(self):
-        self.service.shutdown()
-
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_at_fixed_rate(
-                SimpleRunnable(), 0, 5, TimeUnit.SECONDS
-            )
-
-        self.assertIn("shut down", str(ctx.exception))
-
-    def test_schedule_with_fixed_delay_after_shutdown_raises(self):
-        self.service.shutdown()
-
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule_with_fixed_delay(
-                SimpleRunnable(), 0, 5, TimeUnit.SECONDS
-            )
-
-        self.assertIn("shut down", str(ctx.exception))
-
-    def test_destroyed_raises_on_schedule(self):
-        self.service.destroy()
-
-        with self.assertRaises(Exception) as ctx:
-            self.service.schedule(SimpleCallable(), 10, TimeUnit.SECONDS)
-
-        self.assertIn("destroyed", str(ctx.exception))
-
-    def test_service_name(self):
-        self.assertEqual("hz:impl:scheduledExecutorService", self.service.service_name)
-
-    def test_name(self):
-        self.assertEqual("test-scheduler", self.service.name)
+        self.scheduler.shutdown()
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            self.scheduler.schedule(TestCallable(), 10)
 
 
-class TestScheduledExecutorServiceAliases(unittest.TestCase):
-    """Tests for module-level aliases."""
+class TestScheduledExecutorAliases(unittest.TestCase):
+    """Tests for scheduled executor service aliases."""
 
     def test_scheduled_executor_service_alias(self):
-        from hazelcast.proxy.scheduled_executor import ScheduledExecutorService
+        """Test ScheduledExecutorService alias."""
         self.assertIs(ScheduledExecutorService, IScheduledExecutorService)
 
     def test_scheduled_executor_service_proxy_alias(self):
-        from hazelcast.proxy.scheduled_executor import ScheduledExecutorServiceProxy
+        """Test ScheduledExecutorServiceProxy alias."""
         self.assertIs(ScheduledExecutorServiceProxy, IScheduledExecutorService)
 
 

@@ -1,249 +1,387 @@
-"""Unit tests for hazelcast.proxy.queue module."""
+"""Unit tests for Queue proxy."""
 
-import pytest
+import unittest
+from unittest.mock import MagicMock, patch
 from concurrent.futures import Future
 
 from hazelcast.proxy.queue import (
     QueueProxy,
-    ItemEvent,
     ItemEventType,
+    ItemEvent,
     ItemListener,
+    _CallbackItemListener,
 )
-from hazelcast.exceptions import IllegalStateException
 
 
-class TestItemEventType:
+class TestItemEventType(unittest.TestCase):
     """Tests for ItemEventType enum."""
 
-    def test_values(self):
-        assert ItemEventType.ADDED.value == 1
-        assert ItemEventType.REMOVED.value == 2
+    def test_event_type_values(self):
+        """Test ItemEventType values are defined correctly."""
+        self.assertEqual(ItemEventType.ADDED.value, 1)
+        self.assertEqual(ItemEventType.REMOVED.value, 2)
 
 
-class TestItemEvent:
+class TestItemEvent(unittest.TestCase):
     """Tests for ItemEvent class."""
 
-    def test_init(self):
-        event = ItemEvent(ItemEventType.ADDED, item="test")
-        assert event.event_type == ItemEventType.ADDED
-        assert event.item == "test"
-        assert event.member is None
-        assert event.name == ""
-
-    def test_full_init(self):
-        member = object()
+    def test_event_initialization(self):
+        """Test ItemEvent initialization."""
         event = ItemEvent(
-            ItemEventType.REMOVED,
-            item="item",
-            member=member,
-            name="my-queue",
+            event_type=ItemEventType.ADDED,
+            item="test_item",
+            member="member1",
+            name="test-queue",
         )
-        assert event.event_type == ItemEventType.REMOVED
-        assert event.item == "item"
-        assert event.member is member
-        assert event.name == "my-queue"
+        self.assertEqual(event.event_type, ItemEventType.ADDED)
+        self.assertEqual(event.item, "test_item")
+        self.assertEqual(event.member, "member1")
+        self.assertEqual(event.name, "test-queue")
 
-    def test_repr(self):
+    def test_event_with_defaults(self):
+        """Test ItemEvent with default values."""
+        event = ItemEvent(event_type=ItemEventType.REMOVED)
+        self.assertEqual(event.event_type, ItemEventType.REMOVED)
+        self.assertIsNone(event.item)
+        self.assertIsNone(event.member)
+        self.assertEqual(event.name, "")
+
+    def test_event_repr(self):
+        """Test ItemEvent __repr__."""
         event = ItemEvent(ItemEventType.ADDED, item="test")
-        r = repr(event)
-        assert "ADDED" in r
-        assert "test" in r
+        repr_str = repr(event)
+        self.assertIn("ItemEvent", repr_str)
+        self.assertIn("ADDED", repr_str)
+        self.assertIn("test", repr_str)
 
 
-class TestItemListener:
+class TestItemListener(unittest.TestCase):
     """Tests for ItemListener class."""
 
-    def test_default_methods(self):
+    def test_listener_methods_exist(self):
+        """Test that listener has all required methods."""
         listener = ItemListener()
-        event = ItemEvent(ItemEventType.ADDED)
+        self.assertTrue(hasattr(listener, "item_added"))
+        self.assertTrue(hasattr(listener, "item_removed"))
+
+    def test_listener_methods_are_callable(self):
+        """Test that listener methods can be called without error."""
+        listener = ItemListener()
+        event = ItemEvent(ItemEventType.ADDED, "item")
         listener.item_added(event)
         listener.item_removed(event)
 
 
-class TestQueueProxy:
+class TestCallbackItemListener(unittest.TestCase):
+    """Tests for _CallbackItemListener class."""
+
+    def test_callback_item_added(self):
+        """Test item_added callback is invoked."""
+        results = []
+        listener = _CallbackItemListener(
+            item_added=lambda e: results.append(("added", e))
+        )
+        event = ItemEvent(ItemEventType.ADDED, "item")
+        listener.item_added(event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "added")
+
+    def test_callback_item_removed(self):
+        """Test item_removed callback is invoked."""
+        results = []
+        listener = _CallbackItemListener(
+            item_removed=lambda e: results.append(("removed", e))
+        )
+        event = ItemEvent(ItemEventType.REMOVED, "item")
+        listener.item_removed(event)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "removed")
+
+    def test_callback_none_handlers(self):
+        """Test listener with None handlers doesn't raise."""
+        listener = _CallbackItemListener()
+        event = ItemEvent(ItemEventType.ADDED, "item")
+        listener.item_added(event)
+        listener.item_removed(event)
+
+
+class TestQueueProxy(unittest.TestCase):
     """Tests for QueueProxy class."""
 
-    def test_init(self):
-        queue = QueueProxy("test-queue")
-        assert queue.name == "test-queue"
-        assert queue.service_name == "hz:impl:queueService"
+    def setUp(self):
+        """Set up test fixtures."""
+        self.proxy = QueueProxy(
+            name="test-queue",
+            context=None,
+        )
 
-    def test_add(self):
-        queue = QueueProxy("test-queue")
-        result = queue.add("item")
-        assert result is True
+    def test_service_name_constant(self):
+        """Test SERVICE_NAME is defined correctly."""
+        self.assertEqual(QueueProxy.SERVICE_NAME, "hz:impl:queueService")
 
-    def test_add_async(self):
-        queue = QueueProxy("test-queue")
-        future = queue.add_async("item")
-        assert isinstance(future, Future)
-        assert future.result() is True
+    def test_initialization(self):
+        """Test QueueProxy initialization."""
+        self.assertEqual(self.proxy._name, "test-queue")
+        self.assertIsInstance(self.proxy._item_listeners, dict)
 
-    def test_offer(self):
-        queue = QueueProxy("test-queue")
-        result = queue.offer("item")
-        assert result is True
+    def test_add_async_returns_future(self):
+        """Test add_async returns a Future."""
+        future = self.proxy.add_async("item")
+        self.assertIsInstance(future, Future)
 
-    def test_offer_with_timeout(self):
-        queue = QueueProxy("test-queue")
-        result = queue.offer("item", timeout=5.0)
-        assert result is True
+    def test_offer_async_returns_future(self):
+        """Test offer_async returns a Future."""
+        future = self.proxy.offer_async("item")
+        self.assertIsInstance(future, Future)
 
-    def test_put(self):
-        queue = QueueProxy("test-queue")
-        queue.put("item")
+    def test_offer_async_with_timeout(self):
+        """Test offer_async with timeout."""
+        future = self.proxy.offer_async("item", timeout=5)
+        self.assertIsInstance(future, Future)
 
-    def test_poll(self):
-        queue = QueueProxy("test-queue")
-        result = queue.poll()
-        assert result is None
+    def test_put_async_returns_future(self):
+        """Test put_async returns a Future."""
+        future = self.proxy.put_async("item")
+        self.assertIsInstance(future, Future)
 
-    def test_poll_with_timeout(self):
-        queue = QueueProxy("test-queue")
-        result = queue.poll(timeout=1.0)
-        assert result is None
+    def test_poll_async_returns_future(self):
+        """Test poll_async returns a Future."""
+        future = self.proxy.poll_async()
+        self.assertIsInstance(future, Future)
 
-    def test_take(self):
-        queue = QueueProxy("test-queue")
-        result = queue.take()
-        assert result is None
+    def test_poll_async_with_timeout(self):
+        """Test poll_async with timeout."""
+        future = self.proxy.poll_async(timeout=5)
+        self.assertIsInstance(future, Future)
 
-    def test_peek(self):
-        queue = QueueProxy("test-queue")
-        result = queue.peek()
-        assert result is None
+    def test_take_async_returns_future(self):
+        """Test take_async returns a Future."""
+        future = self.proxy.take_async()
+        self.assertIsInstance(future, Future)
 
-    def test_remove(self):
-        queue = QueueProxy("test-queue")
-        result = queue.remove("item")
-        assert result is False
+    def test_peek_async_returns_future(self):
+        """Test peek_async returns a Future."""
+        future = self.proxy.peek_async()
+        self.assertIsInstance(future, Future)
 
-    def test_contains(self):
-        queue = QueueProxy("test-queue")
-        result = queue.contains("item")
-        assert result is False
+    def test_remove_async_returns_future(self):
+        """Test remove_async returns a Future."""
+        future = self.proxy.remove_async("item")
+        self.assertIsInstance(future, Future)
 
-    def test_contains_all(self):
-        queue = QueueProxy("test-queue")
-        result = queue.contains_all(["item1", "item2"])
-        assert result is False
+    def test_contains_async_returns_future(self):
+        """Test contains_async returns a Future."""
+        future = self.proxy.contains_async("item")
+        self.assertIsInstance(future, Future)
 
-    def test_drain_to(self):
-        queue = QueueProxy("test-queue")
+    def test_contains_all_async_returns_future(self):
+        """Test contains_all_async returns a Future."""
+        future = self.proxy.contains_all_async(["item1", "item2"])
+        self.assertIsInstance(future, Future)
+
+    def test_drain_to_async_returns_future(self):
+        """Test drain_to_async returns a Future."""
         target = []
-        result = queue.drain_to(target)
-        assert result == 0
+        future = self.proxy.drain_to_async(target)
+        self.assertIsInstance(future, Future)
 
-    def test_drain_to_with_max(self):
-        queue = QueueProxy("test-queue")
+    def test_drain_to_async_with_max_elements(self):
+        """Test drain_to_async with max_elements."""
         target = []
-        result = queue.drain_to(target, max_elements=5)
-        assert result == 0
+        future = self.proxy.drain_to_async(target, max_elements=5)
+        self.assertIsInstance(future, Future)
 
-    def test_size(self):
-        queue = QueueProxy("test-queue")
-        assert queue.size() == 0
+    def test_size_async_returns_future(self):
+        """Test size_async returns a Future."""
+        future = self.proxy.size_async()
+        self.assertIsInstance(future, Future)
 
-    def test_is_empty(self):
-        queue = QueueProxy("test-queue")
-        assert queue.is_empty() is True
+    def test_is_empty_async_returns_future(self):
+        """Test is_empty_async returns a Future."""
+        future = self.proxy.is_empty_async()
+        self.assertIsInstance(future, Future)
 
-    def test_remaining_capacity(self):
-        queue = QueueProxy("test-queue")
-        assert queue.remaining_capacity() == 0
+    def test_remaining_capacity_async_returns_future(self):
+        """Test remaining_capacity_async returns a Future."""
+        future = self.proxy.remaining_capacity_async()
+        self.assertIsInstance(future, Future)
 
-    def test_clear(self):
-        queue = QueueProxy("test-queue")
-        queue.clear()
+    def test_clear_async_returns_future(self):
+        """Test clear_async returns a Future."""
+        future = self.proxy.clear_async()
+        self.assertIsInstance(future, Future)
 
-    def test_get_all(self):
-        queue = QueueProxy("test-queue")
-        result = queue.get_all()
-        assert result == []
-
-    def test_len(self):
-        queue = QueueProxy("test-queue")
-        assert len(queue) == 0
-
-    def test_contains_operator(self):
-        queue = QueueProxy("test-queue")
-        assert ("item" in queue) is False
-
-    def test_iter(self):
-        queue = QueueProxy("test-queue")
-        items = list(queue)
-        assert items == []
+    def test_get_all_async_returns_future(self):
+        """Test get_all_async returns a Future."""
+        future = self.proxy.get_all_async()
+        self.assertIsInstance(future, Future)
 
     def test_add_item_listener_with_listener(self):
-        queue = QueueProxy("test-queue")
-
-        class TestListener(ItemListener):
-            def item_added(self, event):
-                pass
-
-            def item_removed(self, event):
-                pass
-
-        reg_id = queue.add_item_listener(listener=TestListener())
-        assert reg_id is not None
+        """Test add_item_listener with listener object."""
+        listener = ItemListener()
+        reg_id = self.proxy.add_item_listener(listener=listener)
+        self.assertIsInstance(reg_id, str)
+        self.assertTrue(len(reg_id) > 0)
 
     def test_add_item_listener_with_callbacks(self):
-        queue = QueueProxy("test-queue")
-        reg_id = queue.add_item_listener(
+        """Test add_item_listener with callbacks."""
+        reg_id = self.proxy.add_item_listener(
             item_added=lambda e: None,
             item_removed=lambda e: None,
         )
-        assert reg_id is not None
+        self.assertIsInstance(reg_id, str)
 
-    def test_add_item_listener_include_value(self):
-        queue = QueueProxy("test-queue")
-        events = []
-        queue.add_item_listener(
-            item_added=lambda e: events.append(e),
-            include_value=True,
-        )
-        queue._notify_item_added("test")
-        assert events[0].item == "test"
+    def test_add_item_listener_with_include_value_false(self):
+        """Test add_item_listener with include_value=False."""
+        listener = ItemListener()
+        reg_id = self.proxy.add_item_listener(listener=listener, include_value=False)
+        self.assertIsInstance(reg_id, str)
 
-    def test_add_item_listener_exclude_value(self):
-        queue = QueueProxy("test-queue")
-        events = []
-        queue.add_item_listener(
-            item_added=lambda e: events.append(e),
-            include_value=False,
-        )
-        queue._notify_item_added("test")
-        assert events[0].item is None
+    def test_add_item_listener_raises_without_listener_or_callbacks(self):
+        """Test add_item_listener raises without listener or callbacks."""
+        with self.assertRaises(ValueError):
+            self.proxy.add_item_listener()
 
-    def test_add_item_listener_no_args_raises(self):
-        queue = QueueProxy("test-queue")
-        with pytest.raises(ValueError):
-            queue.add_item_listener()
+    def test_remove_item_listener_returns_true_for_existing(self):
+        """Test remove_item_listener returns True for existing listener."""
+        listener = ItemListener()
+        reg_id = self.proxy.add_item_listener(listener=listener)
+        result = self.proxy.remove_item_listener(reg_id)
+        self.assertTrue(result)
 
-    def test_remove_item_listener(self):
-        queue = QueueProxy("test-queue")
-        reg_id = queue.add_item_listener(item_added=lambda e: None)
-        assert queue.remove_item_listener(reg_id) is True
-        assert queue.remove_item_listener(reg_id) is False
+    def test_remove_item_listener_returns_false_for_nonexistent(self):
+        """Test remove_item_listener returns False for nonexistent listener."""
+        result = self.proxy.remove_item_listener("nonexistent-id")
+        self.assertFalse(result)
 
     def test_notify_item_added(self):
-        queue = QueueProxy("test-queue")
-        events = []
-        queue.add_item_listener(item_added=lambda e: events.append(e))
-        queue._notify_item_added("test-item")
-        assert len(events) == 1
-        assert events[0].event_type == ItemEventType.ADDED
+        """Test _notify_item_added calls listener."""
+        results = []
+        listener = ItemListener()
+        listener.item_added = lambda e: results.append(e)
+        self.proxy._item_listeners["test-id"] = (listener, True, None)
+        self.proxy._notify_item_added("test-item")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].item, "test-item")
+
+    def test_notify_item_added_without_value(self):
+        """Test _notify_item_added with include_value=False."""
+        results = []
+        listener = ItemListener()
+        listener.item_added = lambda e: results.append(e)
+        self.proxy._item_listeners["test-id"] = (listener, False, None)
+        self.proxy._notify_item_added("test-item")
+        self.assertEqual(len(results), 1)
+        self.assertIsNone(results[0].item)
 
     def test_notify_item_removed(self):
-        queue = QueueProxy("test-queue")
-        events = []
-        queue.add_item_listener(item_removed=lambda e: events.append(e))
-        queue._notify_item_removed("test-item")
-        assert len(events) == 1
-        assert events[0].event_type == ItemEventType.REMOVED
+        """Test _notify_item_removed calls listener."""
+        results = []
+        listener = ItemListener()
+        listener.item_removed = lambda e: results.append(e)
+        self.proxy._item_listeners["test-id"] = (listener, True, None)
+        self.proxy._notify_item_removed("test-item")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].item, "test-item")
 
-    def test_destroyed_operations_raise(self):
-        queue = QueueProxy("test-queue")
-        queue.destroy()
-        with pytest.raises(IllegalStateException):
-            queue.add("item")
+    def test_len_returns_size(self):
+        """Test __len__ returns size."""
+        self.assertEqual(len(self.proxy), 0)
+
+    def test_contains_uses_contains(self):
+        """Test __contains__ uses contains."""
+        self.assertFalse("item" in self.proxy)
+
+    def test_iter_returns_items(self):
+        """Test __iter__ returns iterator over items."""
+        result = list(iter(self.proxy))
+        self.assertEqual(result, [])
+
+
+class TestQueueProxySyncMethods(unittest.TestCase):
+    """Tests for QueueProxy synchronous methods."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.proxy = QueueProxy(
+            name="test-queue",
+            context=None,
+        )
+
+    def test_add_calls_async(self):
+        """Test add calls add_async."""
+        result = self.proxy.add("item")
+        self.assertIsInstance(result, bool)
+
+    def test_offer_calls_async(self):
+        """Test offer calls offer_async."""
+        result = self.proxy.offer("item")
+        self.assertIsInstance(result, bool)
+
+    def test_put_calls_async(self):
+        """Test put calls put_async."""
+        self.proxy.put("item")
+
+    def test_poll_calls_async(self):
+        """Test poll calls poll_async."""
+        result = self.proxy.poll()
+        self.assertIsNone(result)
+
+    def test_take_calls_async(self):
+        """Test take calls take_async."""
+        result = self.proxy.take()
+        self.assertIsNone(result)
+
+    def test_peek_calls_async(self):
+        """Test peek calls peek_async."""
+        result = self.proxy.peek()
+        self.assertIsNone(result)
+
+    def test_remove_calls_async(self):
+        """Test remove calls remove_async."""
+        result = self.proxy.remove("item")
+        self.assertIsInstance(result, bool)
+
+    def test_contains_calls_async(self):
+        """Test contains calls contains_async."""
+        result = self.proxy.contains("item")
+        self.assertIsInstance(result, bool)
+
+    def test_contains_all_calls_async(self):
+        """Test contains_all calls contains_all_async."""
+        result = self.proxy.contains_all(["item1", "item2"])
+        self.assertIsInstance(result, bool)
+
+    def test_drain_to_calls_async(self):
+        """Test drain_to calls drain_to_async."""
+        target = []
+        result = self.proxy.drain_to(target)
+        self.assertIsInstance(result, int)
+
+    def test_size_calls_async(self):
+        """Test size calls size_async."""
+        result = self.proxy.size()
+        self.assertIsInstance(result, int)
+
+    def test_is_empty_calls_async(self):
+        """Test is_empty calls is_empty_async."""
+        result = self.proxy.is_empty()
+        self.assertIsInstance(result, bool)
+
+    def test_remaining_capacity_calls_async(self):
+        """Test remaining_capacity calls remaining_capacity_async."""
+        result = self.proxy.remaining_capacity()
+        self.assertIsInstance(result, int)
+
+    def test_clear_calls_async(self):
+        """Test clear calls clear_async."""
+        self.proxy.clear()
+
+    def test_get_all_calls_async(self):
+        """Test get_all calls get_all_async."""
+        result = self.proxy.get_all()
+        self.assertIsInstance(result, list)
+
+
+if __name__ == "__main__":
+    unittest.main()

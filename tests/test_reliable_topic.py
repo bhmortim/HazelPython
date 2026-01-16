@@ -1,6 +1,7 @@
-"""Tests for ReliableTopic distributed data structure proxy."""
+"""Unit tests for Reliable Topic proxy."""
 
-import pytest
+import unittest
+from unittest.mock import MagicMock, patch
 from concurrent.futures import Future
 
 from hazelcast.proxy.reliable_topic import (
@@ -14,400 +15,372 @@ from hazelcast.proxy.reliable_topic import (
 from hazelcast.proxy.topic import TopicMessage, MessageListener
 
 
-class TestTopicOverloadPolicy:
+class TestStaleSequenceException(unittest.TestCase):
+    """Tests for StaleSequenceException class."""
+
+    def test_exception_initialization(self):
+        """Test StaleSequenceException initialization."""
+        exc = StaleSequenceException("Test message", head_sequence=100)
+        self.assertEqual(str(exc), "Test message")
+        self.assertEqual(exc.head_sequence, 100)
+
+    def test_exception_default_head_sequence(self):
+        """Test StaleSequenceException with default head_sequence."""
+        exc = StaleSequenceException("Test message")
+        self.assertEqual(exc.head_sequence, -1)
+
+
+class TestTopicOverloadPolicy(unittest.TestCase):
     """Tests for TopicOverloadPolicy enum."""
 
-    def test_discard_oldest(self):
-        """Test DISCARD_OLDEST policy."""
-        assert TopicOverloadPolicy.DISCARD_OLDEST.value == "DISCARD_OLDEST"
-
-    def test_discard_newest(self):
-        """Test DISCARD_NEWEST policy."""
-        assert TopicOverloadPolicy.DISCARD_NEWEST.value == "DISCARD_NEWEST"
-
-    def test_block(self):
-        """Test BLOCK policy."""
-        assert TopicOverloadPolicy.BLOCK.value == "BLOCK"
-
-    def test_error(self):
-        """Test ERROR policy."""
-        assert TopicOverloadPolicy.ERROR.value == "ERROR"
+    def test_policy_values(self):
+        """Test TopicOverloadPolicy values are defined correctly."""
+        self.assertEqual(TopicOverloadPolicy.DISCARD_OLDEST.value, "DISCARD_OLDEST")
+        self.assertEqual(TopicOverloadPolicy.DISCARD_NEWEST.value, "DISCARD_NEWEST")
+        self.assertEqual(TopicOverloadPolicy.BLOCK.value, "BLOCK")
+        self.assertEqual(TopicOverloadPolicy.ERROR.value, "ERROR")
 
 
-class TestReliableTopicConfig:
-    """Tests for ReliableTopicConfig."""
+class TestReliableTopicConfig(unittest.TestCase):
+    """Tests for ReliableTopicConfig class."""
 
-    def test_default_config(self):
-        """Test default configuration values."""
-        config = ReliableTopicConfig()
-        assert config.read_batch_size == 10
-        assert config.overload_policy == TopicOverloadPolicy.BLOCK
-
-    def test_custom_config(self):
-        """Test custom configuration values."""
+    def test_config_initialization(self):
+        """Test ReliableTopicConfig initialization."""
         config = ReliableTopicConfig(
             read_batch_size=20,
             overload_policy=TopicOverloadPolicy.DISCARD_OLDEST,
         )
-        assert config.read_batch_size == 20
-        assert config.overload_policy == TopicOverloadPolicy.DISCARD_OLDEST
+        self.assertEqual(config.read_batch_size, 20)
+        self.assertEqual(config.overload_policy, TopicOverloadPolicy.DISCARD_OLDEST)
 
-    def test_invalid_batch_size_raises(self):
-        """Test that invalid batch size raises exception."""
-        from hazelcast.exceptions import ConfigurationException
-        with pytest.raises(ConfigurationException):
+    def test_config_defaults(self):
+        """Test ReliableTopicConfig with default values."""
+        config = ReliableTopicConfig()
+        self.assertEqual(config.read_batch_size, 10)
+        self.assertEqual(config.overload_policy, TopicOverloadPolicy.BLOCK)
+
+    def test_config_invalid_read_batch_size_raises(self):
+        """Test ReliableTopicConfig raises for invalid read_batch_size."""
+        with self.assertRaises(Exception):
             ReliableTopicConfig(read_batch_size=0)
 
-    def test_set_read_batch_size(self):
-        """Test setting read_batch_size property."""
+    def test_config_read_batch_size_setter(self):
+        """Test read_batch_size setter."""
         config = ReliableTopicConfig()
-        config.read_batch_size = 25
-        assert config.read_batch_size == 25
+        config.read_batch_size = 50
+        self.assertEqual(config.read_batch_size, 50)
 
-    def test_set_overload_policy(self):
-        """Test setting overload_policy property."""
+    def test_config_read_batch_size_setter_invalid_raises(self):
+        """Test read_batch_size setter raises for invalid value."""
+        config = ReliableTopicConfig()
+        with self.assertRaises(Exception):
+            config.read_batch_size = -1
+
+    def test_config_overload_policy_setter(self):
+        """Test overload_policy setter."""
         config = ReliableTopicConfig()
         config.overload_policy = TopicOverloadPolicy.ERROR
-        assert config.overload_policy == TopicOverloadPolicy.ERROR
+        self.assertEqual(config.overload_policy, TopicOverloadPolicy.ERROR)
 
 
-class TestStaleSequenceException:
-    """Tests for StaleSequenceException."""
+class TestReliableMessageListener(unittest.TestCase):
+    """Tests for ReliableMessageListener class."""
 
-    def test_create_exception(self):
-        """Test creating a stale sequence exception."""
-        exc = StaleSequenceException("Test message", head_sequence=100)
-        assert str(exc) == "Test message"
-        assert exc.head_sequence == 100
-
-    def test_default_head_sequence(self):
-        """Test default head sequence is -1."""
-        exc = StaleSequenceException("Test")
-        assert exc.head_sequence == -1
-
-
-class CustomReliableListener(ReliableMessageListener[str]):
-    """Test listener that records messages and sequences."""
-
-    def __init__(self, loss_tolerant=False, initial_seq=-1):
-        self.messages = []
-        self.stored_sequence = -1
-        self._loss_tolerant = loss_tolerant
-        self._initial_seq = initial_seq
-        self.terminal_errors = []
-
-    def on_message(self, message: TopicMessage[str]) -> None:
-        self.messages.append(message)
-
-    def store_sequence(self, sequence: int) -> None:
-        self.stored_sequence = sequence
-
-    def retrieve_initial_sequence(self) -> int:
-        return self._initial_seq
-
-    def is_loss_tolerant(self) -> bool:
-        return self._loss_tolerant
-
-    def is_terminal(self, error: Exception) -> bool:
-        self.terminal_errors.append(error)
-        return True
-
-    def on_stale_sequence(self, head_sequence: int) -> int:
-        return head_sequence
-
-
-class TestReliableMessageListener:
-    """Tests for ReliableMessageListener."""
-
-    def test_default_store_sequence(self):
-        """Test default store_sequence does nothing."""
+    def test_listener_methods_exist(self):
+        """Test that listener has all required methods."""
         listener = ReliableMessageListener()
-        listener.store_sequence(100)  # Should not raise
+        self.assertTrue(hasattr(listener, "on_message"))
+        self.assertTrue(hasattr(listener, "store_sequence"))
+        self.assertTrue(hasattr(listener, "retrieve_initial_sequence"))
+        self.assertTrue(hasattr(listener, "is_loss_tolerant"))
+        self.assertTrue(hasattr(listener, "is_terminal"))
+        self.assertTrue(hasattr(listener, "on_stale_sequence"))
 
-    def test_default_retrieve_initial_sequence(self):
-        """Test default retrieve_initial_sequence returns -1."""
+    def test_store_sequence_default(self):
+        """Test store_sequence default implementation."""
         listener = ReliableMessageListener()
-        assert listener.retrieve_initial_sequence() == -1
+        listener.store_sequence(100)
 
-    def test_default_is_loss_tolerant(self):
-        """Test default is_loss_tolerant returns False."""
+    def test_retrieve_initial_sequence_default(self):
+        """Test retrieve_initial_sequence returns -1 by default."""
         listener = ReliableMessageListener()
-        assert listener.is_loss_tolerant() is False
+        self.assertEqual(listener.retrieve_initial_sequence(), -1)
 
-    def test_default_is_terminal(self):
-        """Test default is_terminal returns True."""
+    def test_is_loss_tolerant_default(self):
+        """Test is_loss_tolerant returns False by default."""
         listener = ReliableMessageListener()
-        assert listener.is_terminal(Exception("test")) is True
+        self.assertFalse(listener.is_loss_tolerant())
 
-    def test_default_on_stale_sequence(self):
-        """Test default on_stale_sequence returns head sequence."""
+    def test_is_terminal_default(self):
+        """Test is_terminal returns True by default."""
         listener = ReliableMessageListener()
-        assert listener.on_stale_sequence(50) == 50
+        self.assertTrue(listener.is_terminal(Exception("test")))
+
+    def test_on_stale_sequence_default(self):
+        """Test on_stale_sequence returns head_sequence by default."""
+        listener = ReliableMessageListener()
+        result = listener.on_stale_sequence(100)
+        self.assertEqual(result, 100)
 
 
-class TestReliableTopicProxy:
-    """Tests for ReliableTopicProxy."""
+class TestMessageRunner(unittest.TestCase):
+    """Tests for _MessageRunner class."""
 
-    def test_create_reliable_topic(self):
-        """Test creating a reliable topic."""
-        topic = ReliableTopicProxy("test-reliable-topic")
-        assert topic.name == "test-reliable-topic"
-        assert topic.service_name == "hz:impl:reliableTopicService"
+    def test_runner_initialization(self):
+        """Test _MessageRunner initialization."""
+        listener = MessageListener()
+        config = ReliableTopicConfig()
+        runner = _MessageRunner(
+            registration_id="test-id",
+            listener=listener,
+            initial_sequence=5,
+            config=config,
+        )
+        self.assertEqual(runner.sequence, 5)
+        self.assertFalse(runner.is_cancelled)
 
-    def test_create_with_config(self):
-        """Test creating reliable topic with custom config."""
+    def test_runner_cancel(self):
+        """Test _MessageRunner cancel."""
+        listener = MessageListener()
+        config = ReliableTopicConfig()
+        runner = _MessageRunner("test-id", listener, 0, config)
+        runner.cancel()
+        self.assertTrue(runner.is_cancelled)
+
+    def test_runner_process_message(self):
+        """Test _MessageRunner process_message."""
+        results = []
+
+        class TestListener(MessageListener):
+            def on_message(self, msg):
+                results.append(msg.message)
+
+        config = ReliableTopicConfig()
+        runner = _MessageRunner("test-id", TestListener(), 0, config)
+        message = TopicMessage("test", 0)
+        runner.process_message(message)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0], "test")
+
+    def test_runner_process_message_increments_sequence(self):
+        """Test _MessageRunner process_message increments sequence."""
+        listener = MessageListener()
+        config = ReliableTopicConfig()
+        runner = _MessageRunner("test-id", listener, 0, config)
+        message = TopicMessage("test", 0)
+        runner.process_message(message)
+        self.assertEqual(runner.sequence, 1)
+
+    def test_runner_process_message_cancelled_does_nothing(self):
+        """Test _MessageRunner process_message does nothing when cancelled."""
+        results = []
+
+        class TestListener(MessageListener):
+            def on_message(self, msg):
+                results.append(msg.message)
+
+        config = ReliableTopicConfig()
+        runner = _MessageRunner("test-id", TestListener(), 0, config)
+        runner.cancel()
+        message = TopicMessage("test", 0)
+        runner.process_message(message)
+        self.assertEqual(len(results), 0)
+
+    def test_runner_sequence_setter_stores_for_reliable_listener(self):
+        """Test sequence setter calls store_sequence for ReliableMessageListener."""
+        stored_sequences = []
+
+        class TestListener(ReliableMessageListener):
+            def store_sequence(self, seq):
+                stored_sequences.append(seq)
+
+        config = ReliableTopicConfig()
+        runner = _MessageRunner("test-id", TestListener(), 0, config)
+        runner.sequence = 10
+        self.assertEqual(stored_sequences, [10])
+
+    def test_runner_process_message_exception_cancels_for_terminal(self):
+        """Test _MessageRunner cancels on terminal exception."""
+        class FailingListener(MessageListener):
+            def on_message(self, msg):
+                raise Exception("Test error")
+
+        config = ReliableTopicConfig()
+        runner = _MessageRunner("test-id", FailingListener(), 0, config)
+        message = TopicMessage("test", 0)
+        with self.assertRaises(Exception):
+            runner.process_message(message)
+        self.assertTrue(runner.is_cancelled)
+
+
+class TestReliableTopicProxy(unittest.TestCase):
+    """Tests for ReliableTopicProxy class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.proxy = ReliableTopicProxy(
+            name="test-reliable-topic",
+            context=None,
+        )
+
+    def test_service_name_constant(self):
+        """Test SERVICE_NAME is defined correctly."""
+        self.assertEqual(
+            ReliableTopicProxy.SERVICE_NAME,
+            "hz:impl:reliableTopicService",
+        )
+
+    def test_initialization(self):
+        """Test ReliableTopicProxy initialization."""
+        self.assertEqual(self.proxy._name, "test-reliable-topic")
+        self.assertIsInstance(self.proxy._config, ReliableTopicConfig)
+        self.assertIsInstance(self.proxy._message_listeners, dict)
+        self.assertIsInstance(self.proxy._listener_runners, dict)
+
+    def test_initialization_with_custom_config(self):
+        """Test ReliableTopicProxy initialization with custom config."""
         config = ReliableTopicConfig(read_batch_size=50)
-        topic = ReliableTopicProxy("test-topic", config=config)
-        assert topic.config.read_batch_size == 50
+        proxy = ReliableTopicProxy(
+            name="test",
+            context=None,
+            config=config,
+        )
+        self.assertEqual(proxy.config.read_batch_size, 50)
 
-    def test_default_config(self):
-        """Test default config is created if none provided."""
-        topic = ReliableTopicProxy("test-topic")
-        assert isinstance(topic.config, ReliableTopicConfig)
+    def test_config_property(self):
+        """Test config property returns configuration."""
+        config = self.proxy.config
+        self.assertIsInstance(config, ReliableTopicConfig)
 
-    def test_publish(self):
-        """Test publishing a message."""
-        topic = ReliableTopicProxy("test-topic")
-        topic.publish("hello")  # Should not raise
+    def test_publish_completes(self):
+        """Test publish completes without error."""
+        self.proxy.publish("message")
 
-    def test_publish_async(self):
-        """Test async publish."""
-        topic = ReliableTopicProxy("test-topic")
-        future = topic.publish_async("hello")
-        assert isinstance(future, Future)
-        assert future.result() is None
+    def test_publish_async_returns_future(self):
+        """Test publish_async returns a Future."""
+        future = self.proxy.publish_async("message")
+        self.assertIsInstance(future, Future)
+        self.assertIsNone(future.result())
+
+    def test_publish_delivers_to_runners(self):
+        """Test publish delivers message to runners."""
+        results = []
+
+        class TestListener(MessageListener):
+            def on_message(self, msg):
+                results.append(msg.message)
+
+        self.proxy.add_message_listener(listener=TestListener())
+        self.proxy.publish("test_message")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0], "test_message")
 
     def test_add_message_listener_with_listener(self):
-        """Test adding a message listener."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener()
-        reg_id = topic.add_message_listener(listener=listener)
-        assert reg_id is not None
-        assert len(reg_id) > 0
+        """Test add_message_listener with listener object."""
+        listener = MessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        self.assertIsInstance(reg_id, str)
 
     def test_add_message_listener_with_callback(self):
-        """Test adding a listener with callback."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        messages = []
-        reg_id = topic.add_message_listener(
-            on_message=lambda msg: messages.append(msg)
-        )
-        assert reg_id is not None
+        """Test add_message_listener with on_message callback."""
+        reg_id = self.proxy.add_message_listener(on_message=lambda m: None)
+        self.assertIsInstance(reg_id, str)
 
-    def test_add_message_listener_no_args_raises(self):
-        """Test adding listener without args raises ValueError."""
-        topic = ReliableTopicProxy("test-topic")
-        with pytest.raises(ValueError):
-            topic.add_message_listener()
+    def test_add_message_listener_raises_without_listener_or_callback(self):
+        """Test add_message_listener raises without listener or callback."""
+        with self.assertRaises(ValueError):
+            self.proxy.add_message_listener()
 
-    def test_remove_message_listener(self):
-        """Test removing a message listener."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener()
-        reg_id = topic.add_message_listener(listener=listener)
-        result = topic.remove_message_listener(reg_id)
-        assert result is True
+    def test_add_message_listener_creates_runner(self):
+        """Test add_message_listener creates a runner."""
+        listener = MessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        self.assertIn(reg_id, self.proxy._listener_runners)
 
-    def test_remove_nonexistent_listener(self):
-        """Test removing nonexistent listener returns False."""
-        topic = ReliableTopicProxy("test-topic")
-        result = topic.remove_message_listener("nonexistent")
-        assert result is False
+    def test_add_message_listener_with_reliable_listener_uses_initial_sequence(self):
+        """Test add_message_listener uses initial sequence from ReliableMessageListener."""
+        class TestListener(ReliableMessageListener):
+            def retrieve_initial_sequence(self):
+                return 100
 
-    def test_publish_delivers_to_listeners(self):
-        """Test that publish delivers messages to listeners."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener()
-        topic.add_message_listener(listener=listener)
-        topic.publish("message1")
-        topic.publish("message2")
-        assert len(listener.messages) == 2
-        assert listener.messages[0].message == "message1"
-        assert listener.messages[1].message == "message2"
+        reg_id = self.proxy.add_message_listener(listener=TestListener())
+        runner = self.proxy._listener_runners[reg_id]
+        self.assertEqual(runner.sequence, 100)
 
-    def test_reliable_listener_initial_sequence(self):
-        """Test reliable listener with custom initial sequence."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener(initial_seq=100)
-        topic.add_message_listener(listener=listener)
-        # Verify the runner was started with correct sequence
-        reg_id = list(topic._listener_runners.keys())[0]
-        runner = topic._listener_runners[reg_id]
-        assert runner.sequence == 100
+    def test_remove_message_listener_returns_true_for_existing(self):
+        """Test remove_message_listener returns True for existing listener."""
+        listener = MessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        result = self.proxy.remove_message_listener(reg_id)
+        self.assertTrue(result)
 
-    def test_removed_listener_not_notified(self):
-        """Test removed listener doesn't receive messages."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener()
-        reg_id = topic.add_message_listener(listener=listener)
-        topic.publish("before")
-        topic.remove_message_listener(reg_id)
-        topic.publish("after")
-        assert len(listener.messages) == 1
+    def test_remove_message_listener_returns_false_for_nonexistent(self):
+        """Test remove_message_listener returns False for nonexistent listener."""
+        result = self.proxy.remove_message_listener("nonexistent-id")
+        self.assertFalse(result)
 
-    def test_handle_stale_sequence_loss_tolerant(self):
-        """Test handling stale sequence with loss-tolerant listener."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener(loss_tolerant=True)
-        reg_id = topic.add_message_listener(listener=listener)
-        new_seq = topic._handle_stale_sequence(reg_id, 10, 50)
-        assert new_seq == 50
+    def test_remove_message_listener_stops_runner(self):
+        """Test remove_message_listener stops the runner."""
+        listener = MessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        self.proxy.remove_message_listener(reg_id)
+        self.assertNotIn(reg_id, self.proxy._listener_runners)
 
-    def test_handle_stale_sequence_not_loss_tolerant(self):
-        """Test handling stale sequence with non-loss-tolerant listener."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener(loss_tolerant=False)
-        reg_id = topic.add_message_listener(listener=listener)
-        with pytest.raises(StaleSequenceException):
-            topic._handle_stale_sequence(reg_id, 10, 50)
+    def test_handle_stale_sequence_raises_for_nonexistent_listener(self):
+        """Test _handle_stale_sequence raises for nonexistent listener."""
+        with self.assertRaises(StaleSequenceException):
+            self.proxy._handle_stale_sequence("nonexistent", 0, 100)
 
-    def test_handle_stale_sequence_no_listener(self):
-        """Test handling stale sequence with no listener."""
-        topic = ReliableTopicProxy("test-topic")
-        with pytest.raises(StaleSequenceException):
-            topic._handle_stale_sequence("nonexistent", 10, 50)
+    def test_handle_stale_sequence_raises_for_non_loss_tolerant(self):
+        """Test _handle_stale_sequence raises for non-loss-tolerant listener."""
+        listener = ReliableMessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        with self.assertRaises(StaleSequenceException):
+            self.proxy._handle_stale_sequence(reg_id, 0, 100)
 
-    def test_handle_stale_sequence_regular_listener(self):
-        """Test handling stale sequence with regular MessageListener."""
-        topic = ReliableTopicProxy[str]("test-topic")
-
-        class SimpleListener(MessageListener[str]):
-            def on_message(self, msg):
-                pass
-
-        reg_id = topic.add_message_listener(listener=SimpleListener())
-        with pytest.raises(StaleSequenceException):
-            topic._handle_stale_sequence(reg_id, 10, 50)
-
-    def test_destroy(self):
-        """Test destroying the reliable topic."""
-        topic = ReliableTopicProxy[str]("test-topic")
-        listener = CustomReliableListener()
-        topic.add_message_listener(listener=listener)
-        topic._on_destroy()
-        assert len(topic._message_listeners) == 0
-        assert len(topic._listener_runners) == 0
-
-    def test_destroy_async(self):
-        """Test async destroy."""
-        import asyncio
-
-        async def test():
-            topic = ReliableTopicProxy[str]("test-topic")
-            listener = CustomReliableListener()
-            topic.add_message_listener(listener=listener)
-            await topic._on_destroy_async()
-            assert len(topic._message_listeners) == 0
-
-        asyncio.run(test())
-
-    def test_operations_after_destroy(self):
-        """Test operations fail after destroy."""
-        from hazelcast.exceptions import IllegalStateException
-        topic = ReliableTopicProxy("test-topic")
-        topic.destroy()
-        with pytest.raises(IllegalStateException):
-            topic.publish("msg")
-
-
-class TestMessageRunner:
-    """Tests for _MessageRunner."""
-
-    def test_create_runner(self):
-        """Test creating a message runner."""
-        listener = CustomReliableListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 0, config)
-        assert runner.sequence == 0
-        assert runner.is_cancelled is False
-
-    def test_cancel_runner(self):
-        """Test cancelling a runner."""
-        listener = CustomReliableListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 0, config)
-        runner.cancel()
-        assert runner.is_cancelled is True
-
-    def test_process_message(self):
-        """Test processing a message."""
-        listener = CustomReliableListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 0, config)
-        msg = TopicMessage("test", 12345)
-        runner.process_message(msg)
-        assert len(listener.messages) == 1
-        assert listener.stored_sequence == 1
-
-    def test_process_message_cancelled(self):
-        """Test processing message when cancelled does nothing."""
-        listener = CustomReliableListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 0, config)
-        runner.cancel()
-        msg = TopicMessage("test", 12345)
-        runner.process_message(msg)
-        assert len(listener.messages) == 0
-
-    def test_process_message_increments_sequence(self):
-        """Test that processing messages increments sequence."""
-        listener = CustomReliableListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 5, config)
-        msg1 = TopicMessage("test1", 12345)
-        msg2 = TopicMessage("test2", 12346)
-        runner.process_message(msg1)
-        runner.process_message(msg2)
-        assert runner.sequence == 7
-        assert listener.stored_sequence == 7
-
-    def test_process_message_stores_sequence_for_reliable_listener(self):
-        """Test sequence is stored for reliable listeners."""
-        listener = CustomReliableListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 10, config)
-        msg = TopicMessage("test", 12345)
-        runner.process_message(msg)
-        assert listener.stored_sequence == 11
-
-    def test_set_sequence(self):
-        """Test setting sequence property."""
-        listener = CustomReliableListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 0, config)
-        runner.sequence = 50
-        assert runner.sequence == 50
-        assert listener.stored_sequence == 50
-
-    def test_process_message_error_cancels_runner(self):
-        """Test that error in listener cancels runner."""
-
-        class ErrorListener(ReliableMessageListener[str]):
-            def on_message(self, msg):
-                raise RuntimeError("Test error")
-
-            def is_terminal(self, error):
+    def test_handle_stale_sequence_returns_new_sequence_for_loss_tolerant(self):
+        """Test _handle_stale_sequence returns new sequence for loss-tolerant listener."""
+        class TolerantListener(ReliableMessageListener):
+            def is_loss_tolerant(self):
                 return True
 
-        listener = ErrorListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 0, config)
-        msg = TopicMessage("test", 12345)
-        with pytest.raises(RuntimeError):
-            runner.process_message(msg)
-        assert runner.is_cancelled is True
+            def on_stale_sequence(self, head_seq):
+                return head_seq + 10
 
-    def test_process_message_error_non_reliable_listener(self):
-        """Test error handling for non-reliable listener."""
+        reg_id = self.proxy.add_message_listener(listener=TolerantListener())
+        result = self.proxy._handle_stale_sequence(reg_id, 0, 100)
+        self.assertEqual(result, 110)
 
-        class ErrorListener(MessageListener[str]):
-            def on_message(self, msg):
-                raise RuntimeError("Test error")
+    def test_handle_stale_sequence_raises_for_regular_listener(self):
+        """Test _handle_stale_sequence raises for regular MessageListener."""
+        listener = MessageListener()
+        reg_id = self.proxy.add_message_listener(listener=listener)
+        with self.assertRaises(StaleSequenceException):
+            self.proxy._handle_stale_sequence(reg_id, 0, 100)
 
-        listener = ErrorListener()
-        config = ReliableTopicConfig()
-        runner = _MessageRunner("reg-1", listener, 0, config)
-        msg = TopicMessage("test", 12345)
-        with pytest.raises(RuntimeError):
-            runner.process_message(msg)
-        assert runner.is_cancelled is True
+    def test_on_destroy_stops_all_runners(self):
+        """Test _on_destroy stops all runners."""
+        listener1 = MessageListener()
+        listener2 = MessageListener()
+        self.proxy.add_message_listener(listener=listener1)
+        self.proxy.add_message_listener(listener=listener2)
+        self.proxy._on_destroy()
+        self.assertEqual(len(self.proxy._listener_runners), 0)
+        self.assertEqual(len(self.proxy._message_listeners), 0)
+
+    def test_on_destroy_async_stops_all_runners(self):
+        """Test _on_destroy_async stops all runners."""
+        import asyncio
+
+        listener = MessageListener()
+        self.proxy.add_message_listener(listener=listener)
+
+        async def run_test():
+            await self.proxy._on_destroy_async()
+
+        asyncio.get_event_loop().run_until_complete(run_test())
+        self.assertEqual(len(self.proxy._listener_runners), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

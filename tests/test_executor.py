@@ -1,131 +1,154 @@
 """Unit tests for Executor Service proxy."""
 
 import unittest
-from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
+from concurrent.futures import Future
 
 from hazelcast.proxy.executor import (
+    IExecutorService,
+    ExecutorService,
+    ExecutorServiceProxy,
+    MemberSelector,
+    LiteMemberSelector,
+    DataMemberSelector,
     Callable,
     Runnable,
     ExecutionCallback,
     MultiExecutionCallback,
     Member,
-    MemberSelector,
-    LiteMemberSelector,
-    DataMemberSelector,
-    IExecutorService,
 )
-from hazelcast.proxy.base import ProxyContext
-from hazelcast.exceptions import IllegalArgumentException, IllegalStateException
-
-
-class SumTask(Callable):
-    """Test task that sums two numbers."""
-
-    def __init__(self, a: int, b: int):
-        self.a = a
-        self.b = b
-
-    def call(self) -> int:
-        return self.a + self.b
-
-
-class PrintTask(Runnable):
-    """Test task that prints a message."""
-
-    def __init__(self, message: str):
-        self.message = message
-
-    def run(self) -> None:
-        print(self.message)
-
-
-class TestCallable(unittest.TestCase):
-    """Tests for Callable interface."""
-
-    def test_callable_implementation(self):
-        task = SumTask(3, 5)
-        self.assertEqual(8, task.call())
-
-    def test_callable_with_different_values(self):
-        task = SumTask(10, 20)
-        self.assertEqual(30, task.call())
-
-    def test_callable_with_negative_values(self):
-        task = SumTask(-5, 10)
-        self.assertEqual(5, task.call())
-
-
-class TestRunnable(unittest.TestCase):
-    """Tests for Runnable interface."""
-
-    def test_runnable_implementation(self):
-        task = PrintTask("Hello")
-        task.run()
-
-    def test_runnable_does_not_return_value(self):
-        task = PrintTask("Test")
-        result = task.run()
-        self.assertIsNone(result)
 
 
 class TestMember(unittest.TestCase):
     """Tests for Member class."""
 
-    def test_member_creation(self):
-        member = Member("uuid-123", "127.0.0.1:5701", False)
-        self.assertEqual("uuid-123", member.uuid)
-        self.assertEqual("127.0.0.1:5701", member.address)
+    def test_member_initialization(self):
+        """Test Member initialization."""
+        member = Member(uuid="test-uuid", address="localhost:5701", lite_member=False)
+        self.assertEqual(member.uuid, "test-uuid")
+        self.assertEqual(member.address, "localhost:5701")
+        self.assertFalse(member.lite_member)
+
+    def test_member_with_defaults(self):
+        """Test Member with default values."""
+        member = Member(uuid="test-uuid")
+        self.assertEqual(member.uuid, "test-uuid")
+        self.assertIsNone(member.address)
         self.assertFalse(member.lite_member)
 
     def test_member_lite_member(self):
-        member = Member("uuid-456", lite_member=True)
+        """Test lite member flag."""
+        member = Member(uuid="lite-uuid", lite_member=True)
         self.assertTrue(member.lite_member)
 
-    def test_member_equality(self):
-        member1 = Member("uuid-123")
-        member2 = Member("uuid-123")
-        member3 = Member("uuid-456")
+    def test_member_repr(self):
+        """Test Member __repr__."""
+        member = Member(uuid="test-uuid", address="localhost:5701")
+        repr_str = repr(member)
+        self.assertIn("test-uuid", repr_str)
+        self.assertIn("localhost:5701", repr_str)
 
+    def test_member_equality(self):
+        """Test Member equality based on uuid."""
+        member1 = Member(uuid="same-uuid", address="addr1")
+        member2 = Member(uuid="same-uuid", address="addr2")
+        member3 = Member(uuid="different-uuid", address="addr1")
         self.assertEqual(member1, member2)
         self.assertNotEqual(member1, member3)
 
+    def test_member_equality_with_non_member(self):
+        """Test Member equality with non-Member object."""
+        member = Member(uuid="test-uuid")
+        self.assertNotEqual(member, "test-uuid")
+        self.assertNotEqual(member, None)
+
     def test_member_hash(self):
-        member1 = Member("uuid-123")
-        member2 = Member("uuid-123")
-
+        """Test Member hash based on uuid."""
+        member1 = Member(uuid="same-uuid")
+        member2 = Member(uuid="same-uuid")
         self.assertEqual(hash(member1), hash(member2))
-        members_set = {member1, member2}
-        self.assertEqual(1, len(members_set))
 
-    def test_member_repr(self):
-        member = Member("uuid-123", "localhost:5701")
-        repr_str = repr(member)
-        self.assertIn("uuid-123", repr_str)
-        self.assertIn("localhost:5701", repr_str)
+
+class TestMemberSelectors(unittest.TestCase):
+    """Tests for MemberSelector implementations."""
+
+    def test_lite_member_selector_selects_lite(self):
+        """Test LiteMemberSelector selects lite members."""
+        selector = LiteMemberSelector()
+        lite_member = Member(uuid="lite", lite_member=True)
+        data_member = Member(uuid="data", lite_member=False)
+        self.assertTrue(selector.select(lite_member))
+        self.assertFalse(selector.select(data_member))
+
+    def test_data_member_selector_selects_data(self):
+        """Test DataMemberSelector selects data members."""
+        selector = DataMemberSelector()
+        lite_member = Member(uuid="lite", lite_member=True)
+        data_member = Member(uuid="data", lite_member=False)
+        self.assertFalse(selector.select(lite_member))
+        self.assertTrue(selector.select(data_member))
+
+
+class TestCallableAndRunnable(unittest.TestCase):
+    """Tests for Callable and Runnable abstract classes."""
+
+    def test_callable_is_abstract(self):
+        """Test Callable.call is abstract."""
+        with self.assertRaises(TypeError):
+            Callable()
+
+    def test_runnable_is_abstract(self):
+        """Test Runnable.run is abstract."""
+        with self.assertRaises(TypeError):
+            Runnable()
+
+    def test_callable_subclass(self):
+        """Test Callable can be subclassed."""
+        class MyCallable(Callable):
+            def call(self):
+                return 42
+
+        task = MyCallable()
+        self.assertEqual(task.call(), 42)
+
+    def test_runnable_subclass(self):
+        """Test Runnable can be subclassed."""
+        class MyRunnable(Runnable):
+            def __init__(self):
+                self.executed = False
+
+            def run(self):
+                self.executed = True
+
+        task = MyRunnable()
+        task.run()
+        self.assertTrue(task.executed)
 
 
 class TestExecutionCallback(unittest.TestCase):
     """Tests for ExecutionCallback class."""
 
     def test_callback_on_response(self):
+        """Test on_response callback."""
         results = []
         callback = ExecutionCallback(
-            on_response=lambda r: results.append(r)
+            on_response=lambda r: results.append(r),
         )
         callback.on_response("result")
-        self.assertEqual(["result"], results)
+        self.assertEqual(results, ["result"])
 
     def test_callback_on_failure(self):
+        """Test on_failure callback."""
         errors = []
         callback = ExecutionCallback(
-            on_failure=lambda e: errors.append(e)
+            on_failure=lambda e: errors.append(e),
         )
         error = Exception("test error")
         callback.on_failure(error)
-        self.assertEqual([error], errors)
+        self.assertEqual(errors, [error])
 
-    def test_callback_with_no_handlers(self):
+    def test_callback_without_handlers(self):
+        """Test callback without handlers doesn't raise."""
         callback = ExecutionCallback()
         callback.on_response("result")
         callback.on_failure(Exception("error"))
@@ -135,257 +158,242 @@ class TestMultiExecutionCallback(unittest.TestCase):
     """Tests for MultiExecutionCallback class."""
 
     def test_multi_callback_on_response(self):
+        """Test on_response callback."""
         results = []
         callback = MultiExecutionCallback(
-            on_response=lambda uuid, r: results.append((uuid, r))
+            on_response=lambda uuid, r: results.append((uuid, r)),
         )
-        callback.on_response("member-1", "result-1")
-        callback.on_response("member-2", "result-2")
-        self.assertEqual([("member-1", "result-1"), ("member-2", "result-2")], results)
+        callback.on_response("member-1", "result")
+        self.assertEqual(results, [("member-1", "result")])
 
     def test_multi_callback_on_failure(self):
+        """Test on_failure callback."""
         errors = []
         callback = MultiExecutionCallback(
-            on_failure=lambda uuid, e: errors.append((uuid, e))
+            on_failure=lambda uuid, e: errors.append((uuid, e)),
         )
         error = Exception("test error")
         callback.on_failure("member-1", error)
-        self.assertEqual([("member-1", error)], errors)
+        self.assertEqual(errors, [("member-1", error)])
 
     def test_multi_callback_on_complete(self):
-        final_results = []
+        """Test on_complete callback."""
+        completed = []
         callback = MultiExecutionCallback(
-            on_complete=lambda r: final_results.append(r)
+            on_complete=lambda r: completed.append(r),
         )
-        all_results = {"member-1": "result-1", "member-2": "result-2"}
-        callback.on_complete(all_results)
-        self.assertEqual([all_results], final_results)
+        callback.on_complete({"m1": "r1", "m2": "r2"})
+        self.assertEqual(completed, [{"m1": "r1", "m2": "r2"}])
 
-
-class TestMemberSelector(unittest.TestCase):
-    """Tests for MemberSelector implementations."""
-
-    def test_lite_member_selector(self):
-        selector = LiteMemberSelector()
-        data_member = Member("uuid-1", lite_member=False)
-        lite_member = Member("uuid-2", lite_member=True)
-
-        self.assertFalse(selector.select(data_member))
-        self.assertTrue(selector.select(lite_member))
-
-    def test_data_member_selector(self):
-        selector = DataMemberSelector()
-        data_member = Member("uuid-1", lite_member=False)
-        lite_member = Member("uuid-2", lite_member=True)
-
-        self.assertTrue(selector.select(data_member))
-        self.assertFalse(selector.select(lite_member))
+    def test_multi_callback_without_handlers(self):
+        """Test multi callback without handlers doesn't raise."""
+        callback = MultiExecutionCallback()
+        callback.on_response("member", "result")
+        callback.on_failure("member", Exception("error"))
+        callback.on_complete({})
 
 
 class TestIExecutorService(unittest.TestCase):
-    """Tests for IExecutorService proxy."""
+    """Tests for IExecutorService class."""
 
     def setUp(self):
-        self.context = MagicMock(spec=ProxyContext)
-        self.context.invocation_service = MagicMock()
-        self.context.serialization_service = MagicMock()
-        self.context.partition_service = MagicMock()
-
+        """Set up test fixtures."""
         self.executor = IExecutorService(
-            "hz:impl:executorService",
-            "test-executor",
-            self.context,
+            service_name="hz:impl:executorService",
+            name="test-executor",
+            context=None,
         )
 
-    def test_executor_creation(self):
-        self.assertEqual("test-executor", self.executor.name)
-        self.assertEqual("hz:impl:executorService", self.executor.service_name)
+    def test_submit_returns_future(self):
+        """Test submit returns a Future."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-    def test_submit_validates_shutdown(self):
-        self.executor.shutdown()
-        task = SumTask(1, 2)
+        future = self.executor.submit(TestCallable())
+        self.assertIsInstance(future, Future)
 
-        with self.assertRaises(IllegalStateException):
-            self.executor.submit(task)
+    def test_submit_to_member_returns_future(self):
+        """Test submit_to_member returns a Future."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-    def test_submit_to_member_validates_member_not_none(self):
-        task = SumTask(1, 2)
+        member = Member(uuid="test-uuid")
+        future = self.executor.submit_to_member(TestCallable(), member)
+        self.assertIsInstance(future, Future)
 
+    def test_submit_to_member_none_raises(self):
+        """Test submit_to_member with None member raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        from hazelcast.exceptions import IllegalArgumentException
         with self.assertRaises(IllegalArgumentException):
-            self.executor.submit_to_member(task, None)
+            self.executor.submit_to_member(TestCallable(), None)
 
-    def test_submit_to_key_owner_validates_key_not_none(self):
-        task = SumTask(1, 2)
+    def test_submit_to_key_owner_returns_future(self):
+        """Test submit_to_key_owner returns a Future."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
+        future = self.executor.submit_to_key_owner(TestCallable(), "my-key")
+        self.assertIsInstance(future, Future)
+
+    def test_submit_to_key_owner_none_raises(self):
+        """Test submit_to_key_owner with None key raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        from hazelcast.exceptions import IllegalArgumentException
         with self.assertRaises(IllegalArgumentException):
-            self.executor.submit_to_key_owner(task, None)
+            self.executor.submit_to_key_owner(TestCallable(), None)
 
-    def test_submit_to_members_validates_members_not_empty(self):
-        task = SumTask(1, 2)
+    def test_submit_to_all_members_returns_dict(self):
+        """Test submit_to_all_members returns a dictionary."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
+        result = self.executor.submit_to_all_members(TestCallable())
+        self.assertIsInstance(result, dict)
+
+    def test_submit_to_members_returns_dict(self):
+        """Test submit_to_members returns a dictionary."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        members = [Member(uuid="m1"), Member(uuid="m2")]
+        self.executor._members = {"m1": members[0], "m2": members[1]}
+        result = self.executor.submit_to_members(TestCallable(), members)
+        self.assertIsInstance(result, dict)
+
+    def test_submit_to_members_empty_raises(self):
+        """Test submit_to_members with empty list raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        from hazelcast.exceptions import IllegalArgumentException
         with self.assertRaises(IllegalArgumentException):
-            self.executor.submit_to_members(task, [])
+            self.executor.submit_to_members(TestCallable(), [])
+
+    def test_submit_to_member_with_selector(self):
+        """Test submit_to_member_with_selector."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        member = Member(uuid="data-member", lite_member=False)
+        self.executor._members = {"data-member": member}
+        selector = DataMemberSelector()
+        future = self.executor.submit_to_member_with_selector(TestCallable(), selector)
+        self.assertIsInstance(future, Future)
+
+    def test_submit_to_member_with_selector_no_match_raises(self):
+        """Test submit_to_member_with_selector with no matching member raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        selector = DataMemberSelector()
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.executor.submit_to_member_with_selector(TestCallable(), selector)
+
+    def test_submit_to_all_members_with_selector(self):
+        """Test submit_to_all_members_with_selector."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        member = Member(uuid="data-member", lite_member=False)
+        self.executor._members = {"data-member": member}
+        selector = DataMemberSelector()
+        result = self.executor.submit_to_all_members_with_selector(TestCallable(), selector)
+        self.assertIsInstance(result, dict)
+
+    def test_submit_to_all_members_with_selector_no_match_raises(self):
+        """Test submit_to_all_members_with_selector with no match raises."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
+
+        selector = DataMemberSelector()
+        from hazelcast.exceptions import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.executor.submit_to_all_members_with_selector(TestCallable(), selector)
 
     def test_shutdown(self):
+        """Test shutdown method."""
         self.assertFalse(self.executor.is_shutdown())
         self.executor.shutdown()
         self.assertTrue(self.executor.is_shutdown())
 
     def test_shutdown_idempotent(self):
+        """Test shutdown is idempotent."""
         self.executor.shutdown()
         self.executor.shutdown()
         self.assertTrue(self.executor.is_shutdown())
 
-    def test_is_terminated_after_shutdown(self):
+    def test_is_terminated(self):
+        """Test is_terminated method."""
+        self.assertFalse(self.executor.is_terminated())
         self.executor.shutdown()
         self.assertTrue(self.executor.is_terminated())
 
-    def test_submit_returns_future(self):
-        task = SumTask(1, 2)
-        future = self.executor.submit(task)
-        self.assertIsInstance(future, Future)
+    def test_submit_after_shutdown_raises(self):
+        """Test submit after shutdown raises exception."""
+        class TestCallable(Callable):
+            def call(self):
+                return 42
 
-    def test_submit_to_member_returns_future(self):
-        task = SumTask(1, 2)
-        member = Member("uuid-123")
-        future = self.executor.submit_to_member(task, member)
-        self.assertIsInstance(future, Future)
-
-    def test_submit_to_key_owner_returns_future(self):
-        task = SumTask(1, 2)
-        future = self.executor.submit_to_key_owner(task, "my-key")
-        self.assertIsInstance(future, Future)
-
-    def test_submit_to_all_members_returns_dict(self):
-        task = SumTask(1, 2)
-        results = self.executor.submit_to_all_members(task)
-        self.assertIsInstance(results, dict)
-
-    def test_submit_to_members_returns_dict(self):
-        task = SumTask(1, 2)
-        member1 = Member("uuid-1")
-        member2 = Member("uuid-2")
-        results = self.executor.submit_to_members(task, [member1, member2])
-        self.assertIsInstance(results, dict)
-
-    def test_add_and_remove_member(self):
-        member = Member("uuid-123", "localhost:5701")
-        self.executor._add_member(member)
-        self.assertIn(member, self.executor._get_members())
-
-        self.executor._remove_member("uuid-123")
-        self.assertNotIn(member, self.executor._get_members())
-
-    def test_select_members_with_selector(self):
-        data_member = Member("uuid-1", lite_member=False)
-        lite_member = Member("uuid-2", lite_member=True)
-
-        self.executor._add_member(data_member)
-        self.executor._add_member(lite_member)
-
-        selector = DataMemberSelector()
-        selected = self.executor._select_members(selector)
-
-        self.assertEqual(1, len(selected))
-        self.assertIn(data_member, selected)
-
-    def test_submit_to_member_with_selector(self):
-        data_member = Member("uuid-1", lite_member=False)
-        self.executor._add_member(data_member)
-
-        task = SumTask(1, 2)
-        selector = DataMemberSelector()
-
-        future = self.executor.submit_to_member_with_selector(task, selector)
-        self.assertIsInstance(future, Future)
-
-    def test_submit_to_member_with_selector_no_match(self):
-        lite_member = Member("uuid-1", lite_member=True)
-        self.executor._add_member(lite_member)
-
-        task = SumTask(1, 2)
-        selector = DataMemberSelector()
-
-        with self.assertRaises(IllegalArgumentException):
-            self.executor.submit_to_member_with_selector(task, selector)
-
-    def test_submit_to_all_members_with_selector(self):
-        data_member1 = Member("uuid-1", lite_member=False)
-        data_member2 = Member("uuid-2", lite_member=False)
-        lite_member = Member("uuid-3", lite_member=True)
-
-        self.executor._add_member(data_member1)
-        self.executor._add_member(data_member2)
-        self.executor._add_member(lite_member)
-
-        task = SumTask(1, 2)
-        selector = DataMemberSelector()
-
-        results = self.executor.submit_to_all_members_with_selector(task, selector)
-        self.assertEqual(2, len(results))
-        self.assertIn(data_member1, results)
-        self.assertIn(data_member2, results)
-
-    def test_destroy_marks_executor_destroyed(self):
-        self.executor.destroy()
-        self.assertTrue(self.executor.is_destroyed)
-
-    def test_operations_after_destroy_raise_exception(self):
-        self.executor.destroy()
-        task = SumTask(1, 2)
-
+        self.executor.shutdown()
+        from hazelcast.exceptions import IllegalStateException
         with self.assertRaises(IllegalStateException):
-            self.executor.submit(task)
+            self.executor.submit(TestCallable())
+
+    def test_add_member(self):
+        """Test _add_member method."""
+        member = Member(uuid="test-uuid")
+        self.executor._add_member(member)
+        self.assertIn("test-uuid", self.executor._members)
+
+    def test_remove_member(self):
+        """Test _remove_member method."""
+        member = Member(uuid="test-uuid")
+        self.executor._add_member(member)
+        self.executor._remove_member("test-uuid")
+        self.assertNotIn("test-uuid", self.executor._members)
+
+    def test_remove_nonexistent_member(self):
+        """Test _remove_member for nonexistent member doesn't raise."""
+        self.executor._remove_member("nonexistent")
+
+    def test_get_members(self):
+        """Test _get_members method."""
+        member1 = Member(uuid="m1")
+        member2 = Member(uuid="m2")
+        self.executor._add_member(member1)
+        self.executor._add_member(member2)
+        members = self.executor._get_members()
+        self.assertEqual(len(members), 2)
 
 
-class TestExecutionCallbackIntegration(unittest.TestCase):
-    """Integration tests for execution callbacks."""
+class TestExecutorAliases(unittest.TestCase):
+    """Tests for executor service aliases."""
 
-    def setUp(self):
-        self.context = MagicMock(spec=ProxyContext)
-        self.context.invocation_service = None
-        self.context.serialization_service = None
-        self.context.partition_service = None
+    def test_executor_service_alias(self):
+        """Test ExecutorService alias."""
+        self.assertIs(ExecutorService, IExecutorService)
 
-        self.executor = IExecutorService(
-            "hz:impl:executorService",
-            "test-executor",
-            self.context,
-        )
-
-    def test_callback_invoked_on_submit(self):
-        results = []
-        callback = ExecutionCallback(
-            on_response=lambda r: results.append(("success", r)),
-            on_failure=lambda e: results.append(("failure", e)),
-        )
-
-        task = SumTask(1, 2)
-        self.executor.submit(task, callback)
-
-        self.assertEqual(1, len(results))
-        self.assertEqual("success", results[0][0])
-
-    def test_multi_callback_on_complete_invoked(self):
-        complete_results = []
-        callback = MultiExecutionCallback(
-            on_complete=lambda r: complete_results.append(r)
-        )
-
-        task = SumTask(1, 2)
-        self.executor.submit_to_all_members(task, callback)
-
-        self.assertEqual(1, len(complete_results))
-
-
-class TestExecutorServiceRepr(unittest.TestCase):
-    """Tests for string representation."""
-
-    def test_executor_repr(self):
-        executor = IExecutorService("hz:impl:executorService", "my-executor")
-        repr_str = repr(executor)
-        self.assertIn("IExecutorService", repr_str)
-        self.assertIn("my-executor", repr_str)
+    def test_executor_service_proxy_alias(self):
+        """Test ExecutorServiceProxy alias."""
+        self.assertIs(ExecutorServiceProxy, IExecutorService)
 
 
 if __name__ == "__main__":

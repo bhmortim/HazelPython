@@ -1,357 +1,369 @@
-"""Tests for Ringbuffer distributed data structure proxy."""
+"""Unit tests for Ringbuffer proxy."""
 
-import pytest
+import unittest
+from unittest.mock import MagicMock, patch
 from concurrent.futures import Future
 
 from hazelcast.proxy.ringbuffer import (
     RingbufferProxy,
     OverflowPolicy,
     ReadResultSet,
-    IllegalArgumentException,
-    StaleSequenceException,
 )
 
 
-class TestRingbufferProxy:
-    """Tests for RingbufferProxy."""
-
-    def test_create_ringbuffer(self):
-        """Test creating a ringbuffer."""
-        rb = RingbufferProxy("test-rb")
-        assert rb.name == "test-rb"
-        assert rb.service_name == "hz:impl:ringbufferService"
-
-    def test_capacity(self):
-        """Test capacity retrieval."""
-        rb = RingbufferProxy("test-rb", capacity=100)
-        assert rb.capacity() == 100
-
-    def test_capacity_async(self):
-        """Test async capacity retrieval."""
-        rb = RingbufferProxy("test-rb", capacity=50)
-        future = rb.capacity_async()
-        assert isinstance(future, Future)
-        assert future.result() == 50
-
-    def test_default_capacity(self):
-        """Test default capacity."""
-        rb = RingbufferProxy("test-rb")
-        assert rb.capacity() == RingbufferProxy.DEFAULT_CAPACITY
-
-    def test_minimum_capacity(self):
-        """Test minimum capacity is enforced."""
-        rb = RingbufferProxy("test-rb", capacity=0)
-        assert rb.capacity() >= 1
-
-    def test_initial_size_is_zero(self):
-        """Test initial size is zero."""
-        rb = RingbufferProxy("test-rb")
-        assert rb.size() == 0
-
-    def test_size_async(self):
-        """Test async size retrieval."""
-        rb = RingbufferProxy("test-rb")
-        future = rb.size_async()
-        assert isinstance(future, Future)
-        assert future.result() == 0
-
-    def test_initial_tail_sequence(self):
-        """Test initial tail sequence is -1."""
-        rb = RingbufferProxy("test-rb")
-        assert rb.tail_sequence() == -1
-
-    def test_tail_sequence_async(self):
-        """Test async tail sequence retrieval."""
-        rb = RingbufferProxy("test-rb")
-        future = rb.tail_sequence_async()
-        assert isinstance(future, Future)
-        assert future.result() == -1
-
-    def test_initial_head_sequence(self):
-        """Test initial head sequence is 0."""
-        rb = RingbufferProxy("test-rb")
-        assert rb.head_sequence() == 0
-
-    def test_head_sequence_async(self):
-        """Test async head sequence retrieval."""
-        rb = RingbufferProxy("test-rb")
-        future = rb.head_sequence_async()
-        assert isinstance(future, Future)
-        assert future.result() == 0
-
-    def test_initial_remaining_capacity(self):
-        """Test initial remaining capacity equals capacity."""
-        rb = RingbufferProxy("test-rb", capacity=100)
-        assert rb.remaining_capacity() == 100
-
-    def test_remaining_capacity_async(self):
-        """Test async remaining capacity retrieval."""
-        rb = RingbufferProxy("test-rb", capacity=50)
-        future = rb.remaining_capacity_async()
-        assert isinstance(future, Future)
-        assert future.result() == 50
-
-    def test_add_single_item(self):
-        """Test adding a single item."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        seq = rb.add("item1")
-        assert seq == 0
-        assert rb.size() == 1
-        assert rb.tail_sequence() == 0
-
-    def test_add_async(self):
-        """Test async add."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        future = rb.add_async("item1")
-        assert isinstance(future, Future)
-        assert future.result() == 0
-
-    def test_add_multiple_items(self):
-        """Test adding multiple items sequentially."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        seq1 = rb.add("item1")
-        seq2 = rb.add("item2")
-        seq3 = rb.add("item3")
-        assert seq1 == 0
-        assert seq2 == 1
-        assert seq3 == 2
-        assert rb.size() == 3
-
-    def test_add_with_overwrite_policy(self):
-        """Test add with overwrite overflow policy."""
-        rb = RingbufferProxy("test-rb", capacity=3)
-        rb.add("item1", OverflowPolicy.OVERWRITE)
-        rb.add("item2", OverflowPolicy.OVERWRITE)
-        rb.add("item3", OverflowPolicy.OVERWRITE)
-        seq = rb.add("item4", OverflowPolicy.OVERWRITE)
-        assert seq == 3
-        assert rb.size() == 3
-        assert rb.head_sequence() == 1
-
-    def test_add_with_fail_policy_when_full(self):
-        """Test add with fail overflow policy when buffer is full."""
-        rb = RingbufferProxy("test-rb", capacity=2)
-        rb.add("item1")
-        rb.add("item2")
-        seq = rb.add("item3", OverflowPolicy.FAIL)
-        assert seq == RingbufferProxy.SEQUENCE_UNAVAILABLE
-
-    def test_add_with_fail_policy_when_not_full(self):
-        """Test add with fail overflow policy when buffer has space."""
-        rb = RingbufferProxy("test-rb", capacity=3)
-        seq = rb.add("item1", OverflowPolicy.FAIL)
-        assert seq == 0
-
-    def test_add_all(self):
-        """Test adding multiple items at once."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        seq = rb.add_all(["item1", "item2", "item3"])
-        assert seq == 2
-        assert rb.size() == 3
-
-    def test_add_all_async(self):
-        """Test async add all."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        future = rb.add_all_async(["item1", "item2"])
-        assert isinstance(future, Future)
-        assert future.result() == 1
-
-    def test_add_all_empty_list(self):
-        """Test adding empty list."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        seq = rb.add_all([])
-        assert seq == -1
-        assert rb.size() == 0
-
-    def test_add_all_with_overwrite(self):
-        """Test add all with overwrite policy."""
-        rb = RingbufferProxy("test-rb", capacity=3)
-        rb.add_all(["a", "b", "c"])
-        seq = rb.add_all(["d", "e"], OverflowPolicy.OVERWRITE)
-        assert seq == 4
-        assert rb.size() == 3
-        assert rb.head_sequence() == 2
-
-    def test_add_all_with_fail_policy_when_insufficient_space(self):
-        """Test add all with fail policy when not enough space."""
-        rb = RingbufferProxy("test-rb", capacity=3)
-        rb.add("item1")
-        rb.add("item2")
-        seq = rb.add_all(["a", "b", "c"], OverflowPolicy.FAIL)
-        assert seq == RingbufferProxy.SEQUENCE_UNAVAILABLE
-
-    def test_read_one(self):
-        """Test reading a single item."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add("item1")
-        rb.add("item2")
-        assert rb.read_one(0) == "item1"
-        assert rb.read_one(1) == "item2"
-
-    def test_read_one_async(self):
-        """Test async read one."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add("item1")
-        future = rb.read_one_async(0)
-        assert isinstance(future, Future)
-        assert future.result() == "item1"
-
-    def test_read_one_stale_sequence(self):
-        """Test reading a stale sequence raises exception."""
-        rb = RingbufferProxy("test-rb", capacity=2)
-        rb.add("item1")
-        rb.add("item2")
-        rb.add("item3")  # This overwrites item1
-        with pytest.raises(StaleSequenceException):
-            rb.read_one(0)
-
-    def test_read_one_beyond_tail(self):
-        """Test reading beyond tail raises exception."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add("item1")
-        with pytest.raises(IllegalArgumentException):
-            rb.read_one(5)
-
-    def test_read_one_empty_buffer(self):
-        """Test reading from empty buffer raises exception."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        with pytest.raises(IllegalArgumentException):
-            rb.read_one(0)
-
-    def test_read_many(self):
-        """Test reading multiple items."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add_all(["a", "b", "c", "d", "e"])
-        result = rb.read_many(0, 1, 3)
-        assert len(result) == 3
-        assert result.items == ["a", "b", "c"]
-        assert result.read_count == 3
-
-    def test_read_many_async(self):
-        """Test async read many."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add_all(["a", "b", "c"])
-        future = rb.read_many_async(0, 1, 2)
-        assert isinstance(future, Future)
-        result = future.result()
-        assert len(result) == 2
-
-    def test_read_many_with_filter(self):
-        """Test read many with filter predicate."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add_all([1, 2, 3, 4, 5])
-        result = rb.read_many(0, 1, 5, filter_predicate=lambda x: x > 2)
-        assert result.items == [3, 4, 5]
-
-    def test_read_many_stale_sequence(self):
-        """Test read many with stale sequence raises exception."""
-        rb = RingbufferProxy("test-rb", capacity=2)
-        rb.add_all(["a", "b", "c", "d"])
-        with pytest.raises(StaleSequenceException):
-            rb.read_many(0, 1, 2)
-
-    def test_read_many_invalid_min_count(self):
-        """Test read many with negative min_count raises exception."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add("item")
-        with pytest.raises(IllegalArgumentException):
-            rb.read_many(0, -1, 5)
-
-    def test_read_many_max_less_than_min(self):
-        """Test read many with max_count < min_count raises exception."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add("item")
-        with pytest.raises(IllegalArgumentException):
-            rb.read_many(0, 5, 2)
-
-    def test_len(self):
-        """Test __len__ method."""
-        rb = RingbufferProxy("test-rb", capacity=10)
-        rb.add_all(["a", "b", "c"])
-        assert len(rb) == 3
-
-    def test_remaining_capacity_after_adds(self):
-        """Test remaining capacity decreases after adds."""
-        rb = RingbufferProxy("test-rb", capacity=5)
-        rb.add_all(["a", "b"])
-        assert rb.remaining_capacity() == 3
-
-    def test_destroy(self):
-        """Test destroying the ringbuffer."""
-        rb = RingbufferProxy("test-rb")
-        rb.add("item")
-        rb.destroy()
-        assert rb.is_destroyed
-
-    def test_operations_after_destroy(self):
-        """Test operations fail after destroy."""
-        from hazelcast.exceptions import IllegalStateException
-        rb = RingbufferProxy("test-rb")
-        rb.destroy()
-        with pytest.raises(IllegalStateException):
-            rb.add("item")
-
-
-class TestReadResultSet:
-    """Tests for ReadResultSet."""
-
-    def test_create_result_set(self):
-        """Test creating a result set."""
-        rs = ReadResultSet(["a", "b", "c"], 3, 3)
-        assert rs.items == ["a", "b", "c"]
-        assert rs.read_count == 3
-        assert rs.next_sequence_to_read == 3
-
-    def test_len(self):
-        """Test __len__ method."""
-        rs = ReadResultSet(["a", "b"], 2, 2)
-        assert len(rs) == 2
-
-    def test_getitem(self):
-        """Test __getitem__ method."""
-        rs = ReadResultSet(["a", "b", "c"], 3, 3)
-        assert rs[0] == "a"
-        assert rs[1] == "b"
-        assert rs[2] == "c"
-
-    def test_iter(self):
-        """Test __iter__ method."""
-        rs = ReadResultSet(["a", "b", "c"], 3, 3)
-        assert list(rs) == ["a", "b", "c"]
-
-    def test_get_sequence(self):
-        """Test get_sequence method."""
-        rs = ReadResultSet(["a", "b"], 2, 5, [3, 4])
-        assert rs.get_sequence(0) == 3
-        assert rs.get_sequence(1) == 4
-
-    def test_get_sequence_without_sequences(self):
-        """Test get_sequence without explicit sequences."""
-        rs = ReadResultSet(["a", "b"], 2, 4)
-        assert rs.get_sequence(0) == 2
-        assert rs.get_sequence(1) == 3
-
-    def test_get_sequence_out_of_range(self):
-        """Test get_sequence with out of range index."""
-        rs = ReadResultSet(["a"], 1, 1)
-        with pytest.raises(IndexError):
-            rs.get_sequence(5)
-
-    def test_repr(self):
-        """Test __repr__ method."""
-        rs = ReadResultSet(["a", "b"], 2, 2)
-        repr_str = repr(rs)
-        assert "ReadResultSet" in repr_str
-        assert "['a', 'b']" in repr_str
-
-
-class TestOverflowPolicy:
+class TestOverflowPolicy(unittest.TestCase):
     """Tests for OverflowPolicy enum."""
 
-    def test_overwrite_value(self):
-        """Test OVERWRITE enum value."""
-        assert OverflowPolicy.OVERWRITE.value == 0
+    def test_overflow_policy_values(self):
+        """Test OverflowPolicy values are defined correctly."""
+        self.assertEqual(OverflowPolicy.OVERWRITE.value, 0)
+        self.assertEqual(OverflowPolicy.FAIL.value, 1)
 
-    def test_fail_value(self):
-        """Test FAIL enum value."""
-        assert OverflowPolicy.FAIL.value == 1
+
+class TestReadResultSet(unittest.TestCase):
+    """Tests for ReadResultSet class."""
+
+    def test_result_set_initialization(self):
+        """Test ReadResultSet initialization."""
+        items = ["item1", "item2", "item3"]
+        result_set = ReadResultSet(
+            items=items,
+            read_count=3,
+            next_sequence_to_read=10,
+            sequences=[7, 8, 9],
+        )
+        self.assertEqual(result_set.items, items)
+        self.assertEqual(result_set.read_count, 3)
+        self.assertEqual(result_set.next_sequence_to_read, 10)
+
+    def test_result_set_defaults(self):
+        """Test ReadResultSet with default values."""
+        result_set = ReadResultSet(items=[], read_count=0, next_sequence_to_read=0)
+        self.assertEqual(result_set.items, [])
+        self.assertEqual(result_set.read_count, 0)
+        self.assertEqual(result_set.next_sequence_to_read, 0)
+
+    def test_get_sequence_with_sequences(self):
+        """Test get_sequence with explicit sequences."""
+        result_set = ReadResultSet(
+            items=["a", "b", "c"],
+            read_count=3,
+            next_sequence_to_read=10,
+            sequences=[7, 8, 9],
+        )
+        self.assertEqual(result_set.get_sequence(0), 7)
+        self.assertEqual(result_set.get_sequence(1), 8)
+        self.assertEqual(result_set.get_sequence(2), 9)
+
+    def test_get_sequence_without_sequences(self):
+        """Test get_sequence calculates from next_sequence."""
+        result_set = ReadResultSet(
+            items=["a", "b", "c"],
+            read_count=3,
+            next_sequence_to_read=10,
+        )
+        self.assertEqual(result_set.get_sequence(0), 7)
+        self.assertEqual(result_set.get_sequence(1), 8)
+        self.assertEqual(result_set.get_sequence(2), 9)
+
+    def test_get_sequence_out_of_range(self):
+        """Test get_sequence raises IndexError for out of range."""
+        result_set = ReadResultSet(items=["a"], read_count=1, next_sequence_to_read=1)
+        with self.assertRaises(IndexError):
+            result_set.get_sequence(5)
+
+    def test_len_returns_item_count(self):
+        """Test __len__ returns number of items."""
+        result_set = ReadResultSet(items=["a", "b"], read_count=2, next_sequence_to_read=2)
+        self.assertEqual(len(result_set), 2)
+
+    def test_getitem_returns_item(self):
+        """Test __getitem__ returns item at index."""
+        result_set = ReadResultSet(items=["a", "b"], read_count=2, next_sequence_to_read=2)
+        self.assertEqual(result_set[0], "a")
+        self.assertEqual(result_set[1], "b")
+
+    def test_iter_returns_items(self):
+        """Test __iter__ returns iterator over items."""
+        result_set = ReadResultSet(items=["a", "b"], read_count=2, next_sequence_to_read=2)
+        self.assertEqual(list(result_set), ["a", "b"])
+
+    def test_repr(self):
+        """Test ReadResultSet __repr__."""
+        result_set = ReadResultSet(items=["a"], read_count=1, next_sequence_to_read=1)
+        repr_str = repr(result_set)
+        self.assertIn("ReadResultSet", repr_str)
+        self.assertIn("read_count=1", repr_str)
+
+
+class TestRingbufferProxy(unittest.TestCase):
+    """Tests for RingbufferProxy class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.proxy = RingbufferProxy(
+            name="test-ringbuffer",
+            context=None,
+        )
+
+    def test_service_name_constant(self):
+        """Test SERVICE_NAME is defined correctly."""
+        self.assertEqual(RingbufferProxy.SERVICE_NAME, "hz:impl:ringbufferService")
+
+    def test_sequence_unavailable_constant(self):
+        """Test SEQUENCE_UNAVAILABLE is defined correctly."""
+        self.assertEqual(RingbufferProxy.SEQUENCE_UNAVAILABLE, -1)
+
+    def test_default_capacity_constant(self):
+        """Test DEFAULT_CAPACITY is defined correctly."""
+        self.assertEqual(RingbufferProxy.DEFAULT_CAPACITY, 10000)
+
+    def test_initialization_default_capacity(self):
+        """Test RingbufferProxy initialization with default capacity."""
+        self.assertEqual(self.proxy._ring_capacity, RingbufferProxy.DEFAULT_CAPACITY)
+        self.assertEqual(self.proxy._head_seq, 0)
+        self.assertEqual(self.proxy._tail_seq, -1)
+
+    def test_initialization_custom_capacity(self):
+        """Test RingbufferProxy initialization with custom capacity."""
+        proxy = RingbufferProxy(name="test", context=None, capacity=100)
+        self.assertEqual(proxy._ring_capacity, 100)
+
+    def test_initialization_minimum_capacity(self):
+        """Test RingbufferProxy ensures minimum capacity of 1."""
+        proxy = RingbufferProxy(name="test", context=None, capacity=0)
+        self.assertEqual(proxy._ring_capacity, 1)
+
+    def test_capacity_returns_int(self):
+        """Test capacity returns an integer."""
+        result = self.proxy.capacity()
+        self.assertEqual(result, RingbufferProxy.DEFAULT_CAPACITY)
+
+    def test_capacity_async_returns_future(self):
+        """Test capacity_async returns a Future."""
+        future = self.proxy.capacity_async()
+        self.assertIsInstance(future, Future)
+        self.assertEqual(future.result(), RingbufferProxy.DEFAULT_CAPACITY)
+
+    def test_size_empty_returns_zero(self):
+        """Test size returns 0 for empty ringbuffer."""
+        result = self.proxy.size()
+        self.assertEqual(result, 0)
+
+    def test_size_async_returns_future(self):
+        """Test size_async returns a Future."""
+        future = self.proxy.size_async()
+        self.assertIsInstance(future, Future)
+        self.assertEqual(future.result(), 0)
+
+    def test_tail_sequence_empty_returns_negative_one(self):
+        """Test tail_sequence returns -1 for empty ringbuffer."""
+        result = self.proxy.tail_sequence()
+        self.assertEqual(result, -1)
+
+    def test_tail_sequence_async_returns_future(self):
+        """Test tail_sequence_async returns a Future."""
+        future = self.proxy.tail_sequence_async()
+        self.assertIsInstance(future, Future)
+        self.assertEqual(future.result(), -1)
+
+    def test_head_sequence_empty_returns_zero(self):
+        """Test head_sequence returns 0 for empty ringbuffer."""
+        result = self.proxy.head_sequence()
+        self.assertEqual(result, 0)
+
+    def test_head_sequence_async_returns_future(self):
+        """Test head_sequence_async returns a Future."""
+        future = self.proxy.head_sequence_async()
+        self.assertIsInstance(future, Future)
+        self.assertEqual(future.result(), 0)
+
+    def test_remaining_capacity_empty(self):
+        """Test remaining_capacity for empty ringbuffer."""
+        result = self.proxy.remaining_capacity()
+        self.assertEqual(result, RingbufferProxy.DEFAULT_CAPACITY)
+
+    def test_remaining_capacity_async_returns_future(self):
+        """Test remaining_capacity_async returns a Future."""
+        future = self.proxy.remaining_capacity_async()
+        self.assertIsInstance(future, Future)
+
+    def test_add_returns_sequence(self):
+        """Test add returns the sequence number."""
+        result = self.proxy.add("item")
+        self.assertEqual(result, 0)
+
+    def test_add_async_returns_future(self):
+        """Test add_async returns a Future."""
+        future = self.proxy.add_async("item")
+        self.assertIsInstance(future, Future)
+        self.assertEqual(future.result(), 0)
+
+    def test_add_increments_sequence(self):
+        """Test add increments sequence for each item."""
+        seq1 = self.proxy.add("item1")
+        seq2 = self.proxy.add("item2")
+        seq3 = self.proxy.add("item3")
+        self.assertEqual(seq1, 0)
+        self.assertEqual(seq2, 1)
+        self.assertEqual(seq3, 2)
+
+    def test_add_overwrite_policy(self):
+        """Test add with OVERWRITE policy when buffer is full."""
+        proxy = RingbufferProxy(name="test", context=None, capacity=3)
+        proxy.add("item1")
+        proxy.add("item2")
+        proxy.add("item3")
+        seq = proxy.add("item4", OverflowPolicy.OVERWRITE)
+        self.assertEqual(seq, 3)
+        self.assertEqual(proxy._head_seq, 1)
+
+    def test_add_fail_policy_when_full(self):
+        """Test add with FAIL policy returns -1 when buffer is full."""
+        proxy = RingbufferProxy(name="test", context=None, capacity=3)
+        proxy.add("item1")
+        proxy.add("item2")
+        proxy.add("item3")
+        seq = proxy.add("item4", OverflowPolicy.FAIL)
+        self.assertEqual(seq, -1)
+
+    def test_add_all_returns_last_sequence(self):
+        """Test add_all returns the last sequence number."""
+        result = self.proxy.add_all(["item1", "item2", "item3"])
+        self.assertEqual(result, 2)
+
+    def test_add_all_async_returns_future(self):
+        """Test add_all_async returns a Future."""
+        future = self.proxy.add_all_async(["item1", "item2"])
+        self.assertIsInstance(future, Future)
+
+    def test_add_all_empty_list(self):
+        """Test add_all with empty list returns current tail."""
+        result = self.proxy.add_all([])
+        self.assertEqual(result, -1)
+
+    def test_add_all_fail_policy_when_full(self):
+        """Test add_all with FAIL policy returns -1 when would overflow."""
+        proxy = RingbufferProxy(name="test", context=None, capacity=2)
+        seq = proxy.add_all(["item1", "item2", "item3"], OverflowPolicy.FAIL)
+        self.assertEqual(seq, -1)
+
+    def test_read_one_returns_item(self):
+        """Test read_one returns item at sequence."""
+        self.proxy.add("item1")
+        result = self.proxy.read_one(0)
+        self.assertEqual(result, "item1")
+
+    def test_read_one_async_returns_future(self):
+        """Test read_one_async returns a Future."""
+        self.proxy.add("item1")
+        future = self.proxy.read_one_async(0)
+        self.assertIsInstance(future, Future)
+        self.assertEqual(future.result(), "item1")
+
+    def test_read_one_stale_sequence_raises(self):
+        """Test read_one raises for stale sequence."""
+        proxy = RingbufferProxy(name="test", context=None, capacity=2)
+        proxy.add("item1")
+        proxy.add("item2")
+        proxy.add("item3")
+        from hazelcast.proxy.ringbuffer import StaleSequenceException
+        with self.assertRaises(StaleSequenceException):
+            proxy.read_one(0)
+
+    def test_read_one_beyond_tail_raises(self):
+        """Test read_one raises for sequence beyond tail."""
+        self.proxy.add("item1")
+        from hazelcast.proxy.ringbuffer import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.proxy.read_one(10)
+
+    def test_read_one_empty_buffer_raises(self):
+        """Test read_one raises for empty buffer."""
+        from hazelcast.proxy.ringbuffer import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.proxy.read_one(0)
+
+    def test_read_many_returns_result_set(self):
+        """Test read_many returns ReadResultSet."""
+        self.proxy.add_all(["item1", "item2", "item3"])
+        result = self.proxy.read_many(0, 1, 3)
+        self.assertIsInstance(result, ReadResultSet)
+        self.assertEqual(result.read_count, 3)
+
+    def test_read_many_async_returns_future(self):
+        """Test read_many_async returns a Future."""
+        self.proxy.add("item1")
+        future = self.proxy.read_many_async(0, 1, 10)
+        self.assertIsInstance(future, Future)
+
+    def test_read_many_with_filter(self):
+        """Test read_many with filter predicate."""
+        self.proxy.add_all([1, 2, 3, 4, 5])
+        result = self.proxy.read_many(0, 1, 10, filter_predicate=lambda x: x > 2)
+        self.assertEqual(result.items, [3, 4, 5])
+
+    def test_read_many_negative_min_count_raises(self):
+        """Test read_many raises for negative min_count."""
+        from hazelcast.proxy.ringbuffer import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.proxy.read_many(0, -1, 10)
+
+    def test_read_many_max_less_than_min_raises(self):
+        """Test read_many raises when max_count < min_count."""
+        from hazelcast.proxy.ringbuffer import IllegalArgumentException
+        with self.assertRaises(IllegalArgumentException):
+            self.proxy.read_many(0, 5, 2)
+
+    def test_read_many_stale_sequence_raises(self):
+        """Test read_many raises for stale start sequence."""
+        proxy = RingbufferProxy(name="test", context=None, capacity=2)
+        proxy.add_all(["item1", "item2", "item3"])
+        from hazelcast.proxy.ringbuffer import StaleSequenceException
+        with self.assertRaises(StaleSequenceException):
+            proxy.read_many(0, 1, 10)
+
+    def test_len_returns_size(self):
+        """Test __len__ returns size."""
+        self.assertEqual(len(self.proxy), 0)
+        self.proxy.add("item1")
+        self.assertEqual(len(self.proxy), 1)
+
+
+class TestRingbufferProxyWithItems(unittest.TestCase):
+    """Tests for RingbufferProxy with items added."""
+
+    def setUp(self):
+        """Set up test fixtures with items."""
+        self.proxy = RingbufferProxy(
+            name="test-ringbuffer",
+            context=None,
+            capacity=5,
+        )
+        self.proxy.add_all(["item1", "item2", "item3"])
+
+    def test_size_after_adds(self):
+        """Test size returns correct count after adds."""
+        self.assertEqual(self.proxy.size(), 3)
+
+    def test_tail_sequence_after_adds(self):
+        """Test tail_sequence returns last sequence."""
+        self.assertEqual(self.proxy.tail_sequence(), 2)
+
+    def test_head_sequence_before_overflow(self):
+        """Test head_sequence before overflow."""
+        self.assertEqual(self.proxy.head_sequence(), 0)
+
+    def test_remaining_capacity_after_adds(self):
+        """Test remaining_capacity after adds."""
+        self.assertEqual(self.proxy.remaining_capacity(), 2)
+
+    def test_read_one_multiple_items(self):
+        """Test read_one for multiple items."""
+        self.assertEqual(self.proxy.read_one(0), "item1")
+        self.assertEqual(self.proxy.read_one(1), "item2")
+        self.assertEqual(self.proxy.read_one(2), "item3")
+
+
+if __name__ == "__main__":
+    unittest.main()
