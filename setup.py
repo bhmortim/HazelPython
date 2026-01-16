@@ -60,6 +60,8 @@ setup(
             "pytest-cov>=4.0.0",
             "pytest-asyncio>=0.21.0",
             "pytest-timeout>=2.0.0",
+            "pytest-xdist>=3.0.0",
+            "coverage[toml]>=7.0.0",
             "black>=23.0.0",
             "isort>=5.12.0",
             "mypy>=1.0.0",
