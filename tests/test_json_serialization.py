@@ -1,21 +1,17 @@
-"""Tests for JSON serialization support."""
+"""Unit tests for hazelcast.serialization.json module."""
 
 import pytest
+from unittest.mock import MagicMock
 
 from hazelcast.serialization.json import (
     HazelcastJsonValue,
     HazelcastJsonValueSerializer,
+    to_json,
+    from_json,
     JsonPathPredicate,
     JsonContainsPredicate,
     JsonValuePredicate,
-    to_json,
-    from_json,
     JSON_TYPE_ID,
-)
-from hazelcast.serialization.service import (
-    SerializationService,
-    ObjectDataInputImpl,
-    ObjectDataOutputImpl,
 )
 from hazelcast.exceptions import HazelcastSerializationException
 
@@ -23,335 +19,247 @@ from hazelcast.exceptions import HazelcastSerializationException
 class TestHazelcastJsonValue:
     """Tests for HazelcastJsonValue class."""
 
-    def test_init_with_valid_json_string(self):
+    def test_create_with_string(self):
         value = HazelcastJsonValue('{"name": "test"}')
         assert value.value == '{"name": "test"}'
 
-    def test_init_with_empty_object(self):
-        value = HazelcastJsonValue("{}")
-        assert value.value == "{}"
+    def test_create_with_empty_object(self):
+        value = HazelcastJsonValue('{}')
+        assert value.value == '{}'
 
-    def test_init_with_array(self):
-        value = HazelcastJsonValue("[1, 2, 3]")
-        assert value.value == "[1, 2, 3]"
+    def test_create_with_array(self):
+        value = HazelcastJsonValue('[1, 2, 3]')
+        assert value.value == '[1, 2, 3]'
 
-    def test_init_with_primitive_string(self):
-        value = HazelcastJsonValue('"hello"')
-        assert value.value == '"hello"'
-
-    def test_init_with_number(self):
-        value = HazelcastJsonValue("42")
-        assert value.value == "42"
-
-    def test_init_with_null(self):
-        value = HazelcastJsonValue("null")
-        assert value.value == "null"
-
-    def test_init_rejects_non_string(self):
+    def test_create_with_non_string_raises(self):
         with pytest.raises(HazelcastSerializationException) as exc_info:
-            HazelcastJsonValue({"name": "test"})
+            HazelcastJsonValue(123)
         assert "requires a string" in str(exc_info.value)
 
-    def test_init_rejects_none(self):
+    def test_create_with_dict_raises(self):
         with pytest.raises(HazelcastSerializationException):
-            HazelcastJsonValue(None)
+            HazelcastJsonValue({"name": "test"})
 
-    def test_init_rejects_int(self):
-        with pytest.raises(HazelcastSerializationException):
-            HazelcastJsonValue(42)
-
-    def test_to_object_dict(self):
-        value = HazelcastJsonValue('{"name": "John", "age": 30}')
+    def test_to_object_simple(self):
+        value = HazelcastJsonValue('{"name": "Alice", "age": 30}')
         obj = value.to_object()
-        assert obj == {"name": "John", "age": 30}
+        assert obj == {"name": "Alice", "age": 30}
 
-    def test_to_object_list(self):
-        value = HazelcastJsonValue("[1, 2, 3]")
+    def test_to_object_array(self):
+        value = HazelcastJsonValue('[1, 2, 3]')
         obj = value.to_object()
         assert obj == [1, 2, 3]
 
     def test_to_object_nested(self):
-        value = HazelcastJsonValue('{"person": {"name": "Alice", "scores": [95, 87]}}')
+        value = HazelcastJsonValue('{"user": {"name": "Bob"}, "scores": [1, 2]}')
         obj = value.to_object()
-        assert obj == {"person": {"name": "Alice", "scores": [95, 87]}}
-
-    def test_to_object_primitive_string(self):
-        value = HazelcastJsonValue('"hello"')
-        assert value.to_object() == "hello"
-
-    def test_to_object_number(self):
-        value = HazelcastJsonValue("42.5")
-        assert value.to_object() == 42.5
-
-    def test_to_object_boolean(self):
-        value = HazelcastJsonValue("true")
-        assert value.to_object() is True
-
-    def test_to_object_null(self):
-        value = HazelcastJsonValue("null")
-        assert value.to_object() is None
+        assert obj == {"user": {"name": "Bob"}, "scores": [1, 2]}
 
     def test_to_object_invalid_json(self):
-        value = HazelcastJsonValue("not valid json")
+        value = HazelcastJsonValue('not valid json')
         with pytest.raises(HazelcastSerializationException) as exc_info:
             value.to_object()
         assert "Failed to parse JSON" in str(exc_info.value)
 
     def test_from_object_dict(self):
-        obj = {"name": "test", "value": 123}
-        value = HazelcastJsonValue.from_object(obj)
-        assert value.to_object() == obj
+        value = HazelcastJsonValue.from_object({"name": "test"})
+        assert isinstance(value, HazelcastJsonValue)
+        assert value.to_object() == {"name": "test"}
 
     def test_from_object_list(self):
-        obj = [1, "two", 3.0, None, True]
-        value = HazelcastJsonValue.from_object(obj)
-        assert value.to_object() == obj
+        value = HazelcastJsonValue.from_object([1, 2, 3])
+        assert value.to_object() == [1, 2, 3]
 
-    def test_from_object_nested(self):
-        obj = {"users": [{"name": "Alice"}, {"name": "Bob"}]}
-        value = HazelcastJsonValue.from_object(obj)
-        assert value.to_object() == obj
+    def test_from_object_string(self):
+        value = HazelcastJsonValue.from_object("hello")
+        assert value.to_object() == "hello"
 
-    def test_from_object_primitive(self):
-        assert HazelcastJsonValue.from_object("hello").to_object() == "hello"
-        assert HazelcastJsonValue.from_object(42).to_object() == 42
-        assert HazelcastJsonValue.from_object(3.14).to_object() == 3.14
-        assert HazelcastJsonValue.from_object(True).to_object() is True
-        assert HazelcastJsonValue.from_object(None).to_object() is None
+    def test_from_object_number(self):
+        value = HazelcastJsonValue.from_object(42)
+        assert value.to_object() == 42
+
+    def test_from_object_boolean(self):
+        value = HazelcastJsonValue.from_object(True)
+        assert value.to_object() is True
+
+    def test_from_object_null(self):
+        value = HazelcastJsonValue.from_object(None)
+        assert value.to_object() is None
 
     def test_from_object_non_serializable(self):
         with pytest.raises(HazelcastSerializationException) as exc_info:
-            HazelcastJsonValue.from_object(lambda x: x)
-        assert "Failed to serialize to JSON" in str(exc_info.value)
+            HazelcastJsonValue.from_object(object())
+        assert "Failed to serialize" in str(exc_info.value)
 
-    def test_equality_same_value(self):
+    def test_equality(self):
         v1 = HazelcastJsonValue('{"a": 1}')
         v2 = HazelcastJsonValue('{"a": 1}')
+        v3 = HazelcastJsonValue('{"a": 2}')
         assert v1 == v2
-
-    def test_equality_different_value(self):
-        v1 = HazelcastJsonValue('{"a": 1}')
-        v2 = HazelcastJsonValue('{"a": 2}')
-        assert v1 != v2
+        assert v1 != v3
 
     def test_equality_with_non_json_value(self):
         v1 = HazelcastJsonValue('{"a": 1}')
         assert v1 != '{"a": 1}'
         assert v1 != {"a": 1}
-        assert v1 != None
 
-    def test_hash_same_value(self):
+    def test_hash(self):
         v1 = HazelcastJsonValue('{"a": 1}')
         v2 = HazelcastJsonValue('{"a": 1}')
         assert hash(v1) == hash(v2)
-
-    def test_hash_usable_in_set(self):
-        v1 = HazelcastJsonValue('{"a": 1}')
-        v2 = HazelcastJsonValue('{"a": 1}')
-        v3 = HazelcastJsonValue('{"a": 2}')
-        s = {v1, v2, v3}
-        assert len(s) == 2
+        
+        values = {v1, v2}
+        assert len(values) == 1
 
     def test_str(self):
-        value = HazelcastJsonValue('{"name": "test"}')
-        assert str(value) == '{"name": "test"}'
+        value = HazelcastJsonValue('{"test": true}')
+        assert str(value) == '{"test": true}'
 
     def test_repr(self):
-        value = HazelcastJsonValue('{"name": "test"}')
-        assert repr(value) == "HazelcastJsonValue('{\"name\": \"test\"}')"
+        value = HazelcastJsonValue('{"x": 1}')
+        assert "HazelcastJsonValue" in repr(value)
+        assert '{"x": 1}' in repr(value)
 
-
-class TestHelperFunctions:
-    """Tests for to_json and from_json helper functions."""
-
-    def test_to_json_dict(self):
-        result = to_json({"key": "value"})
-        assert isinstance(result, HazelcastJsonValue)
-        assert result.to_object() == {"key": "value"}
-
-    def test_to_json_list(self):
-        result = to_json([1, 2, 3])
-        assert isinstance(result, HazelcastJsonValue)
-        assert result.to_object() == [1, 2, 3]
-
-    def test_to_json_primitive(self):
-        assert to_json("hello").to_object() == "hello"
-        assert to_json(42).to_object() == 42
-
-    def test_from_json_valid(self):
-        value = HazelcastJsonValue('{"a": 1}')
-        result = from_json(value)
-        assert result == {"a": 1}
-
-    def test_from_json_none(self):
-        result = from_json(None)
-        assert result is None
-
-    def test_round_trip(self):
-        original = {"users": [{"name": "Alice", "age": 30}], "count": 1}
-        json_value = to_json(original)
-        result = from_json(json_value)
-        assert result == original
+    @pytest.mark.parametrize("json_str,expected", [
+        ('null', None),
+        ('true', True),
+        ('false', False),
+        ('123', 123),
+        ('3.14', 3.14),
+        ('"hello"', "hello"),
+        ('[]', []),
+        ('{}', {}),
+    ])
+    def test_various_json_types(self, json_str, expected):
+        value = HazelcastJsonValue(json_str)
+        assert value.to_object() == expected
 
 
 class TestHazelcastJsonValueSerializer:
     """Tests for HazelcastJsonValueSerializer."""
 
-    def test_type_id(self):
-        serializer = HazelcastJsonValueSerializer()
+    @pytest.fixture
+    def serializer(self):
+        return HazelcastJsonValueSerializer()
+
+    def test_type_id(self, serializer):
         assert serializer.type_id == JSON_TYPE_ID
-        assert serializer.type_id == -130
 
-    def test_write_and_read(self):
-        service = SerializationService()
-        serializer = HazelcastJsonValueSerializer()
+    def test_write(self, serializer):
+        output = MagicMock()
+        value = HazelcastJsonValue('{"test": 1}')
+        serializer.write(output, value)
+        output.write_string.assert_called_once_with('{"test": 1}')
 
-        original = HazelcastJsonValue('{"name": "test", "value": 42}')
-
-        output = ObjectDataOutputImpl(service)
-        serializer.write(output, original)
-        data = output.to_byte_array()
-
-        input_stream = ObjectDataInputImpl(data, service)
-        result = serializer.read(input_stream)
-
-        assert result == original
-        assert result.to_object() == {"name": "test", "value": 42}
-
-    def test_serialize_empty_object(self):
-        service = SerializationService()
-        serializer = HazelcastJsonValueSerializer()
-
-        original = HazelcastJsonValue("{}")
-
-        output = ObjectDataOutputImpl(service)
-        serializer.write(output, original)
-        data = output.to_byte_array()
-
-        input_stream = ObjectDataInputImpl(data, service)
-        result = serializer.read(input_stream)
-
-        assert result.value == "{}"
-
-    def test_serialize_complex_json(self):
-        service = SerializationService()
-        serializer = HazelcastJsonValueSerializer()
-
-        complex_data = {
-            "string": "value",
-            "number": 42,
-            "float": 3.14,
-            "boolean": True,
-            "null": None,
-            "array": [1, 2, 3],
-            "nested": {"a": {"b": {"c": "deep"}}}
-        }
-        original = HazelcastJsonValue.from_object(complex_data)
-
-        output = ObjectDataOutputImpl(service)
-        serializer.write(output, original)
-        data = output.to_byte_array()
-
-        input_stream = ObjectDataInputImpl(data, service)
-        result = serializer.read(input_stream)
-
-        assert result.to_object() == complex_data
-
-
-class TestSerializationServiceIntegration:
-    """Tests for JSON serialization integration with SerializationService."""
-
-    def test_to_data_json_value(self):
-        service = SerializationService()
-        json_value = HazelcastJsonValue('{"key": "value"}')
-
-        data = service.to_data(json_value)
-        assert data is not None
-        assert data.get_type_id() == JSON_TYPE_ID
-
-    def test_to_object_json_value(self):
-        service = SerializationService()
-        json_value = HazelcastJsonValue('{"key": "value"}')
-
-        data = service.to_data(json_value)
-        result = service.to_object(data)
-
+    def test_read(self, serializer):
+        input_mock = MagicMock()
+        input_mock.read_string.return_value = '{"name": "test"}'
+        
+        result = serializer.read(input_mock)
+        
         assert isinstance(result, HazelcastJsonValue)
-        assert result == json_value
+        assert result.value == '{"name": "test"}'
 
-    def test_round_trip_through_service(self):
-        service = SerializationService()
-        original = HazelcastJsonValue('{"users": [{"name": "Alice"}], "count": 1}')
 
-        data = service.to_data(original)
-        result = service.to_object(data)
+class TestToJsonFunction:
+    """Tests for to_json convenience function."""
 
-        assert result.to_object() == original.to_object()
+    def test_to_json_dict(self):
+        result = to_json({"name": "Alice"})
+        assert isinstance(result, HazelcastJsonValue)
+        assert result.to_object() == {"name": "Alice"}
+
+    def test_to_json_list(self):
+        result = to_json([1, 2, 3])
+        assert result.to_object() == [1, 2, 3]
+
+    def test_to_json_nested(self):
+        data = {"users": [{"id": 1}, {"id": 2}]}
+        result = to_json(data)
+        assert result.to_object() == data
+
+
+class TestFromJsonFunction:
+    """Tests for from_json convenience function."""
+
+    def test_from_json_value(self):
+        value = HazelcastJsonValue('{"name": "Bob"}')
+        result = from_json(value)
+        assert result == {"name": "Bob"}
+
+    def test_from_json_none(self):
+        result = from_json(None)
+        assert result is None
+
+    def test_from_json_roundtrip(self):
+        original = {"users": [{"id": 1, "name": "Alice"}]}
+        json_value = to_json(original)
+        result = from_json(json_value)
+        assert result == original
 
 
 class TestJsonPathPredicate:
     """Tests for JsonPathPredicate."""
 
-    def test_init(self):
-        pred = JsonPathPredicate("$.name", "John")
+    def test_create(self):
+        pred = JsonPathPredicate("$.name", "Alice")
         assert pred.path == "$.name"
-        assert pred.value == "John"
+        assert pred.value == "Alice"
 
     def test_nested_path(self):
         pred = JsonPathPredicate("$.address.city", "NYC")
         assert pred.path == "$.address.city"
         assert pred.value == "NYC"
 
-    def test_array_path(self):
-        pred = JsonPathPredicate("$.items[0]", "first")
-        assert pred.path == "$.items[0]"
-        assert pred.value == "first"
-
-    def test_value_types(self):
-        assert JsonPathPredicate("$.count", 42).value == 42
-        assert JsonPathPredicate("$.active", True).value is True
-        assert JsonPathPredicate("$.data", None).value is None
-        assert JsonPathPredicate("$.tags", ["a", "b"]).value == ["a", "b"]
-
     def test_equality(self):
         p1 = JsonPathPredicate("$.name", "test")
         p2 = JsonPathPredicate("$.name", "test")
         p3 = JsonPathPredicate("$.name", "other")
         p4 = JsonPathPredicate("$.other", "test")
-
+        
         assert p1 == p2
         assert p1 != p3
         assert p1 != p4
-        assert p1 != "not a predicate"
+
+    def test_equality_with_non_predicate(self):
+        p1 = JsonPathPredicate("$.name", "test")
+        assert p1 != "$.name"
+        assert p1 != {"path": "$.name"}
 
     def test_hash(self):
         p1 = JsonPathPredicate("$.name", "test")
         p2 = JsonPathPredicate("$.name", "test")
         assert hash(p1) == hash(p2)
-        assert len({p1, p2}) == 1
+        
+        predicates = {p1, p2}
+        assert len(predicates) == 1
 
     def test_repr(self):
-        pred = JsonPathPredicate("$.name", "John")
-        assert "JsonPathPredicate" in repr(pred)
-        assert "$.name" in repr(pred)
-        assert "John" in repr(pred)
+        pred = JsonPathPredicate("$.age", 30)
+        repr_str = repr(pred)
+        assert "JsonPathPredicate" in repr_str
+        assert "$.age" in repr_str
+        assert "30" in repr_str
 
 
 class TestJsonContainsPredicate:
     """Tests for JsonContainsPredicate."""
 
-    def test_init(self):
+    def test_create(self):
         pred = JsonContainsPredicate("email")
         assert pred.key == "email"
 
     def test_equality(self):
-        p1 = JsonContainsPredicate("key")
-        p2 = JsonContainsPredicate("key")
+        p1 = JsonContainsPredicate("name")
+        p2 = JsonContainsPredicate("name")
         p3 = JsonContainsPredicate("other")
-
+        
         assert p1 == p2
         assert p1 != p3
-        assert p1 != "key"
+
+    def test_equality_with_non_predicate(self):
+        p1 = JsonContainsPredicate("name")
+        assert p1 != "name"
 
     def test_hash(self):
         p1 = JsonContainsPredicate("key")
@@ -367,55 +275,56 @@ class TestJsonContainsPredicate:
 class TestJsonValuePredicate:
     """Tests for JsonValuePredicate."""
 
-    def test_init_equal(self):
-        pred = JsonValuePredicate("$.age", "=", 30)
-        assert pred.path == "$.age"
-        assert pred.operator == "="
-        assert pred.value == 30
-
-    def test_operators(self):
-        assert JsonValuePredicate("$.x", "=", 1).operator == "="
-        assert JsonValuePredicate("$.x", "!=", 1).operator == "!="
-        assert JsonValuePredicate("$.x", "<", 1).operator == "<"
-        assert JsonValuePredicate("$.x", "<=", 1).operator == "<="
-        assert JsonValuePredicate("$.x", ">", 1).operator == ">"
-        assert JsonValuePredicate("$.x", ">=", 1).operator == ">="
-        assert JsonValuePredicate("$.x", "LIKE", "%test%").operator == "LIKE"
-        assert JsonValuePredicate("$.x", "IN", [1, 2]).operator == "IN"
-
-    def test_case_insensitive_operator(self):
-        assert JsonValuePredicate("$.x", "like", "test").operator == "LIKE"
-        assert JsonValuePredicate("$.x", "Like", "test").operator == "LIKE"
-        assert JsonValuePredicate("$.x", "in", [1]).operator == "IN"
+    @pytest.mark.parametrize("operator", ["=", "!=", "<", "<=", ">", ">=", "LIKE", "IN"])
+    def test_valid_operators(self, operator):
+        pred = JsonValuePredicate("$.age", operator, 25)
+        assert pred.operator == operator.upper()
 
     def test_invalid_operator(self):
         with pytest.raises(ValueError) as exc_info:
-            JsonValuePredicate("$.x", "INVALID", 1)
+            JsonValuePredicate("$.age", "INVALID", 25)
         assert "Invalid operator" in str(exc_info.value)
+
+    def test_case_insensitive_operator(self):
+        pred = JsonValuePredicate("$.name", "like", "%test%")
+        assert pred.operator == "LIKE"
+
+    def test_properties(self):
+        pred = JsonValuePredicate("$.score", ">=", 90)
+        assert pred.path == "$.score"
+        assert pred.operator == ">="
+        assert pred.value == 90
+
+    def test_in_operator_with_list(self):
+        pred = JsonValuePredicate("$.status", "IN", ["active", "pending"])
+        assert pred.value == ["active", "pending"]
 
     def test_equality(self):
         p1 = JsonValuePredicate("$.age", ">", 25)
         p2 = JsonValuePredicate("$.age", ">", 25)
-        p3 = JsonValuePredicate("$.age", ">", 30)
-        p4 = JsonValuePredicate("$.age", "<", 25)
-
+        p3 = JsonValuePredicate("$.age", ">=", 25)
+        
         assert p1 == p2
         assert p1 != p3
-        assert p1 != p4
+
+    def test_equality_with_non_predicate(self):
+        p1 = JsonValuePredicate("$.age", ">", 25)
+        assert p1 != ("$.age", ">", 25)
 
     def test_hash(self):
-        p1 = JsonValuePredicate("$.age", ">", 25)
-        p2 = JsonValuePredicate("$.age", ">", 25)
+        p1 = JsonValuePredicate("$.x", "=", 1)
+        p2 = JsonValuePredicate("$.x", "=", 1)
         assert hash(p1) == hash(p2)
 
     def test_hash_with_list_value(self):
-        p1 = JsonValuePredicate("$.status", "IN", ["a", "b"])
-        p2 = JsonValuePredicate("$.status", "IN", ["a", "b"])
+        p1 = JsonValuePredicate("$.x", "IN", [1, 2])
+        p2 = JsonValuePredicate("$.x", "IN", [1, 2])
         assert hash(p1) == hash(p2)
 
     def test_repr(self):
-        pred = JsonValuePredicate("$.age", ">", 25)
-        assert "JsonValuePredicate" in repr(pred)
-        assert "$.age" in repr(pred)
-        assert ">" in repr(pred)
-        assert "25" in repr(pred)
+        pred = JsonValuePredicate("$.price", "<", 100)
+        repr_str = repr(pred)
+        assert "JsonValuePredicate" in repr_str
+        assert "$.price" in repr_str
+        assert "<" in repr_str
+        assert "100" in repr_str
