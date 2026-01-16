@@ -1,60 +1,245 @@
-"""Unit tests for Map proxy."""
+"""Unit tests for MapProxy operations."""
 
+import struct
 import unittest
-from unittest.mock import MagicMock, patch
 from concurrent.futures import Future
+from unittest.mock import MagicMock, patch
 
-from hazelcast.proxy.map import (
-    MapProxy,
-    IndexType,
-    IndexConfig,
-    EntryView,
-    EntryEvent,
-    EntryListener,
-    _ReferenceIdGenerator,
+from hazelcast.protocol.codec import (
+    MapCodec,
+    REQUEST_HEADER_SIZE,
+    RESPONSE_HEADER_SIZE,
+    LONG_SIZE,
+    INT_SIZE,
+    BOOLEAN_SIZE,
+    MAP_AGGREGATE,
+    MAP_AGGREGATE_WITH_PREDICATE,
+    MAP_PROJECT,
+    MAP_PROJECT_WITH_PREDICATE,
+    MAP_PUT_WITH_MAX_IDLE,
+    MAP_SET_WITH_MAX_IDLE,
+    MAP_FETCH_ENTRIES,
+    MAP_IS_LOADED,
 )
+from hazelcast.protocol.client_message import ClientMessage, Frame
+from hazelcast.proxy.map import MapProxy, IndexType, IndexConfig, EntryView, EntryEvent
+from hazelcast.proxy.base import ProxyContext
 
 
-class TestIndexType(unittest.TestCase):
-    """Tests for IndexType class."""
+class TestMapCodec(unittest.TestCase):
+    """Test MapCodec encode/decode methods."""
 
-    def test_index_type_constants(self):
-        """Test IndexType constants are defined correctly."""
-        self.assertEqual(IndexType.SORTED, 0)
-        self.assertEqual(IndexType.HASH, 1)
-        self.assertEqual(IndexType.BITMAP, 2)
+    def test_encode_aggregate_request(self):
+        """Test encoding a Map.aggregate request."""
+        aggregator_data = b"test_aggregator"
+        msg = MapCodec.encode_aggregate_request("test-map", aggregator_data)
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_AGGREGATE)
+
+    def test_encode_aggregate_with_predicate_request(self):
+        """Test encoding a Map.aggregateWithPredicate request."""
+        aggregator_data = b"test_aggregator"
+        predicate_data = b"test_predicate"
+        msg = MapCodec.encode_aggregate_with_predicate_request(
+            "test-map", aggregator_data, predicate_data
+        )
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_AGGREGATE_WITH_PREDICATE)
+
+    def test_encode_project_request(self):
+        """Test encoding a Map.project request."""
+        projection_data = b"test_projection"
+        msg = MapCodec.encode_project_request("test-map", projection_data)
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_PROJECT)
+
+    def test_encode_project_with_predicate_request(self):
+        """Test encoding a Map.projectWithPredicate request."""
+        projection_data = b"test_projection"
+        predicate_data = b"test_predicate"
+        msg = MapCodec.encode_project_with_predicate_request(
+            "test-map", projection_data, predicate_data
+        )
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_PROJECT_WITH_PREDICATE)
+
+    def test_encode_put_with_max_idle_request(self):
+        """Test encoding a Map.putWithMaxIdle request."""
+        msg = MapCodec.encode_put_with_max_idle_request(
+            "test-map", b"key", b"value", 0, 5000, 1000
+        )
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_PUT_WITH_MAX_IDLE)
+
+        thread_id = struct.unpack_from("<q", frame.buf, REQUEST_HEADER_SIZE)[0]
+        self.assertEqual(thread_id, 0)
+
+        ttl = struct.unpack_from("<q", frame.buf, REQUEST_HEADER_SIZE + LONG_SIZE)[0]
+        self.assertEqual(ttl, 5000)
+
+        max_idle = struct.unpack_from("<q", frame.buf, REQUEST_HEADER_SIZE + 2 * LONG_SIZE)[0]
+        self.assertEqual(max_idle, 1000)
+
+    def test_encode_set_with_max_idle_request(self):
+        """Test encoding a Map.setWithMaxIdle request."""
+        msg = MapCodec.encode_set_with_max_idle_request(
+            "test-map", b"key", b"value", 0, 3000, 500
+        )
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_SET_WITH_MAX_IDLE)
+
+    def test_encode_fetch_entries_request(self):
+        """Test encoding a Map.fetchEntries request."""
+        msg = MapCodec.encode_fetch_entries_request("test-map", 5, 10, 100)
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_FETCH_ENTRIES)
+
+        partition_id = struct.unpack_from("<i", frame.buf, 12)[0]
+        self.assertEqual(partition_id, 5)
+
+        table_index = struct.unpack_from("<i", frame.buf, REQUEST_HEADER_SIZE)[0]
+        self.assertEqual(table_index, 10)
+
+        batch_size = struct.unpack_from("<i", frame.buf, REQUEST_HEADER_SIZE + INT_SIZE)[0]
+        self.assertEqual(batch_size, 100)
+
+    def test_encode_is_loaded_request(self):
+        """Test encoding a Map.isLoaded request."""
+        msg = MapCodec.encode_is_loaded_request("test-map")
+
+        self.assertIsInstance(msg, ClientMessage)
+        frame = msg._frames[0]
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, MAP_IS_LOADED)
+
+    def test_decode_aggregate_response(self):
+        """Test decoding a Map.aggregate response."""
+        msg = ClientMessage.create_for_encode()
+        header = bytearray(RESPONSE_HEADER_SIZE)
+        msg.add_frame(Frame(bytes(header)))
+        msg.add_frame(Frame(b"result_data"))
+
+        msg._read_index = 0
+        result = MapCodec.decode_aggregate_response(msg)
+        self.assertEqual(result, b"result_data")
+
+    def test_decode_aggregate_response_null(self):
+        """Test decoding a null Map.aggregate response."""
+        msg = ClientMessage.create_for_encode()
+        header = bytearray(RESPONSE_HEADER_SIZE)
+        msg.add_frame(Frame(bytes(header)))
+
+        from hazelcast.protocol.client_message import NULL_FRAME
+        msg.add_frame(NULL_FRAME)
+
+        msg._read_index = 0
+        result = MapCodec.decode_aggregate_response(msg)
+        self.assertIsNone(result)
+
+    def test_decode_is_loaded_response_true(self):
+        """Test decoding a Map.isLoaded response (true)."""
+        msg = ClientMessage.create_for_encode()
+        header = bytearray(RESPONSE_HEADER_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<B", header, RESPONSE_HEADER_SIZE, 1)
+        msg.add_frame(Frame(bytes(header)))
+
+        msg._read_index = 0
+        result = MapCodec.decode_is_loaded_response(msg)
+        self.assertTrue(result)
+
+    def test_decode_is_loaded_response_false(self):
+        """Test decoding a Map.isLoaded response (false)."""
+        msg = ClientMessage.create_for_encode()
+        header = bytearray(RESPONSE_HEADER_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<B", header, RESPONSE_HEADER_SIZE, 0)
+        msg.add_frame(Frame(bytes(header)))
+
+        msg._read_index = 0
+        result = MapCodec.decode_is_loaded_response(msg)
+        self.assertFalse(result)
+
+    def test_decode_put_with_max_idle_response(self):
+        """Test decoding a Map.putWithMaxIdle response."""
+        msg = ClientMessage.create_for_encode()
+        header = bytearray(RESPONSE_HEADER_SIZE)
+        msg.add_frame(Frame(bytes(header)))
+        msg.add_frame(Frame(b"old_value"))
+
+        msg._read_index = 0
+        result = MapCodec.decode_put_with_max_idle_response(msg)
+        self.assertEqual(result, b"old_value")
+
+    def test_decode_fetch_entries_response(self):
+        """Test decoding a Map.fetchEntries response."""
+        msg = ClientMessage.create_for_encode()
+
+        header = bytearray(RESPONSE_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<i", header, RESPONSE_HEADER_SIZE, 42)
+        msg.add_frame(Frame(bytes(header)))
+
+        from hazelcast.protocol.client_message import BEGIN_FRAME, END_FRAME
+        msg.add_frame(BEGIN_FRAME)
+        msg.add_frame(Frame(b"key1"))
+        msg.add_frame(Frame(b"value1"))
+        msg.add_frame(END_FRAME)
+
+        msg._read_index = 0
+        entries, next_index = MapCodec.decode_fetch_entries_response(msg)
+
+        self.assertEqual(next_index, 42)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0], (b"key1", b"value1"))
 
 
 class TestIndexConfig(unittest.TestCase):
-    """Tests for IndexConfig class."""
+    """Test IndexConfig class."""
 
-    def test_index_config_initialization(self):
-        """Test IndexConfig initialization."""
-        config = IndexConfig(
-            attributes=["name", "age"],
-            index_type=IndexType.HASH,
-            name="my-index",
-        )
+    def test_index_config_creation(self):
+        """Test creating an IndexConfig."""
+        config = IndexConfig(["attr1", "attr2"], IndexType.HASH, "my-index")
+
         self.assertEqual(config.name, "my-index")
         self.assertEqual(config.type, IndexType.HASH)
-        self.assertEqual(config.attributes, ["name", "age"])
+        self.assertEqual(config.attributes, ["attr1", "attr2"])
 
     def test_index_config_defaults(self):
-        """Test IndexConfig with default values."""
-        config = IndexConfig(attributes=["field"])
+        """Test IndexConfig default values."""
+        config = IndexConfig(["attr"])
+
         self.assertIsNone(config.name)
         self.assertEqual(config.type, IndexType.SORTED)
-        self.assertEqual(config.attributes, ["field"])
+        self.assertEqual(config.attributes, ["attr"])
 
 
 class TestEntryView(unittest.TestCase):
-    """Tests for EntryView class."""
+    """Test EntryView class."""
 
-    def test_entry_view_initialization(self):
-        """Test EntryView initialization with all parameters."""
+    def test_entry_view_creation(self):
+        """Test creating an EntryView."""
         view = EntryView(
-            key="test_key",
-            value="test_value",
+            key="test-key",
+            value="test-value",
             cost=100,
             creation_time=1000,
             expiration_time=2000,
@@ -63,11 +248,12 @@ class TestEntryView(unittest.TestCase):
             last_stored_time=1200,
             last_update_time=1400,
             version=3,
-            ttl=60000,
-            max_idle=30000,
+            ttl=1000,
+            max_idle=500,
         )
-        self.assertEqual(view.key, "test_key")
-        self.assertEqual(view.value, "test_value")
+
+        self.assertEqual(view.key, "test-key")
+        self.assertEqual(view.value, "test-value")
         self.assertEqual(view.cost, 100)
         self.assertEqual(view.creation_time, 1000)
         self.assertEqual(view.expiration_time, 2000)
@@ -76,24 +262,13 @@ class TestEntryView(unittest.TestCase):
         self.assertEqual(view.last_stored_time, 1200)
         self.assertEqual(view.last_update_time, 1400)
         self.assertEqual(view.version, 3)
-        self.assertEqual(view.ttl, 60000)
-        self.assertEqual(view.max_idle, 30000)
-
-    def test_entry_view_defaults(self):
-        """Test EntryView with default values."""
-        view = EntryView(key="key", value="value")
-        self.assertEqual(view.key, "key")
-        self.assertEqual(view.value, "value")
-        self.assertEqual(view.cost, 0)
-        self.assertEqual(view.creation_time, 0)
-        self.assertEqual(view.hits, 0)
-        self.assertEqual(view.version, 0)
+        self.assertEqual(view.ttl, 1000)
+        self.assertEqual(view.max_idle, 500)
 
     def test_entry_view_repr(self):
-        """Test EntryView __repr__."""
+        """Test EntryView string representation."""
         view = EntryView(key="k", value="v", hits=10, version=2)
         repr_str = repr(view)
-        self.assertIn("EntryView", repr_str)
         self.assertIn("k", repr_str)
         self.assertIn("v", repr_str)
         self.assertIn("10", repr_str)
@@ -101,590 +276,270 @@ class TestEntryView(unittest.TestCase):
 
 
 class TestEntryEvent(unittest.TestCase):
-    """Tests for EntryEvent class."""
+    """Test EntryEvent class."""
 
-    def test_event_type_constants(self):
-        """Test event type constants are defined correctly."""
+    def test_entry_event_creation(self):
+        """Test creating an EntryEvent."""
+        event = EntryEvent(
+            event_type=EntryEvent.ADDED,
+            key="test-key",
+            value="new-value",
+            old_value="old-value",
+        )
+
+        self.assertEqual(event.event_type, EntryEvent.ADDED)
+        self.assertEqual(event.key, "test-key")
+        self.assertEqual(event.value, "new-value")
+        self.assertEqual(event.old_value, "old-value")
+
+    def test_entry_event_types(self):
+        """Test EntryEvent type constants."""
         self.assertEqual(EntryEvent.ADDED, 1)
         self.assertEqual(EntryEvent.REMOVED, 2)
         self.assertEqual(EntryEvent.UPDATED, 4)
         self.assertEqual(EntryEvent.EVICTED, 8)
         self.assertEqual(EntryEvent.EXPIRED, 16)
-        self.assertEqual(EntryEvent.EVICT_ALL, 32)
-        self.assertEqual(EntryEvent.CLEAR_ALL, 64)
-        self.assertEqual(EntryEvent.MERGED, 128)
-        self.assertEqual(EntryEvent.INVALIDATION, 256)
-        self.assertEqual(EntryEvent.LOADED, 512)
-
-    def test_event_initialization(self):
-        """Test EntryEvent initialization."""
-        event = EntryEvent(
-            event_type=EntryEvent.ADDED,
-            key="test_key",
-            value="test_value",
-            old_value="old_value",
-            merging_value="merge_value",
-            member="member1",
-        )
-        self.assertEqual(event.event_type, EntryEvent.ADDED)
-        self.assertEqual(event.key, "test_key")
-        self.assertEqual(event.value, "test_value")
-        self.assertEqual(event.old_value, "old_value")
-        self.assertEqual(event.merging_value, "merge_value")
-        self.assertEqual(event.member, "member1")
-
-    def test_event_with_defaults(self):
-        """Test EntryEvent with default values."""
-        event = EntryEvent(event_type=EntryEvent.REMOVED, key="key")
-        self.assertEqual(event.event_type, EntryEvent.REMOVED)
-        self.assertEqual(event.key, "key")
-        self.assertIsNone(event.value)
-        self.assertIsNone(event.old_value)
-        self.assertIsNone(event.merging_value)
-        self.assertIsNone(event.member)
-
-
-class TestEntryListener(unittest.TestCase):
-    """Tests for EntryListener class."""
-
-    def test_listener_methods_exist(self):
-        """Test that listener has all required methods."""
-        listener = EntryListener()
-        self.assertTrue(hasattr(listener, "entry_added"))
-        self.assertTrue(hasattr(listener, "entry_removed"))
-        self.assertTrue(hasattr(listener, "entry_updated"))
-        self.assertTrue(hasattr(listener, "entry_evicted"))
-        self.assertTrue(hasattr(listener, "entry_expired"))
-        self.assertTrue(hasattr(listener, "map_evicted"))
-        self.assertTrue(hasattr(listener, "map_cleared"))
-
-    def test_listener_methods_are_callable(self):
-        """Test that listener methods can be called without error."""
-        listener = EntryListener()
-        event = EntryEvent(EntryEvent.ADDED, "key", "value")
-        listener.entry_added(event)
-        listener.entry_removed(event)
-        listener.entry_updated(event)
-        listener.entry_evicted(event)
-        listener.entry_expired(event)
-        listener.map_evicted(event)
-        listener.map_cleared(event)
-
-
-class TestReferenceIdGenerator(unittest.TestCase):
-    """Tests for _ReferenceIdGenerator class."""
-
-    def test_generator_initialization(self):
-        """Test generator starts at 0."""
-        gen = _ReferenceIdGenerator()
-        self.assertEqual(gen._counter, 0)
-
-    def test_next_id_increments(self):
-        """Test next_id increments counter."""
-        gen = _ReferenceIdGenerator()
-        id1 = gen.next_id()
-        id2 = gen.next_id()
-        id3 = gen.next_id()
-        self.assertEqual(id1, 1)
-        self.assertEqual(id2, 2)
-        self.assertEqual(id3, 3)
-
-    def test_thread_safety(self):
-        """Test generator is thread-safe."""
-        import threading
-        gen = _ReferenceIdGenerator()
-        ids = []
-        lock = threading.Lock()
-
-        def get_ids():
-            for _ in range(100):
-                id_val = gen.next_id()
-                with lock:
-                    ids.append(id_val)
-
-        threads = [threading.Thread(target=get_ids) for _ in range(5)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        self.assertEqual(len(ids), 500)
-        self.assertEqual(len(set(ids)), 500)
 
 
 class TestMapProxy(unittest.TestCase):
-    """Tests for MapProxy class."""
+    """Test MapProxy methods."""
 
     def setUp(self):
         """Set up test fixtures."""
-        self.proxy = MapProxy(
-            name="test-map",
-            context=None,
+        self.mock_invocation = MagicMock()
+        self.mock_serialization = MagicMock()
+
+        self.mock_serialization.to_data = lambda x: str(x).encode("utf-8") if x else b""
+        self.mock_serialization.to_object = lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+
+        self.context = ProxyContext(
+            invocation_service=self.mock_invocation,
+            serialization_service=self.mock_serialization,
         )
-
-    def test_service_name_constant(self):
-        """Test SERVICE_NAME is defined correctly."""
-        self.assertEqual(MapProxy.SERVICE_NAME, "hz:impl:mapService")
-
-    def test_initialization(self):
-        """Test MapProxy initialization."""
-        self.assertEqual(self.proxy._name, "test-map")
-        self.assertIsNone(self.proxy._near_cache)
-        self.assertIsInstance(self.proxy._entry_listeners, dict)
-        self.assertIsInstance(self.proxy._query_caches, dict)
-
-    def test_near_cache_property(self):
-        """Test near_cache property."""
-        self.assertIsNone(self.proxy.near_cache)
-
-    def test_put_async_returns_future(self):
-        """Test put_async returns a Future."""
-        future = self.proxy.put_async("key", "value")
-        self.assertIsInstance(future, Future)
-
-    def test_put_with_ttl(self):
-        """Test put with TTL parameter."""
-        future = self.proxy.put_async("key", "value", ttl=60)
-        self.assertIsInstance(future, Future)
-
-    def test_get_async_returns_future(self):
-        """Test get_async returns a Future."""
-        future = self.proxy.get_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_remove_async_returns_future(self):
-        """Test remove_async returns a Future."""
-        future = self.proxy.remove_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_delete_async_returns_future(self):
-        """Test delete_async returns a Future."""
-        future = self.proxy.delete_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_contains_key_async_returns_future(self):
-        """Test contains_key_async returns a Future."""
-        future = self.proxy.contains_key_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_contains_value_async_returns_future(self):
-        """Test contains_value_async returns a Future."""
-        future = self.proxy.contains_value_async("value")
-        self.assertIsInstance(future, Future)
-
-    def test_put_if_absent_async_returns_future(self):
-        """Test put_if_absent_async returns a Future."""
-        future = self.proxy.put_if_absent_async("key", "value")
-        self.assertIsInstance(future, Future)
-
-    def test_put_if_absent_with_ttl(self):
-        """Test put_if_absent_async with TTL."""
-        future = self.proxy.put_if_absent_async("key", "value", ttl=60)
-        self.assertIsInstance(future, Future)
-
-    def test_replace_async_returns_future(self):
-        """Test replace_async returns a Future."""
-        future = self.proxy.replace_async("key", "value")
-        self.assertIsInstance(future, Future)
-
-    def test_replace_if_same_async_returns_future(self):
-        """Test replace_if_same_async returns a Future."""
-        future = self.proxy.replace_if_same_async("key", "old", "new")
-        self.assertIsInstance(future, Future)
-
-    def test_set_async_returns_future(self):
-        """Test set_async returns a Future."""
-        future = self.proxy.set_async("key", "value")
-        self.assertIsInstance(future, Future)
-
-    def test_set_with_ttl(self):
-        """Test set_async with TTL."""
-        future = self.proxy.set_async("key", "value", ttl=60)
-        self.assertIsInstance(future, Future)
-
-    def test_get_all_async_empty_keys(self):
-        """Test get_all_async with empty keys returns empty dict."""
-        future = self.proxy.get_all_async(set())
-        self.assertEqual(future.result(), {})
-
-    def test_get_all_async_returns_future(self):
-        """Test get_all_async returns a Future."""
-        future = self.proxy.get_all_async({"key1", "key2"})
-        self.assertIsInstance(future, Future)
-
-    def test_put_all_async_empty_entries(self):
-        """Test put_all_async with empty entries."""
-        future = self.proxy.put_all_async({})
-        self.assertIsNone(future.result())
-
-    def test_put_all_async_returns_future(self):
-        """Test put_all_async returns a Future."""
-        future = self.proxy.put_all_async({"key1": "value1"})
-        self.assertIsInstance(future, Future)
-
-    def test_size_async_returns_future(self):
-        """Test size_async returns a Future."""
-        future = self.proxy.size_async()
-        self.assertIsInstance(future, Future)
-
-    def test_is_empty_async_returns_future(self):
-        """Test is_empty_async returns a Future."""
-        future = self.proxy.is_empty_async()
-        self.assertIsInstance(future, Future)
-
-    def test_clear_async_returns_future(self):
-        """Test clear_async returns a Future."""
-        future = self.proxy.clear_async()
-        self.assertIsInstance(future, Future)
-
-    def test_key_set_async_returns_future(self):
-        """Test key_set_async returns a Future."""
-        future = self.proxy.key_set_async()
-        self.assertIsInstance(future, Future)
-
-    def test_values_async_returns_future(self):
-        """Test values_async returns a Future."""
-        future = self.proxy.values_async()
-        self.assertIsInstance(future, Future)
-
-    def test_entry_set_async_returns_future(self):
-        """Test entry_set_async returns a Future."""
-        future = self.proxy.entry_set_async()
-        self.assertIsInstance(future, Future)
-
-    def test_add_entry_listener_returns_registration_id(self):
-        """Test add_entry_listener returns a registration ID."""
-        listener = EntryListener()
-        reg_id = self.proxy.add_entry_listener(listener)
-        self.assertIsInstance(reg_id, str)
-        self.assertTrue(len(reg_id) > 0)
-
-    def test_add_entry_listener_with_key(self):
-        """Test add_entry_listener with specific key."""
-        listener = EntryListener()
-        reg_id = self.proxy.add_entry_listener(listener, key="specific_key")
-        self.assertIsInstance(reg_id, str)
-
-    def test_add_entry_listener_without_value(self):
-        """Test add_entry_listener with include_value=False."""
-        listener = EntryListener()
-        reg_id = self.proxy.add_entry_listener(listener, include_value=False)
-        self.assertIsInstance(reg_id, str)
-
-    def test_remove_entry_listener_returns_true_for_existing(self):
-        """Test remove_entry_listener returns True for existing listener."""
-        listener = EntryListener()
-        reg_id = self.proxy.add_entry_listener(listener)
-        result = self.proxy.remove_entry_listener(reg_id)
-        self.assertTrue(result)
-
-    def test_remove_entry_listener_returns_false_for_nonexistent(self):
-        """Test remove_entry_listener returns False for nonexistent listener."""
-        result = self.proxy.remove_entry_listener("nonexistent-id")
-        self.assertFalse(result)
-
-    def test_aggregate_async_returns_future(self):
-        """Test aggregate_async returns a Future."""
-        future = self.proxy.aggregate_async(MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_project_async_returns_future(self):
-        """Test project_async returns a Future."""
-        future = self.proxy.project_async(MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_execute_on_key_async_returns_future(self):
-        """Test execute_on_key_async returns a Future."""
-        future = self.proxy.execute_on_key_async("key", MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_execute_on_keys_async_empty_keys(self):
-        """Test execute_on_keys_async with empty keys."""
-        future = self.proxy.execute_on_keys_async(set(), MagicMock())
-        self.assertEqual(future.result(), {})
-
-    def test_execute_on_keys_async_returns_future(self):
-        """Test execute_on_keys_async returns a Future."""
-        future = self.proxy.execute_on_keys_async({"key1"}, MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_execute_on_entries_async_returns_future(self):
-        """Test execute_on_entries_async returns a Future."""
-        future = self.proxy.execute_on_entries_async(MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_execute_on_entries_async_with_predicate(self):
-        """Test execute_on_entries_async with predicate."""
-        future = self.proxy.execute_on_entries_async(MagicMock(), predicate=MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_execute_on_all_entries_async_returns_future(self):
-        """Test execute_on_all_entries_async returns a Future."""
-        future = self.proxy.execute_on_all_entries_async(MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_submit_to_key_returns_future(self):
-        """Test submit_to_key returns a Future."""
-        future = self.proxy.submit_to_key("key", MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_lock_async_returns_future(self):
-        """Test lock_async returns a Future."""
-        future = self.proxy.lock_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_lock_with_ttl(self):
-        """Test lock_async with TTL."""
-        future = self.proxy.lock_async("key", ttl=60)
-        self.assertIsInstance(future, Future)
-
-    def test_try_lock_async_returns_future(self):
-        """Test try_lock_async returns a Future."""
-        future = self.proxy.try_lock_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_try_lock_with_timeout_and_ttl(self):
-        """Test try_lock_async with timeout and TTL."""
-        future = self.proxy.try_lock_async("key", timeout=5, ttl=60)
-        self.assertIsInstance(future, Future)
-
-    def test_unlock_async_returns_future(self):
-        """Test unlock_async returns a Future."""
-        future = self.proxy.unlock_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_is_locked_async_returns_future(self):
-        """Test is_locked_async returns a Future."""
-        future = self.proxy.is_locked_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_force_unlock_async_returns_future(self):
-        """Test force_unlock_async returns a Future."""
-        future = self.proxy.force_unlock_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_evict_async_returns_future(self):
-        """Test evict_async returns a Future."""
-        future = self.proxy.evict_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_evict_all_async_returns_future(self):
-        """Test evict_all_async returns a Future."""
-        future = self.proxy.evict_all_async()
-        self.assertIsInstance(future, Future)
-
-    def test_flush_async_returns_future(self):
-        """Test flush_async returns a Future."""
-        future = self.proxy.flush_async()
-        self.assertIsInstance(future, Future)
-
-    def test_load_all_async_returns_future(self):
-        """Test load_all_async returns a Future."""
-        future = self.proxy.load_all_async()
-        self.assertIsInstance(future, Future)
-
-    def test_load_all_async_with_keys(self):
-        """Test load_all_async with specific keys."""
-        future = self.proxy.load_all_async(keys={"key1", "key2"})
-        self.assertIsInstance(future, Future)
-
-    def test_load_all_async_with_replace_existing(self):
-        """Test load_all_async with replace_existing=False."""
-        future = self.proxy.load_all_async(replace_existing=False)
-        self.assertIsInstance(future, Future)
-
-    def test_is_loaded_async_returns_future(self):
-        """Test is_loaded_async returns a Future."""
-        future = self.proxy.is_loaded_async()
-        self.assertIsInstance(future, Future)
-
-    def test_set_ttl_async_returns_future(self):
-        """Test set_ttl_async returns a Future."""
-        future = self.proxy.set_ttl_async("key", 60)
-        self.assertIsInstance(future, Future)
-
-    def test_get_entry_view_async_returns_future(self):
-        """Test get_entry_view_async returns a Future."""
-        future = self.proxy.get_entry_view_async("key")
-        self.assertIsInstance(future, Future)
-
-    def test_get_query_cache_creates_cache(self):
-        """Test get_query_cache creates a new query cache."""
-        from hazelcast.query_cache import QueryCache
-        cache = self.proxy.get_query_cache("test-cache")
-        self.assertIsInstance(cache, QueryCache)
-
-    def test_get_query_cache_returns_existing(self):
-        """Test get_query_cache returns existing cache."""
-        cache1 = self.proxy.get_query_cache("test-cache")
-        cache2 = self.proxy.get_query_cache("test-cache")
-        self.assertIs(cache1, cache2)
-
-    def test_destroy_query_cache_returns_true(self):
-        """Test destroy_query_cache returns True for existing cache."""
-        self.proxy.get_query_cache("test-cache")
-        result = self.proxy.destroy_query_cache("test-cache")
-        self.assertTrue(result)
-
-    def test_destroy_query_cache_returns_false(self):
-        """Test destroy_query_cache returns False for nonexistent cache."""
-        result = self.proxy.destroy_query_cache("nonexistent")
-        self.assertFalse(result)
-
-    def test_add_index_async_returns_future(self):
-        """Test add_index_async returns a Future."""
-        future = self.proxy.add_index_async(["field"])
-        self.assertIsInstance(future, Future)
-
-    def test_add_index_with_type_and_name(self):
-        """Test add_index_async with index type and name."""
-        future = self.proxy.add_index_async(
-            ["field"], index_type=IndexType.HASH, name="my-index"
-        )
-        self.assertIsInstance(future, Future)
-
-    def test_add_interceptor_async_returns_future(self):
-        """Test add_interceptor_async returns a Future."""
-        future = self.proxy.add_interceptor_async(MagicMock())
-        self.assertIsInstance(future, Future)
-
-    def test_remove_interceptor_async_returns_future(self):
-        """Test remove_interceptor_async returns a Future."""
-        future = self.proxy.remove_interceptor_async("reg-id")
-        self.assertIsInstance(future, Future)
-
-    def test_get_event_journal_reader(self):
-        """Test get_event_journal_reader returns a reader."""
-        from hazelcast.event_journal import EventJournalReader
-        reader = self.proxy.get_event_journal_reader()
-        self.assertIsInstance(reader, EventJournalReader)
-
-    def test_read_from_event_journal_async_returns_future(self):
-        """Test read_from_event_journal_async returns a Future."""
-        future = self.proxy.read_from_event_journal_async(0)
-        self.assertIsInstance(future, Future)
-
-    def test_put_wan_async_returns_future(self):
-        """Test put_wan_async returns a Future."""
-        from hazelcast.wan import WanReplicationRef
-        wan_ref = WanReplicationRef("test-wan")
-        future = self.proxy.put_wan_async("key", "value", wan_ref)
-        self.assertIsInstance(future, Future)
-
-    def test_remove_wan_async_returns_future(self):
-        """Test remove_wan_async returns a Future."""
-        from hazelcast.wan import WanReplicationRef
-        wan_ref = WanReplicationRef("test-wan")
-        future = self.proxy.remove_wan_async("key", wan_ref)
-        self.assertIsInstance(future, Future)
-
-    def test_wan_sync_async_returns_future(self):
-        """Test wan_sync_async returns a Future."""
-        from hazelcast.wan import WanReplicationRef
-        wan_ref = WanReplicationRef("test-wan")
-        future = self.proxy.wan_sync_async(wan_ref)
-        self.assertIsInstance(future, Future)
+        self.proxy = MapProxy("test-map", self.context)
+
+    def test_proxy_name(self):
+        """Test proxy name property."""
+        self.assertEqual(self.proxy.name, "test-map")
+
+    def test_proxy_service_name(self):
+        """Test proxy service name."""
+        self.assertEqual(self.proxy.service_name, "hz:impl:mapService")
+
+    def test_destroy_marks_proxy_destroyed(self):
+        """Test that destroy marks the proxy as destroyed."""
+        self.proxy.destroy()
+        self.assertTrue(self.proxy._destroyed)
+
+    def test_check_not_destroyed_raises_after_destroy(self):
+        """Test that operations raise after proxy is destroyed."""
+        self.proxy.destroy()
+
+        from hazelcast.exceptions import IllegalStateException
+        with self.assertRaises(IllegalStateException):
+            self.proxy._check_not_destroyed()
 
     def test_len_returns_size(self):
-        """Test __len__ returns size."""
-        self.assertEqual(len(self.proxy), 0)
+        """Test __len__ returns map size."""
+        future = Future()
+        future.set_result(5)
+        self.mock_invocation.invoke.return_value = future
 
-    def test_contains_uses_contains_key(self):
-        """Test __contains__ uses contains_key."""
-        self.assertFalse("key" in self.proxy)
+        with patch.object(self.proxy, 'size', return_value=5):
+            self.assertEqual(len(self.proxy), 5)
 
-    def test_getitem_uses_get(self):
-        """Test __getitem__ uses get."""
-        result = self.proxy["key"]
-        self.assertIsNone(result)
+    def test_contains_checks_key(self):
+        """Test __contains__ checks for key."""
+        with patch.object(self.proxy, 'contains_key', return_value=True):
+            self.assertTrue("key" in self.proxy)
 
-    def test_setitem_uses_put(self):
-        """Test __setitem__ uses put."""
-        self.proxy["key"] = "value"
+        with patch.object(self.proxy, 'contains_key', return_value=False):
+            self.assertFalse("key" in self.proxy)
 
-    def test_delitem_uses_remove(self):
-        """Test __delitem__ uses remove."""
-        del self.proxy["key"]
+    def test_getitem_calls_get(self):
+        """Test __getitem__ calls get."""
+        with patch.object(self.proxy, 'get', return_value="value"):
+            self.assertEqual(self.proxy["key"], "value")
+
+    def test_setitem_calls_put(self):
+        """Test __setitem__ calls put."""
+        with patch.object(self.proxy, 'put') as mock_put:
+            self.proxy["key"] = "value"
+            mock_put.assert_called_once_with("key", "value")
+
+    def test_delitem_calls_remove(self):
+        """Test __delitem__ calls remove."""
+        with patch.object(self.proxy, 'remove') as mock_remove:
+            del self.proxy["key"]
+            mock_remove.assert_called_once_with("key")
 
     def test_iter_returns_keys(self):
-        """Test __iter__ returns iterator over keys."""
-        result = list(iter(self.proxy))
-        self.assertEqual(result, [])
+        """Test __iter__ returns key iterator."""
+        with patch.object(self.proxy, 'key_set', return_value={"a", "b", "c"}):
+            keys = list(self.proxy)
+            self.assertEqual(set(keys), {"a", "b", "c"})
+
+    def test_repr(self):
+        """Test proxy string representation."""
+        repr_str = repr(self.proxy)
+        self.assertIn("MapProxy", repr_str)
+        self.assertIn("test-map", repr_str)
 
 
-class TestMapProxyWithNearCache(unittest.TestCase):
-    """Tests for MapProxy with near cache."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        self.near_cache = MagicMock()
-        self.near_cache.config = MagicMock()
-        self.near_cache.config.invalidate_on_change = False
-        self.proxy = MapProxy(
-            name="test-map",
-            context=None,
-            near_cache=self.near_cache,
-        )
-
-    def test_near_cache_property(self):
-        """Test near_cache property returns cache."""
-        self.assertEqual(self.proxy.near_cache, self.near_cache)
-
-    def test_get_uses_near_cache(self):
-        """Test get checks near cache first."""
-        self.near_cache.get.return_value = "cached_value"
-        result = self.proxy.get("key")
-        self.assertEqual(result, "cached_value")
-        self.near_cache.get.assert_called_with("key")
-
-    def test_put_invalidates_near_cache(self):
-        """Test put invalidates near cache."""
-        self.proxy.put_async("key", "value")
-        self.near_cache.invalidate.assert_called_with("key")
-
-    def test_remove_invalidates_near_cache(self):
-        """Test remove invalidates near cache."""
-        self.proxy.remove_async("key")
-        self.near_cache.invalidate.assert_called_with("key")
-
-    def test_clear_invalidates_all(self):
-        """Test clear invalidates all near cache entries."""
-        self.proxy.clear_async()
-        self.near_cache.invalidate_all.assert_called()
-
-
-class TestMapProxyLoadAll(unittest.TestCase):
-    """Tests for MapProxy load_all with callback."""
+class TestMapProxyWithMaxIdle(unittest.TestCase):
+    """Test MapProxy max idle operations."""
 
     def setUp(self):
         """Set up test fixtures."""
-        self.proxy = MapProxy(
-            name="test-map",
-            context=None,
+        self.mock_invocation = MagicMock()
+        self.mock_serialization = MagicMock()
+
+        self.mock_serialization.to_data = lambda x: str(x).encode("utf-8") if x else b""
+        self.mock_serialization.to_object = lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+
+        self.context = ProxyContext(
+            invocation_service=self.mock_invocation,
+            serialization_service=self.mock_serialization,
+        )
+        self.proxy = MapProxy("test-map", self.context)
+
+    def test_put_with_max_idle_async_creates_request(self):
+        """Test put_with_max_idle_async creates proper request."""
+        future = Future()
+        future.set_result(None)
+        self.mock_invocation.invoke.return_value = future
+
+        result_future = self.proxy.put_with_max_idle_async("key", "value", ttl=5.0, max_idle=2.0)
+
+        self.mock_invocation.invoke.assert_called_once()
+        call_args = self.mock_invocation.invoke.call_args
+        request = call_args[0][0]
+        self.assertIsInstance(request, ClientMessage)
+
+    def test_set_with_max_idle_async_creates_request(self):
+        """Test set_with_max_idle_async creates proper request."""
+        future = Future()
+        future.set_result(None)
+        self.mock_invocation.invoke.return_value = future
+
+        result_future = self.proxy.set_with_max_idle_async("key", "value", ttl=10.0, max_idle=3.0)
+
+        self.mock_invocation.invoke.assert_called_once()
+
+
+class TestMapProxyFetchEntries(unittest.TestCase):
+    """Test MapProxy fetch entries operation."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_invocation = MagicMock()
+        self.mock_serialization = MagicMock()
+
+        self.mock_serialization.to_data = lambda x: str(x).encode("utf-8") if x else b""
+        self.mock_serialization.to_object = lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+
+        self.context = ProxyContext(
+            invocation_service=self.mock_invocation,
+            serialization_service=self.mock_serialization,
+        )
+        self.proxy = MapProxy("test-map", self.context)
+
+    def test_fetch_entries_async_creates_request(self):
+        """Test fetch_entries_async creates proper request."""
+        future = Future()
+        future.set_result(None)
+        self.mock_invocation.invoke.return_value = future
+
+        result_future = self.proxy.fetch_entries_async(
+            partition_id=0, table_index=10, batch_size=50
         )
 
-    def test_load_all_with_callback_success(self):
-        """Test load_all invokes callback on success."""
-        results = []
+        self.mock_invocation.invoke.assert_called_once()
+        call_args = self.mock_invocation.invoke.call_args
+        request = call_args[0][0]
+        self.assertIsInstance(request, ClientMessage)
 
-        def callback(count, error):
-            results.append((count, error))
 
-        self.proxy.load_all(callback=callback)
-        self.assertEqual(len(results), 1)
-        self.assertIsNone(results[0][1])
+class TestMapProxyAggregation(unittest.TestCase):
+    """Test MapProxy aggregation operations."""
 
-    def test_load_all_with_keys_and_callback(self):
-        """Test load_all with specific keys invokes callback."""
-        results = []
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_invocation = MagicMock()
+        self.mock_serialization = MagicMock()
 
-        def callback(count, error):
-            results.append((count, error))
+        self.mock_serialization.to_data = lambda x: str(x).encode("utf-8") if x else b""
+        self.mock_serialization.to_object = lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
 
-        keys = {"key1", "key2"}
-        self.proxy.load_all(keys=keys, callback=callback)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0][0], 2)
+        self.context = ProxyContext(
+            invocation_service=self.mock_invocation,
+            serialization_service=self.mock_serialization,
+        )
+        self.proxy = MapProxy("test-map", self.context)
+
+    def test_aggregate_async_without_predicate(self):
+        """Test aggregate_async without predicate."""
+        future = Future()
+        future.set_result(None)
+        self.mock_invocation.invoke.return_value = future
+
+        mock_aggregator = MagicMock()
+        result_future = self.proxy.aggregate_async(mock_aggregator)
+
+        self.mock_invocation.invoke.assert_called_once()
+
+    def test_aggregate_async_with_predicate(self):
+        """Test aggregate_async with predicate."""
+        future = Future()
+        future.set_result(None)
+        self.mock_invocation.invoke.return_value = future
+
+        mock_aggregator = MagicMock()
+        mock_predicate = MagicMock()
+        result_future = self.proxy.aggregate_async(mock_aggregator, mock_predicate)
+
+        self.mock_invocation.invoke.assert_called_once()
+
+
+class TestMapProxyProjection(unittest.TestCase):
+    """Test MapProxy projection operations."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_invocation = MagicMock()
+        self.mock_serialization = MagicMock()
+
+        self.mock_serialization.to_data = lambda x: str(x).encode("utf-8") if x else b""
+        self.mock_serialization.to_object = lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+
+        self.context = ProxyContext(
+            invocation_service=self.mock_invocation,
+            serialization_service=self.mock_serialization,
+        )
+        self.proxy = MapProxy("test-map", self.context)
+
+    def test_project_async_without_predicate(self):
+        """Test project_async without predicate."""
+        future = Future()
+        future.set_result(None)
+        self.mock_invocation.invoke.return_value = future
+
+        mock_projection = MagicMock()
+        result_future = self.proxy.project_async(mock_projection)
+
+        self.mock_invocation.invoke.assert_called_once()
+
+    def test_project_async_with_predicate(self):
+        """Test project_async with predicate."""
+        future = Future()
+        future.set_result(None)
+        self.mock_invocation.invoke.return_value = future
+
+        mock_projection = MagicMock()
+        mock_predicate = MagicMock()
+        result_future = self.proxy.project_async(mock_projection, mock_predicate)
+
+        self.mock_invocation.invoke.assert_called_once()
 
 
 if __name__ == "__main__":

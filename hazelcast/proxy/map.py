@@ -14,6 +14,7 @@ from typing import (
     Set,
     Tuple,
     TypeVar,
+    Union,
     TYPE_CHECKING,
 )
 
@@ -799,6 +800,118 @@ class MapProxy(Proxy, Generic[K, V]):
 
         return self._invoke(request)
 
+    def put_with_max_idle(
+        self, key: K, value: V, ttl: float = -1, max_idle: float = -1
+    ) -> Optional[V]:
+        """Put a value with both TTL and max idle time.
+
+        Associates the specified value with the specified key. The entry
+        will be evicted either after TTL expires or after being idle
+        (not accessed) for max_idle duration, whichever comes first.
+
+        Args:
+            key: The key to set.
+            value: The value to associate.
+            ttl: Time to live in seconds. -1 means infinite.
+            max_idle: Maximum idle time in seconds. -1 means infinite.
+
+        Returns:
+            The previous value associated with the key, or None.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> old = my_map.put_with_max_idle("key", "value", ttl=300, max_idle=60)
+        """
+        return self.put_with_max_idle_async(key, value, ttl, max_idle).result()
+
+    def put_with_max_idle_async(
+        self, key: K, value: V, ttl: float = -1, max_idle: float = -1
+    ) -> Future:
+        """Put a value with TTL and max idle asynchronously.
+
+        Args:
+            key: The key to set.
+            value: The value to associate.
+            ttl: Time to live in seconds. -1 means infinite.
+            max_idle: Maximum idle time in seconds. -1 means infinite.
+
+        Returns:
+            A Future that will contain the previous value.
+        """
+        self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
+        key_data = self._to_data(key)
+        value_data = self._to_data(value)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+        max_idle_millis = int(max_idle * 1000) if max_idle > 0 else -1
+
+        request = MapCodec.encode_put_with_max_idle_request(
+            self._name, key_data, value_data, 0, ttl_millis, max_idle_millis
+        )
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_put_with_max_idle_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
+
+    def set_with_max_idle(
+        self, key: K, value: V, ttl: float = -1, max_idle: float = -1
+    ) -> None:
+        """Set a value with both TTL and max idle time.
+
+        Similar to put_with_max_idle but does not return the old value.
+        More efficient when the previous value is not needed.
+
+        Args:
+            key: The key to set.
+            value: The value to associate.
+            ttl: Time to live in seconds. -1 means infinite.
+            max_idle: Maximum idle time in seconds. -1 means infinite.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> my_map.set_with_max_idle("session", data, ttl=3600, max_idle=300)
+        """
+        self.set_with_max_idle_async(key, value, ttl, max_idle).result()
+
+    def set_with_max_idle_async(
+        self, key: K, value: V, ttl: float = -1, max_idle: float = -1
+    ) -> Future:
+        """Set a value with TTL and max idle asynchronously.
+
+        Args:
+            key: The key to set.
+            value: The value to associate.
+            ttl: Time to live in seconds. -1 means infinite.
+            max_idle: Maximum idle time in seconds. -1 means infinite.
+
+        Returns:
+            A Future that completes when the operation is done.
+        """
+        self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
+        key_data = self._to_data(key)
+        value_data = self._to_data(value)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+        max_idle_millis = int(max_idle * 1000) if max_idle > 0 else -1
+
+        request = MapCodec.encode_set_with_max_idle_request(
+            self._name, key_data, value_data, 0, ttl_millis, max_idle_millis
+        )
+
+        return self._invoke(request)
+
     def get_all(self, keys: Set[K]) -> Dict[K, V]:
         """Get multiple values at once.
 
@@ -1119,19 +1232,30 @@ class MapProxy(Proxy, Generic[K, V]):
         future = self._invoke(request, handle_response)
         return future.result()
 
-    def aggregate(self, aggregator: Any, predicate: Any = None) -> Any:
+    def aggregate(self, aggregator: "Aggregator", predicate: Any = None) -> Any:
         """Aggregate map entries.
 
+        Applies an aggregation function to all entries (or filtered entries
+        if a predicate is provided) and returns the aggregated result.
+
         Args:
-            aggregator: The aggregator to apply.
-            predicate: Optional predicate to filter entries.
+            aggregator: The aggregator to apply (e.g., count, sum, avg).
+            predicate: Optional predicate to filter entries before aggregation.
 
         Returns:
             The aggregation result.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> from hazelcast.aggregator import count, sum_
+            >>> total = my_map.aggregate(count())
+            >>> print(f"Total entries: {total}")
         """
         return self.aggregate_async(aggregator, predicate).result()
 
-    def aggregate_async(self, aggregator: Any, predicate: Any = None) -> Future:
+    def aggregate_async(self, aggregator: "Aggregator", predicate: Any = None) -> Future:
         """Aggregate map entries asynchronously.
 
         Args:
@@ -1142,21 +1266,51 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain the aggregation result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+
+        aggregator_data = self._to_data(aggregator)
+
+        if predicate is not None:
+            predicate_data = self._to_data(predicate)
+            request = MapCodec.encode_aggregate_with_predicate_request(
+                self._name, aggregator_data, predicate_data
+            )
+
+            def handle_predicate_response(response: "ClientMessage") -> Any:
+                data = MapCodec.decode_aggregate_with_predicate_response(response)
+                return self._to_object(data) if data else None
+
+            return self._invoke(request, handle_predicate_response)
+
+        request = MapCodec.encode_aggregate_request(self._name, aggregator_data)
+
+        def handle_response(response: "ClientMessage") -> Any:
+            data = MapCodec.decode_aggregate_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def project(
         self, projection: Projection, predicate: Optional[Any] = None
     ) -> List[Any]:
         """Project map entries.
 
+        Applies a projection to transform each entry's value. Optionally
+        filters entries using a predicate before projection.
+
         Args:
-            projection: The projection to apply.
-            predicate: Optional predicate to filter entries.
+            projection: The projection to apply (e.g., single-attribute,
+                multi-attribute, or identity projection).
+            predicate: Optional predicate to filter entries before projection.
 
         Returns:
             A list of projected values.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> from hazelcast.projection import single_attribute
+            >>> names = my_map.project(single_attribute("name"))
         """
         return self.project_async(projection, predicate).result()
 
@@ -1173,9 +1327,28 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a list of projected values.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result([])
-        return future
+
+        projection_data = self._to_data(projection)
+
+        if predicate is not None:
+            predicate_data = self._to_data(predicate)
+            request = MapCodec.encode_project_with_predicate_request(
+                self._name, projection_data, predicate_data
+            )
+
+            def handle_predicate_response(response: "ClientMessage") -> List[Any]:
+                items = MapCodec.decode_project_with_predicate_response(response)
+                return [self._to_object(item) for item in items]
+
+            return self._invoke(request, handle_predicate_response)
+
+        request = MapCodec.encode_project_request(self._name, projection_data)
+
+        def handle_response(response: "ClientMessage") -> List[Any]:
+            items = MapCodec.decode_project_response(response)
+            return [self._to_object(item) for item in items]
+
+        return self._invoke(request, handle_response)
 
     def execute_on_key(
         self,
@@ -1763,6 +1936,68 @@ class MapProxy(Proxy, Generic[K, V]):
 
         def handle_response(response: "ClientMessage") -> bool:
             return MapCodec.decode_is_loaded_response(response)
+
+        return self._invoke(request, handle_response)
+
+    def fetch_entries(
+        self, partition_id: int, table_index: int = 0, batch_size: int = 100
+    ) -> Tuple[Dict[K, V], int]:
+        """Fetch entries from a specific partition.
+
+        Retrieves a batch of entries from the specified partition,
+        starting from the given table index. Useful for iterating
+        over large maps partition by partition.
+
+        Args:
+            partition_id: The partition to fetch entries from.
+            table_index: The starting index in the partition's table.
+                Use 0 for the first call, then use the returned
+                next_table_index for subsequent calls.
+            batch_size: Maximum number of entries to fetch.
+
+        Returns:
+            A tuple of (entries_dict, next_table_index). When
+            next_table_index is negative, all entries in the
+            partition have been fetched.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> entries, next_idx = my_map.fetch_entries(partition_id=0)
+            >>> while next_idx >= 0:
+            ...     more, next_idx = my_map.fetch_entries(0, next_idx)
+            ...     entries.update(more)
+        """
+        return self.fetch_entries_async(partition_id, table_index, batch_size).result()
+
+    def fetch_entries_async(
+        self, partition_id: int, table_index: int = 0, batch_size: int = 100
+    ) -> Future:
+        """Fetch entries from a specific partition asynchronously.
+
+        Args:
+            partition_id: The partition to fetch entries from.
+            table_index: The starting index in the partition's table.
+            batch_size: Maximum number of entries to fetch.
+
+        Returns:
+            A Future that will contain (entries_dict, next_table_index).
+        """
+        self._check_not_destroyed()
+
+        request = MapCodec.encode_fetch_entries_request(
+            self._name, partition_id, table_index, batch_size
+        )
+
+        def handle_response(response: "ClientMessage") -> Tuple[Dict[K, V], int]:
+            entries_data, next_index = MapCodec.decode_fetch_entries_response(response)
+            result: Dict[K, V] = {}
+            for key_data, value_data in entries_data:
+                k = self._to_object(key_data)
+                v = self._to_object(value_data)
+                result[k] = v
+            return result, next_index
 
         return self._invoke(request, handle_response)
 
