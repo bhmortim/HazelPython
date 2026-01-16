@@ -401,6 +401,42 @@ class NearCache(Generic[K, V]):
                 expired_count += 1
         return expired_count
 
+    def invalidate_batch(self, keys: list) -> int:
+        """Invalidate multiple keys at once.
+
+        Args:
+            keys: List of keys to invalidate.
+
+        Returns:
+            Number of entries invalidated.
+        """
+        count = 0
+        with self._lock:
+            for key in keys:
+                if key in self._records:
+                    del self._records[key]
+                    self._stats.invalidations += 1
+                    count += 1
+        return count
+
+    def get_stats_snapshot(self) -> NearCacheStats:
+        """Get a snapshot of the current statistics.
+
+        Returns:
+            A copy of the current stats.
+        """
+        with self._lock:
+            return NearCacheStats(
+                hits=self._stats.hits,
+                misses=self._stats.misses,
+                evictions=self._stats.evictions,
+                expirations=self._stats.expirations,
+                invalidations=self._stats.invalidations,
+                entries_count=len(self._records),
+                owned_entry_memory_cost=self._stats.owned_entry_memory_cost,
+                creation_time=self._stats.creation_time,
+            )
+
 
 class NearCacheManager:
     """Manages near caches for multiple maps."""

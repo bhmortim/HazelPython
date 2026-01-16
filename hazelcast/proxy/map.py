@@ -166,6 +166,7 @@ class MapProxy(Proxy, Generic[K, V]):
         super().__init__(self.SERVICE_NAME, name, context)
         self._entry_listeners: Dict[str, Tuple[EntryListener, bool, Optional[uuid_module.UUID]]] = {}
         self._near_cache: Optional["NearCache"] = near_cache
+        self._near_cache_invalidation_listener_id: Optional[str] = None
         self._reference_id_generator = _ReferenceIdGenerator()
 
     @property
@@ -174,8 +175,43 @@ class MapProxy(Proxy, Generic[K, V]):
         return self._near_cache
 
     def set_near_cache(self, near_cache: "NearCache") -> None:
-        """Set the near cache for this map."""
+        """Set the near cache for this map.
+
+        If the near cache config has invalidate_on_change enabled,
+        an entry listener will be registered to receive cluster-side
+        invalidation events.
+        """
         self._near_cache = near_cache
+        self._setup_near_cache_invalidation()
+
+    def _setup_near_cache_invalidation(self) -> None:
+        """Set up invalidation listener if configured."""
+        if self._near_cache is None:
+            return
+
+        if not self._near_cache.config.invalidate_on_change:
+            return
+
+        if self._near_cache_invalidation_listener_id is not None:
+            return
+
+        invalidation_listener = _NearCacheInvalidationListener(self._near_cache)
+        self._near_cache_invalidation_listener_id = self.add_entry_listener(
+            invalidation_listener,
+            include_value=False,
+        )
+
+    def _teardown_near_cache_invalidation(self) -> None:
+        """Remove invalidation listener if registered."""
+        if self._near_cache_invalidation_listener_id is not None:
+            self.remove_entry_listener(self._near_cache_invalidation_listener_id)
+            self._near_cache_invalidation_listener_id = None
+
+    def _on_destroy(self) -> None:
+        """Called when the proxy is destroyed."""
+        self._teardown_near_cache_invalidation()
+        if self._near_cache is not None:
+            self._near_cache.clear()
 
     def put(self, key: K, value: V, ttl: float = -1) -> Optional[V]:
         """Set a key-value pair in the map.
@@ -1480,3 +1516,31 @@ class _ReferenceIdGenerator:
         with self._lock:
             self._counter += 1
             return self._counter
+
+
+class _NearCacheInvalidationListener(EntryListener):
+    """Internal listener for near cache invalidation events from cluster."""
+
+    def __init__(self, near_cache: "NearCache"):
+        self._near_cache = near_cache
+
+    def entry_added(self, event: EntryEvent) -> None:
+        self._near_cache.invalidate(event.key)
+
+    def entry_removed(self, event: EntryEvent) -> None:
+        self._near_cache.invalidate(event.key)
+
+    def entry_updated(self, event: EntryEvent) -> None:
+        self._near_cache.invalidate(event.key)
+
+    def entry_evicted(self, event: EntryEvent) -> None:
+        self._near_cache.invalidate(event.key)
+
+    def entry_expired(self, event: EntryEvent) -> None:
+        self._near_cache.invalidate(event.key)
+
+    def map_evicted(self, event: EntryEvent) -> None:
+        self._near_cache.invalidate_all()
+
+    def map_cleared(self, event: EntryEvent) -> None:
+        self._near_cache.invalidate_all()
