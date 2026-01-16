@@ -313,6 +313,30 @@ class DefaultCompactWriter(CompactWriter):
         self._fields[field_name] = value
         self._field_types[field_name] = "array_string"
 
+    def write_array_of_int8(self, field_name: str, value: list) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "array_int8"
+
+    def write_array_of_int16(self, field_name: str, value: list) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "array_int16"
+
+    def write_array_of_int64(self, field_name: str, value: list) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "array_int64"
+
+    def write_array_of_float32(self, field_name: str, value: list) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "array_float32"
+
+    def write_array_of_float64(self, field_name: str, value: list) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "array_float64"
+
+    def write_array_of_compact(self, field_name: str, value: list) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "array_compact"
+
     def write_nullable_boolean(self, field_name: str, value: bool) -> None:
         self._fields[field_name] = value
         self._field_types[field_name] = "nullable_boolean"
@@ -320,6 +344,26 @@ class DefaultCompactWriter(CompactWriter):
     def write_nullable_int32(self, field_name: str, value: int) -> None:
         self._fields[field_name] = value
         self._field_types[field_name] = "nullable_int32"
+
+    def write_nullable_int8(self, field_name: str, value: int) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "nullable_int8"
+
+    def write_nullable_int16(self, field_name: str, value: int) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "nullable_int16"
+
+    def write_nullable_int64(self, field_name: str, value: int) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "nullable_int64"
+
+    def write_nullable_float32(self, field_name: str, value: float) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "nullable_float32"
+
+    def write_nullable_float64(self, field_name: str, value: float) -> None:
+        self._fields[field_name] = value
+        self._field_types[field_name] = "nullable_float64"
 
 
 class DefaultCompactReader(CompactReader):
