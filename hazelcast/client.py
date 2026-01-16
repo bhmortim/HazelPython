@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from hazelcast.proxy.queue import Queue
     from hazelcast.proxy.collections import Set, List as HzList
     from hazelcast.proxy.multi_map import MultiMap
+    from hazelcast.proxy.replicated_map import ReplicatedMap
     from hazelcast.proxy.ringbuffer import Ringbuffer
     from hazelcast.proxy.topic import Topic
     from hazelcast.proxy.reliable_topic import ReliableTopic
@@ -52,6 +53,7 @@ SERVICE_NAME_QUEUE = "hz:impl:queueService"
 SERVICE_NAME_SET = "hz:impl:setService"
 SERVICE_NAME_LIST = "hz:impl:listService"
 SERVICE_NAME_MULTI_MAP = "hz:impl:multiMapService"
+SERVICE_NAME_REPLICATED_MAP = "hz:impl:replicatedMapService"
 SERVICE_NAME_RINGBUFFER = "hz:impl:ringbufferService"
 SERVICE_NAME_TOPIC = "hz:impl:topicService"
 SERVICE_NAME_RELIABLE_TOPIC = "hz:impl:reliableTopicService"
@@ -694,6 +696,33 @@ class HazelcastClient:
         """
         from hazelcast.proxy.multi_map import MultiMap
         return self._get_or_create_proxy(SERVICE_NAME_MULTI_MAP, name, MultiMap)
+
+    def get_replicated_map(self, name: str) -> "ReplicatedMap":
+        """Get or create a distributed ReplicatedMap.
+
+        Returns a proxy to a replicated map where data is stored on all
+        cluster members. Unlike IMap, ReplicatedMap does not partition
+        data - every member holds a complete copy.
+
+        ReplicatedMap is suitable for small, read-heavy datasets where
+        eventual consistency is acceptable.
+
+        Args:
+            name: Name of the distributed replicated map.
+
+        Returns:
+            ReplicatedMapProxy instance for replicated map operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> rep_map = client.get_replicated_map("config")
+            >>> rep_map.put("timeout", 30, ttl=300)
+            >>> timeout = rep_map.get("timeout")
+        """
+        from hazelcast.proxy.replicated_map import ReplicatedMap
+        return self._get_or_create_proxy(SERVICE_NAME_REPLICATED_MAP, name, ReplicatedMap)
 
     def get_ringbuffer(self, name: str) -> "Ringbuffer":
         """Get or create a distributed Ringbuffer.

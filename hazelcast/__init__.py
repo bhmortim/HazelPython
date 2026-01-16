@@ -29,6 +29,7 @@ from hazelcast.proxy import (
     EntryEvent,
     EntryListener,
     MultiMapProxy,
+    ReplicatedMapProxy,
     QueueProxy,
     ItemEvent,
     ItemEventType,
@@ -119,6 +120,8 @@ __all__ = [
     "EntryListener",
     # MultiMap
     "MultiMapProxy",
+    # ReplicatedMap
+    "ReplicatedMapProxy",
     # Queue
     "QueueProxy",
     "ItemEvent",

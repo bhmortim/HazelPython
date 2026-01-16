@@ -3,6 +3,11 @@
 from hazelcast.proxy.base import Proxy, DistributedObject, ProxyContext
 from hazelcast.proxy.map import MapProxy, EntryEvent, EntryListener
 from hazelcast.proxy.multi_map import MultiMapProxy
+from hazelcast.proxy.replicated_map import (
+    ReplicatedMapProxy,
+    EntryEvent as ReplicatedMapEntryEvent,
+    EntryListener as ReplicatedMapEntryListener,
+)
 from hazelcast.proxy.queue import QueueProxy, ItemEvent, ItemEventType, ItemListener
 from hazelcast.proxy.collections import SetProxy, ListProxy
 from hazelcast.proxy.ringbuffer import RingbufferProxy, OverflowPolicy, ReadResultSet
@@ -26,6 +31,10 @@ __all__ = [
     "EntryListener",
     # MultiMap
     "MultiMapProxy",
+    # ReplicatedMap
+    "ReplicatedMapProxy",
+    "ReplicatedMapEntryEvent",
+    "ReplicatedMapEntryListener",
     # Queue
     "QueueProxy",
     "ItemEvent",
