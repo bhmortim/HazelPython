@@ -3,6 +3,96 @@ hazelcast.jet.pipeline
 
 Pipeline building API for Jet jobs.
 
+A ``Pipeline`` represents a directed acyclic graph (DAG) of data processing
+stages. You build pipelines by chaining sources, transforms, and sinks.
+
+Usage Examples
+--------------
+
+Simple Pipeline
+~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from hazelcast.jet.pipeline import Pipeline, Sources, Sinks
+
+   pipeline = Pipeline()
+   
+   # Read -> Transform -> Write
+   pipeline.read_from(Sources.map("input")) \
+       .map(lambda entry: (entry.key, entry.value * 2)) \
+       .write_to(Sinks.map("output"))
+
+Stream Processing
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from hazelcast.jet.pipeline import Pipeline, Sources, Sinks, WindowType
+
+   pipeline = Pipeline()
+   
+   # Stream from Kafka, window, aggregate, sink to Map
+   pipeline.read_from(Sources.kafka(
+           bootstrap_servers="localhost:9092",
+           topic="events"
+       )) \
+       .with_timestamps(lambda e: e.timestamp) \
+       .group_by(lambda e: e.user_id) \
+       .window(WindowType.TUMBLING, duration=60000) \
+       .aggregate(count()) \
+       .write_to(Sinks.map("user-counts"))
+
+Batch Processing
+~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # Read from Map, filter, transform, write to list
+   pipeline = Pipeline()
+   
+   pipeline.read_from(Sources.map("users")) \
+       .filter(lambda user: user.value["active"]) \
+       .map(lambda user: user.value["email"]) \
+       .write_to(Sinks.list("active-emails"))
+
+Joining Streams
+~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   pipeline = Pipeline()
+   
+   orders = pipeline.read_from(Sources.map("orders"))
+   customers = pipeline.read_from(Sources.map("customers"))
+   
+   orders.hash_join(
+       customers,
+       join_key=lambda order: order.value["customer_id"],
+       project=lambda order, customer: {
+           "order_id": order.key,
+           "customer_name": customer.value["name"]
+       }
+   ).write_to(Sinks.map("enriched-orders"))
+
+Best Practices
+--------------
+
+1. **Prefer Map Sources**: For in-cluster data, use ``Sources.map()``
+   for optimal performance.
+
+2. **Use Windowing**: For unbounded streams, use windowing to bound
+   state and produce periodic results.
+
+3. **Filter Early**: Apply filters as early as possible to reduce
+   data flowing through the pipeline.
+
+4. **Use Proper Key Functions**: Choose key functions that distribute
+   data evenly across partitions.
+
+API Reference
+-------------
+
 .. automodule:: hazelcast.jet.pipeline
    :members:
    :undoc-members:

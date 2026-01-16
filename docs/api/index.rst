@@ -14,6 +14,7 @@ in the HazelPython client library.
    cp/index
    sql/index
    jet/index
+   transactions
    serialization/index
 
 Module Overview
@@ -37,5 +38,7 @@ Module Overview
      - SQL query execution and result handling
    * - :doc:`jet/index`
      - Jet stream processing pipelines and jobs
+   * - :doc:`transactions`
+     - Transaction API and transactional data structures
    * - :doc:`serialization/index`
      - Serialization services and configuration
