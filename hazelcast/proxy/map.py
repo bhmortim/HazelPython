@@ -15,6 +15,7 @@ from typing import (
     TYPE_CHECKING,
 )
 
+from hazelcast.processor import EntryProcessor
 from hazelcast.proxy.base import Proxy, ProxyContext
 from hazelcast.projection import Projection
 
@@ -822,34 +823,48 @@ class MapProxy(Proxy, Generic[K, V]):
     def execute_on_key(
         self,
         key: K,
-        entry_processor: Any,
+        entry_processor: EntryProcessor[K, V],
     ) -> Any:
-        """Execute an entry processor on a key.
+        """Execute an entry processor on a single key.
+
+        Applies the entry processor to the entry associated with the
+        specified key. The processor runs atomically on the partition
+        that owns the key.
 
         Args:
-            key: The key to process.
+            key: The key whose entry will be processed.
             entry_processor: The entry processor to execute.
 
         Returns:
-            The entry processor result.
+            The result returned by the entry processor.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> result = my_map.execute_on_key("counter", IncrementProcessor(5))
         """
         return self.execute_on_key_async(key, entry_processor).result()
 
     def execute_on_key_async(
         self,
         key: K,
-        entry_processor: Any,
+        entry_processor: EntryProcessor[K, V],
     ) -> Future:
-        """Execute an entry processor asynchronously.
+        """Execute an entry processor on a single key asynchronously.
 
         Args:
-            key: The key to process.
+            key: The key whose entry will be processed.
             entry_processor: The entry processor to execute.
 
         Returns:
             A Future that will contain the result.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result(None)
         return future
@@ -857,60 +872,90 @@ class MapProxy(Proxy, Generic[K, V]):
     def execute_on_keys(
         self,
         keys: Set[K],
-        entry_processor: Any,
+        entry_processor: EntryProcessor[K, V],
     ) -> Dict[K, Any]:
         """Execute an entry processor on multiple keys.
 
+        Applies the entry processor to entries associated with the
+        specified keys. Processing happens in parallel across partitions.
+
         Args:
-            keys: The keys to process.
+            keys: The keys whose entries will be processed.
             entry_processor: The entry processor to execute.
 
         Returns:
-            A dictionary of key to result mappings.
+            A dictionary mapping each key to its processor result.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> results = my_map.execute_on_keys(
+            ...     {"key1", "key2", "key3"},
+            ...     IncrementProcessor(1)
+            ... )
         """
         return self.execute_on_keys_async(keys, entry_processor).result()
 
     def execute_on_keys_async(
         self,
         keys: Set[K],
-        entry_processor: Any,
+        entry_processor: EntryProcessor[K, V],
     ) -> Future:
         """Execute an entry processor on multiple keys asynchronously.
 
         Args:
-            keys: The keys to process.
+            keys: The keys whose entries will be processed.
             entry_processor: The entry processor to execute.
 
         Returns:
             A Future that will contain a dictionary of results.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            for key in keys:
+                self._near_cache.invalidate(key)
+
         future: Future = Future()
         future.set_result({})
         return future
 
     def execute_on_entries(
         self,
-        entry_processor: Any,
+        entry_processor: EntryProcessor[K, V],
         predicate: Any = None,
     ) -> Dict[K, Any]:
-        """Execute an entry processor on all entries.
+        """Execute an entry processor on entries matching a predicate.
+
+        Applies the entry processor to all entries that match the
+        optional predicate. If no predicate is provided, processes
+        all entries in the map.
 
         Args:
             entry_processor: The entry processor to execute.
             predicate: Optional predicate to filter entries.
 
         Returns:
-            A dictionary of key to result mappings.
+            A dictionary mapping each processed key to its result.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> results = my_map.execute_on_entries(
+            ...     IncrementProcessor(1),
+            ...     predicate=GreaterLessPredicate("value", 10, False, True)
+            ... )
         """
         return self.execute_on_entries_async(entry_processor, predicate).result()
 
     def execute_on_entries_async(
         self,
-        entry_processor: Any,
+        entry_processor: EntryProcessor[K, V],
         predicate: Any = None,
     ) -> Future:
-        """Execute an entry processor on all entries asynchronously.
+        """Execute an entry processor on entries asynchronously.
 
         Args:
             entry_processor: The entry processor to execute.
@@ -920,9 +965,51 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a dictionary of results.
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None:
+            self._near_cache.invalidate_all()
+
         future: Future = Future()
         future.set_result({})
         return future
+
+    def execute_on_all_entries(
+        self,
+        entry_processor: EntryProcessor[K, V],
+    ) -> Dict[K, Any]:
+        """Execute an entry processor on all entries in the map.
+
+        Applies the entry processor to every entry in the map.
+        This is equivalent to calling execute_on_entries without
+        a predicate.
+
+        Args:
+            entry_processor: The entry processor to execute.
+
+        Returns:
+            A dictionary mapping each key to its processor result.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            >>> results = my_map.execute_on_all_entries(IncrementProcessor(1))
+        """
+        return self.execute_on_all_entries_async(entry_processor).result()
+
+    def execute_on_all_entries_async(
+        self,
+        entry_processor: EntryProcessor[K, V],
+    ) -> Future:
+        """Execute an entry processor on all entries asynchronously.
+
+        Args:
+            entry_processor: The entry processor to execute.
+
+        Returns:
+            A Future that will contain a dictionary of results.
+        """
+        return self.execute_on_entries_async(entry_processor, None)
 
     def lock(self, key: K, ttl: float = -1) -> None:
         """Acquire a lock on a key.

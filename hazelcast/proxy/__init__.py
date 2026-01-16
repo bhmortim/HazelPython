@@ -23,6 +23,11 @@ from hazelcast.proxy.cardinality_estimator import (
     CardinalityEstimator,
     CardinalityEstimatorProxy,
 )
+from hazelcast.processor import (
+    EntryProcessor,
+    EntryProcessorEntry,
+    SimpleEntryProcessorEntry,
+)
 
 __all__ = [
     # Base
@@ -66,4 +71,8 @@ __all__ = [
     # CardinalityEstimator
     "CardinalityEstimator",
     "CardinalityEstimatorProxy",
+    # Entry Processor
+    "EntryProcessor",
+    "EntryProcessorEntry",
+    "SimpleEntryProcessorEntry",
 ]
