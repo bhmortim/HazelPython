@@ -294,6 +294,25 @@ MAP_KEY_SET = 0x011700
 MAP_VALUES = 0x011800
 MAP_ENTRY_SET = 0x011900
 MAP_DELETE = 0x011B00
+MAP_SET = 0x010B00
+MAP_PUT_IF_ABSENT = 0x010C00
+MAP_REPLACE_IF_SAME = 0x010D00
+MAP_GET_ALL = 0x011500
+MAP_EXECUTE_ON_KEY = 0x012100
+MAP_EXECUTE_ON_ALL_KEYS = 0x012200
+MAP_EXECUTE_ON_KEYS = 0x012500
+MAP_ADD_ENTRY_LISTENER = 0x011E00
+MAP_ADD_ENTRY_LISTENER_TO_KEY = 0x011F00
+MAP_REMOVE_ENTRY_LISTENER = 0x012000
+MAP_LOCK = 0x012700
+MAP_TRY_LOCK = 0x012800
+MAP_UNLOCK = 0x012900
+MAP_IS_LOCKED = 0x012A00
+MAP_FORCE_UNLOCK = 0x012B00
+MAP_EVICT = 0x012C00
+MAP_EVICT_ALL = 0x012D00
+MAP_FLUSH = 0x012E00
+MAP_LOAD_ALL = 0x012F00
 
 QUEUE_OFFER = 0x030100
 QUEUE_PUT = 0x030200
@@ -562,6 +581,540 @@ class MapCodec:
         """Decode a Map.entrySet response."""
         msg.next_frame()
         return _decode_entry_list(msg)
+
+    @staticmethod
+    def encode_contains_value_request(name: str, value: bytes) -> "ClientMessage":
+        """Encode a Map.containsValue request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_CONTAINS_VALUE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_contains_value_response(msg: "ClientMessage") -> bool:
+        """Decode a Map.containsValue response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_is_empty_request(name: str) -> "ClientMessage":
+        """Encode a Map.isEmpty request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_IS_EMPTY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_is_empty_response(msg: "ClientMessage") -> bool:
+        """Decode a Map.isEmpty response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return True
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_delete_request(name: str, key: bytes, thread_id: int) -> "ClientMessage":
+        """Encode a Map.delete request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_DELETE)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def encode_set_request(
+        name: str, key: bytes, value: bytes, thread_id: int, ttl: int
+    ) -> "ClientMessage":
+        """Encode a Map.set request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, ttl)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def encode_put_if_absent_request(
+        name: str, key: bytes, value: bytes, thread_id: int, ttl: int
+    ) -> "ClientMessage":
+        """Encode a Map.putIfAbsent request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_PUT_IF_ABSENT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, ttl)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_put_if_absent_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Map.putIfAbsent response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_replace_request(
+        name: str, key: bytes, value: bytes, thread_id: int
+    ) -> "ClientMessage":
+        """Encode a Map.replace request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_REPLACE)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_replace_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Map.replace response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_replace_if_same_request(
+        name: str, key: bytes, old_value: bytes, new_value: bytes, thread_id: int
+    ) -> "ClientMessage":
+        """Encode a Map.replaceIfSame request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_REPLACE_IF_SAME)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(old_value))
+        msg.add_frame(Frame(new_value))
+        return msg
+
+    @staticmethod
+    def decode_replace_if_same_response(msg: "ClientMessage") -> bool:
+        """Decode a Map.replaceIfSame response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_get_all_request(name: str, keys: List[bytes]) -> "ClientMessage":
+        """Encode a Map.getAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_GET_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        _encode_data_list(msg, keys)
+        return msg
+
+    @staticmethod
+    def decode_get_all_response(msg: "ClientMessage") -> List[Tuple[bytes, bytes]]:
+        """Decode a Map.getAll response."""
+        msg.next_frame()
+        return _decode_entry_list(msg)
+
+    @staticmethod
+    def encode_put_all_request(
+        name: str, entries: List[Tuple[bytes, bytes]]
+    ) -> "ClientMessage":
+        """Encode a Map.putAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_PUT_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        _encode_entry_list(msg, entries)
+        return msg
+
+    @staticmethod
+    def encode_execute_on_key_request(
+        name: str, key: bytes, processor: bytes, thread_id: int
+    ) -> "ClientMessage":
+        """Encode a Map.executeOnKey request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_EXECUTE_ON_KEY)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(processor))
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_execute_on_key_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Map.executeOnKey response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_execute_on_keys_request(
+        name: str, keys: List[bytes], processor: bytes
+    ) -> "ClientMessage":
+        """Encode a Map.executeOnKeys request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_EXECUTE_ON_KEYS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(processor))
+        _encode_data_list(msg, keys)
+        return msg
+
+    @staticmethod
+    def decode_execute_on_keys_response(msg: "ClientMessage") -> List[Tuple[bytes, bytes]]:
+        """Decode a Map.executeOnKeys response."""
+        msg.next_frame()
+        return _decode_entry_list(msg)
+
+    @staticmethod
+    def encode_execute_on_all_keys_request(
+        name: str, processor: bytes
+    ) -> "ClientMessage":
+        """Encode a Map.executeOnAllKeys request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_EXECUTE_ON_ALL_KEYS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(processor))
+        return msg
+
+    @staticmethod
+    def decode_execute_on_all_keys_response(msg: "ClientMessage") -> List[Tuple[bytes, bytes]]:
+        """Decode a Map.executeOnAllKeys response."""
+        msg.next_frame()
+        return _decode_entry_list(msg)
+
+    @staticmethod
+    def encode_add_entry_listener_request(
+        name: str, include_value: bool, local_only: bool
+    ) -> "ClientMessage":
+        """Encode a Map.addEntryListener request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_ADD_ENTRY_LISTENER)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE, 1 if include_value else 0)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE + BOOLEAN_SIZE, 1 if local_only else 0)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE, 0xFF)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_add_entry_listener_response(msg: "ClientMessage") -> Optional[uuid_module.UUID]:
+        """Decode a Map.addEntryListener response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + UUID_SIZE:
+            return None
+        uuid_val, _ = FixSizedTypesCodec.decode_uuid(frame.content, RESPONSE_HEADER_SIZE)
+        return uuid_val
+
+    @staticmethod
+    def encode_add_entry_listener_to_key_request(
+        name: str, key: bytes, include_value: bool, local_only: bool
+    ) -> "ClientMessage":
+        """Encode a Map.addEntryListenerToKey request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_ADD_ENTRY_LISTENER_TO_KEY)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE, 1 if include_value else 0)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE + BOOLEAN_SIZE, 1 if local_only else 0)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE, 0xFF)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def encode_remove_entry_listener_request(
+        name: str, registration_id: uuid_module.UUID
+    ) -> "ClientMessage":
+        """Encode a Map.removeEntryListener request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_REMOVE_ENTRY_LISTENER)
+        struct.pack_into("<i", buffer, 12, -1)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE, registration_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_remove_entry_listener_response(msg: "ClientMessage") -> bool:
+        """Decode a Map.removeEntryListener response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_lock_request(
+        name: str, key: bytes, thread_id: int, ttl: int, reference_id: int
+    ) -> "ClientMessage":
+        """Encode a Map.lock request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_LOCK)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, ttl)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + 2 * LONG_SIZE, reference_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def encode_try_lock_request(
+        name: str, key: bytes, thread_id: int, ttl: int, timeout: int, reference_id: int
+    ) -> "ClientMessage":
+        """Encode a Map.tryLock request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_TRY_LOCK)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, ttl)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + 2 * LONG_SIZE, timeout)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + 3 * LONG_SIZE, reference_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_try_lock_response(msg: "ClientMessage") -> bool:
+        """Decode a Map.tryLock response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_unlock_request(
+        name: str, key: bytes, thread_id: int, reference_id: int
+    ) -> "ClientMessage":
+        """Encode a Map.unlock request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_UNLOCK)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, reference_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def encode_is_locked_request(name: str, key: bytes) -> "ClientMessage":
+        """Encode a Map.isLocked request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_IS_LOCKED)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_is_locked_response(msg: "ClientMessage") -> bool:
+        """Decode a Map.isLocked response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_force_unlock_request(
+        name: str, key: bytes, reference_id: int
+    ) -> "ClientMessage":
+        """Encode a Map.forceUnlock request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_FORCE_UNLOCK)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, reference_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def encode_evict_request(name: str, key: bytes, thread_id: int) -> "ClientMessage":
+        """Encode a Map.evict request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_EVICT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_evict_response(msg: "ClientMessage") -> bool:
+        """Decode a Map.evict response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_evict_all_request(name: str) -> "ClientMessage":
+        """Encode a Map.evictAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_EVICT_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_flush_request(name: str) -> "ClientMessage":
+        """Encode a Map.flush request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_FLUSH)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_load_all_request(
+        name: str, keys: Optional[List[bytes]], replace_existing: bool
+    ) -> "ClientMessage":
+        """Encode a Map.loadAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_LOAD_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE, 1 if replace_existing else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        if keys is not None:
+            _encode_data_list(msg, keys)
+        else:
+            _encode_data_list(msg, [])
+        return msg
 
 
 class QueueCodec:
@@ -1047,3 +1600,24 @@ def _decode_entry_list(msg: "ClientMessage") -> List[Tuple[bytes, bytes]]:
             result.append((key, value))
 
     return result
+
+
+def _encode_data_list(msg: "ClientMessage", items: List[bytes]) -> None:
+    """Encode a list of data frames into the message."""
+    from hazelcast.protocol.client_message import Frame, BEGIN_FRAME, END_FRAME
+
+    msg.add_frame(BEGIN_FRAME)
+    for item in items:
+        msg.add_frame(Frame(item))
+    msg.add_frame(END_FRAME)
+
+
+def _encode_entry_list(msg: "ClientMessage", entries: List[Tuple[bytes, bytes]]) -> None:
+    """Encode a list of entry (key-value) pairs into the message."""
+    from hazelcast.protocol.client_message import Frame, BEGIN_FRAME, END_FRAME
+
+    msg.add_frame(BEGIN_FRAME)
+    for key, value in entries:
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+    msg.add_frame(END_FRAME)

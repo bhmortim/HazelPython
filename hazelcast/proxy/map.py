@@ -1,5 +1,7 @@
 """Map distributed data structure proxy."""
 
+import threading
+import uuid as uuid_module
 from concurrent.futures import Future
 from typing import (
     Any,
@@ -16,6 +18,7 @@ from typing import (
 )
 
 from hazelcast.processor import EntryProcessor
+from hazelcast.protocol.codec import MapCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
 from hazelcast.projection import Projection
 
@@ -24,6 +27,7 @@ if TYPE_CHECKING:
     from hazelcast.config import NearCacheConfig
     from hazelcast.predicate import Predicate
     from hazelcast.aggregator import Aggregator
+    from hazelcast.protocol.client_message import ClientMessage
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -160,8 +164,9 @@ class MapProxy(Proxy, Generic[K, V]):
         near_cache: Optional["NearCache"] = None,
     ):
         super().__init__(self.SERVICE_NAME, name, context)
-        self._entry_listeners: Dict[str, Tuple[EntryListener, bool]] = {}
+        self._entry_listeners: Dict[str, Tuple[EntryListener, bool, Optional[uuid_module.UUID]]] = {}
         self._near_cache: Optional["NearCache"] = near_cache
+        self._reference_id_generator = _ReferenceIdGenerator()
 
     @property
     def near_cache(self) -> Optional["NearCache"]:
@@ -214,9 +219,19 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        key_data = self._to_data(key)
+        value_data = self._to_data(value)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+
+        request = MapCodec.encode_put_request(
+            self._name, key_data, value_data, 0, ttl_millis
+        )
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_put_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def get(self, key: K) -> Optional[V]:
         """Get the value associated with a key.
@@ -269,9 +284,17 @@ class MapProxy(Proxy, Generic[K, V]):
                 future.set_result(cached)
                 return future
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        key_data = self._to_data(key)
+        request = MapCodec.encode_get_request(self._name, key_data, 0)
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_get_response(response)
+            value = self._to_object(data) if data else None
+            if self._near_cache is not None and value is not None:
+                self._near_cache.put(key, value)
+            return value
+
+        return self._invoke(request, handle_response)
 
     def remove(self, key: K) -> Optional[V]:
         """Remove a key-value pair from the map.
@@ -309,9 +332,14 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        key_data = self._to_data(key)
+        request = MapCodec.encode_remove_request(self._name, key_data, 0)
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_remove_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def delete(self, key: K) -> None:
         """Delete a key without returning the old value.
@@ -335,9 +363,10 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        key_data = self._to_data(key)
+        request = MapCodec.encode_delete_request(self._name, key_data, 0)
+
+        return self._invoke(request)
 
     def contains_key(self, key: K) -> bool:
         """Check if the map contains a key.
@@ -370,9 +399,14 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+
+        key_data = self._to_data(key)
+        request = MapCodec.encode_contains_key_request(self._name, key_data, 0)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_contains_key_response(response)
+
+        return self._invoke(request, handle_response)
 
     def contains_value(self, value: V) -> bool:
         """Check if the map contains a value.
@@ -395,9 +429,14 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+
+        value_data = self._to_data(value)
+        request = MapCodec.encode_contains_value_request(self._name, value_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_contains_value_response(response)
+
+        return self._invoke(request, handle_response)
 
     def put_if_absent(self, key: K, value: V, ttl: float = -1) -> Optional[V]:
         """Put a value only if the key is not already present.
@@ -424,9 +463,20 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain the existing value if present.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+
+        key_data = self._to_data(key)
+        value_data = self._to_data(value)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+
+        request = MapCodec.encode_put_if_absent_request(
+            self._name, key_data, value_data, 0, ttl_millis
+        )
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_put_if_absent_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def replace(self, key: K, value: V) -> Optional[V]:
         """Replace the value for a key if it exists.
@@ -455,9 +505,16 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        key_data = self._to_data(key)
+        value_data = self._to_data(value)
+
+        request = MapCodec.encode_replace_request(self._name, key_data, value_data, 0)
+
+        def handle_response(response: "ClientMessage") -> Optional[V]:
+            data = MapCodec.decode_replace_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def replace_if_same(self, key: K, old_value: V, new_value: V) -> bool:
         """Replace the value for a key if it equals the expected value.
@@ -488,9 +545,18 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        key_data = self._to_data(key)
+        old_value_data = self._to_data(old_value)
+        new_value_data = self._to_data(new_value)
+
+        request = MapCodec.encode_replace_if_same_request(
+            self._name, key_data, old_value_data, new_value_data, 0
+        )
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_replace_if_same_response(response)
+
+        return self._invoke(request, handle_response)
 
     def set(self, key: K, value: V, ttl: float = -1) -> None:
         """Set a value without returning the old value.
@@ -518,9 +584,15 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        key_data = self._to_data(key)
+        value_data = self._to_data(value)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+
+        request = MapCodec.encode_set_request(
+            self._name, key_data, value_data, 0, ttl_millis
+        )
+
+        return self._invoke(request)
 
     def get_all(self, keys: Set[K]) -> Dict[K, V]:
         """Get multiple values at once.
@@ -543,9 +615,27 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a dictionary of results.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result({})
-        return future
+
+        if not keys:
+            future: Future = Future()
+            future.set_result({})
+            return future
+
+        keys_data = [self._to_data(k) for k in keys]
+        request = MapCodec.encode_get_all_request(self._name, keys_data)
+
+        def handle_response(response: "ClientMessage") -> Dict[K, V]:
+            entries = MapCodec.decode_get_all_response(response)
+            result = {}
+            for key_data, value_data in entries:
+                k = self._to_object(key_data)
+                v = self._to_object(value_data)
+                result[k] = v
+                if self._near_cache is not None:
+                    self._near_cache.put(k, v)
+            return result
+
+        return self._invoke(request, handle_response)
 
     def put_all(self, entries: Dict[K, V]) -> None:
         """Put multiple key-value pairs at once.
@@ -570,9 +660,15 @@ class MapProxy(Proxy, Generic[K, V]):
             for key in entries:
                 self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        if not entries:
+            future: Future = Future()
+            future.set_result(None)
+            return future
+
+        entries_data = [(self._to_data(k), self._to_data(v)) for k, v in entries.items()]
+        request = MapCodec.encode_put_all_request(self._name, entries_data)
+
+        return self._invoke(request)
 
     def size(self) -> int:
         """Get the number of entries in the map.
@@ -599,9 +695,13 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain the size.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(0)
-        return future
+
+        request = MapCodec.encode_size_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> int:
+            return MapCodec.decode_size_response(response)
+
+        return self._invoke(request, handle_response)
 
     def is_empty(self) -> bool:
         """Check if the map is empty.
@@ -618,9 +718,13 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+
+        request = MapCodec.encode_is_empty_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_is_empty_response(response)
+
+        return self._invoke(request, handle_response)
 
     def clear(self) -> None:
         """Remove all entries from the map.
@@ -649,9 +753,9 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate_all()
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = MapCodec.encode_clear_request(self._name)
+
+        return self._invoke(request)
 
     def key_set(self, predicate: Any = None) -> Set[K]:
         """Get all keys in the map.
@@ -674,9 +778,14 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a set of keys.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(set())
-        return future
+
+        request = MapCodec.encode_key_set_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> Set[K]:
+            keys_data = MapCodec.decode_key_set_response(response)
+            return {self._to_object(k) for k in keys_data}
+
+        return self._invoke(request, handle_response)
 
     def values(self, predicate: Any = None) -> List[V]:
         """Get all values in the map.
@@ -699,9 +808,14 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a list of values.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result([])
-        return future
+
+        request = MapCodec.encode_values_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> List[V]:
+            values_data = MapCodec.decode_values_response(response)
+            return [self._to_object(v) for v in values_data]
+
+        return self._invoke(request, handle_response)
 
     def entry_set(self, predicate: Any = None) -> Set[Tuple[K, V]]:
         """Get all entries in the map.
@@ -724,9 +838,14 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a set of entries.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(set())
-        return future
+
+        request = MapCodec.encode_entry_set_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> Set[Tuple[K, V]]:
+            entries_data = MapCodec.decode_entry_set_response(response)
+            return {(self._to_object(k), self._to_object(v)) for k, v in entries_data}
+
+        return self._invoke(request, handle_response)
 
     def add_entry_listener(
         self,
@@ -746,10 +865,27 @@ class MapProxy(Proxy, Generic[K, V]):
         Returns:
             A registration ID for removing the listener.
         """
-        import uuid
-        registration_id = str(uuid.uuid4())
-        self._entry_listeners[registration_id] = (listener, include_value)
-        return registration_id
+        self._check_not_destroyed()
+
+        local_id = str(uuid_module.uuid4())
+
+        if key is not None:
+            key_data = self._to_data(key)
+            request = MapCodec.encode_add_entry_listener_to_key_request(
+                self._name, key_data, include_value, False
+            )
+        else:
+            request = MapCodec.encode_add_entry_listener_request(
+                self._name, include_value, False
+            )
+
+        def handle_response(response: "ClientMessage") -> str:
+            server_id = MapCodec.decode_add_entry_listener_response(response)
+            self._entry_listeners[local_id] = (listener, include_value, server_id)
+            return local_id
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def remove_entry_listener(self, registration_id: str) -> bool:
         """Remove an entry listener.
@@ -760,7 +896,23 @@ class MapProxy(Proxy, Generic[K, V]):
         Returns:
             True if the listener was removed.
         """
-        return self._entry_listeners.pop(registration_id, None) is not None
+        self._check_not_destroyed()
+
+        entry = self._entry_listeners.pop(registration_id, None)
+        if entry is None:
+            return False
+
+        _, _, server_id = entry
+        if server_id is None:
+            return True
+
+        request = MapCodec.encode_remove_entry_listener_request(self._name, server_id)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_remove_entry_listener_response(response)
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def aggregate(self, aggregator: Any, predicate: Any = None) -> Any:
         """Aggregate map entries.
@@ -865,9 +1017,18 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        key_data = self._to_data(key)
+        processor_data = self._to_data(entry_processor)
+
+        request = MapCodec.encode_execute_on_key_request(
+            self._name, key_data, processor_data, 0
+        )
+
+        def handle_response(response: "ClientMessage") -> Any:
+            data = MapCodec.decode_execute_on_key_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def execute_on_keys(
         self,
@@ -917,9 +1078,26 @@ class MapProxy(Proxy, Generic[K, V]):
             for key in keys:
                 self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result({})
-        return future
+        if not keys:
+            future: Future = Future()
+            future.set_result({})
+            return future
+
+        keys_data = [self._to_data(k) for k in keys]
+        processor_data = self._to_data(entry_processor)
+
+        request = MapCodec.encode_execute_on_keys_request(
+            self._name, keys_data, processor_data
+        )
+
+        def handle_response(response: "ClientMessage") -> Dict[K, Any]:
+            entries = MapCodec.decode_execute_on_keys_response(response)
+            return {
+                self._to_object(k): self._to_object(v)
+                for k, v in entries
+            }
+
+        return self._invoke(request, handle_response)
 
     def execute_on_entries(
         self,
@@ -969,9 +1147,18 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate_all()
 
-        future: Future = Future()
-        future.set_result({})
-        return future
+        processor_data = self._to_data(entry_processor)
+
+        request = MapCodec.encode_execute_on_all_keys_request(self._name, processor_data)
+
+        def handle_response(response: "ClientMessage") -> Dict[K, Any]:
+            entries = MapCodec.decode_execute_on_all_keys_response(response)
+            return {
+                self._to_object(k): self._to_object(v)
+                for k, v in entries
+            }
+
+        return self._invoke(request, handle_response)
 
     def execute_on_all_entries(
         self,
@@ -1031,9 +1218,16 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the lock is acquired.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+
+        key_data = self._to_data(key)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+        reference_id = self._reference_id_generator.next_id()
+
+        request = MapCodec.encode_lock_request(
+            self._name, key_data, 0, ttl_millis, reference_id
+        )
+
+        return self._invoke(request)
 
     def try_lock(self, key: K, timeout: float = 0, ttl: float = -1) -> bool:
         """Try to acquire a lock on a key.
@@ -1060,9 +1254,20 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+
+        key_data = self._to_data(key)
+        ttl_millis = int(ttl * 1000) if ttl > 0 else -1
+        timeout_millis = int(timeout * 1000) if timeout > 0 else 0
+        reference_id = self._reference_id_generator.next_id()
+
+        request = MapCodec.encode_try_lock_request(
+            self._name, key_data, 0, ttl_millis, timeout_millis, reference_id
+        )
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_try_lock_response(response)
+
+        return self._invoke(request, handle_response)
 
     def unlock(self, key: K) -> None:
         """Release a lock on a key.
@@ -1082,9 +1287,13 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the lock is released.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+
+        key_data = self._to_data(key)
+        reference_id = self._reference_id_generator.next_id()
+
+        request = MapCodec.encode_unlock_request(self._name, key_data, 0, reference_id)
+
+        return self._invoke(request)
 
     def is_locked(self, key: K) -> bool:
         """Check if a key is locked.
@@ -1107,9 +1316,15 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+
+        key_data = self._to_data(key)
+
+        request = MapCodec.encode_is_locked_request(self._name, key_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_is_locked_response(response)
+
+        return self._invoke(request, handle_response)
 
     def force_unlock(self, key: K) -> None:
         """Force release a lock regardless of owner.
@@ -1129,9 +1344,13 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the lock is released.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+
+        key_data = self._to_data(key)
+        reference_id = self._reference_id_generator.next_id()
+
+        request = MapCodec.encode_force_unlock_request(self._name, key_data, reference_id)
+
+        return self._invoke(request)
 
     def evict(self, key: K) -> bool:
         """Evict a specific key from the map.
@@ -1158,9 +1377,14 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate(key)
 
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        key_data = self._to_data(key)
+
+        request = MapCodec.encode_evict_request(self._name, key_data, 0)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_evict_response(response)
+
+        return self._invoke(request, handle_response)
 
     def evict_all(self) -> None:
         """Evict all entries from the map."""
@@ -1177,9 +1401,9 @@ class MapProxy(Proxy, Generic[K, V]):
         if self._near_cache is not None:
             self._near_cache.invalidate_all()
 
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = MapCodec.encode_evict_all_request(self._name)
+
+        return self._invoke(request)
 
     def flush(self) -> None:
         """Flush map store operations."""
@@ -1192,9 +1416,10 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the flush is done.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+
+        request = MapCodec.encode_flush_request(self._name)
+
+        return self._invoke(request)
 
     def load_all(self, keys: Optional[Set[K]] = None, replace_existing: bool = True) -> None:
         """Load entries from the map store.
@@ -1218,9 +1443,12 @@ class MapProxy(Proxy, Generic[K, V]):
             A Future that completes when the load is done.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+
+        keys_data = [self._to_data(k) for k in keys] if keys else None
+
+        request = MapCodec.encode_load_all_request(self._name, keys_data, replace_existing)
+
+        return self._invoke(request)
 
     def __len__(self) -> int:
         return self.size()
@@ -1239,3 +1467,16 @@ class MapProxy(Proxy, Generic[K, V]):
 
     def __iter__(self) -> Iterator[K]:
         return iter(self.key_set())
+
+
+class _ReferenceIdGenerator:
+    """Thread-safe reference ID generator for lock operations."""
+
+    def __init__(self) -> None:
+        self._counter = 0
+        self._lock = threading.Lock()
+
+    def next_id(self) -> int:
+        with self._lock:
+            self._counter += 1
+            return self._counter
