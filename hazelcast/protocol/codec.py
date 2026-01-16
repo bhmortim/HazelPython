@@ -3159,6 +3159,947 @@ class MultiMapCodec:
         return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
 
 
+# CP Subsystem protocol constants
+CP_ATOMIC_LONG_ADD_AND_GET = 0x090200
+CP_ATOMIC_LONG_COMPARE_AND_SET = 0x090300
+CP_ATOMIC_LONG_GET = 0x090400
+CP_ATOMIC_LONG_GET_AND_ADD = 0x090500
+CP_ATOMIC_LONG_GET_AND_SET = 0x090600
+CP_ATOMIC_LONG_SET = 0x090100
+CP_ATOMIC_LONG_ALTER = 0x090700
+CP_ATOMIC_LONG_ALTER_AND_GET = 0x090800
+CP_ATOMIC_LONG_GET_AND_ALTER = 0x090900
+CP_ATOMIC_LONG_APPLY = 0x090A00
+
+CP_ATOMIC_REF_GET = 0x0A0200
+CP_ATOMIC_REF_SET = 0x0A0300
+CP_ATOMIC_REF_COMPARE_AND_SET = 0x0A0100
+CP_ATOMIC_REF_CONTAINS = 0x0A0400
+CP_ATOMIC_REF_IS_NULL = 0x0A0800
+CP_ATOMIC_REF_ALTER = 0x0A0500
+CP_ATOMIC_REF_ALTER_AND_GET = 0x0A0600
+CP_ATOMIC_REF_GET_AND_ALTER = 0x0A0700
+CP_ATOMIC_REF_APPLY = 0x0A0900
+CP_ATOMIC_REF_GET_AND_SET = 0x0A0A00
+
+CP_FENCED_LOCK_LOCK = 0x070100
+CP_FENCED_LOCK_TRY_LOCK = 0x070200
+CP_FENCED_LOCK_UNLOCK = 0x070300
+CP_FENCED_LOCK_GET_LOCK_OWNERSHIP = 0x070400
+
+CP_SEMAPHORE_INIT = 0x0C0100
+CP_SEMAPHORE_ACQUIRE = 0x0C0200
+CP_SEMAPHORE_RELEASE = 0x0C0300
+CP_SEMAPHORE_DRAIN = 0x0C0400
+CP_SEMAPHORE_CHANGE = 0x0C0500
+CP_SEMAPHORE_AVAILABLE_PERMITS = 0x0C0600
+
+CP_COUNT_DOWN_LATCH_TRY_SET_COUNT = 0x0B0100
+CP_COUNT_DOWN_LATCH_AWAIT = 0x0B0200
+CP_COUNT_DOWN_LATCH_COUNT_DOWN = 0x0B0300
+CP_COUNT_DOWN_LATCH_GET_COUNT = 0x0B0400
+CP_COUNT_DOWN_LATCH_GET_ROUND = 0x0B0500
+
+
+class AtomicLongCodec:
+    """Codec for CP AtomicLong protocol messages."""
+
+    @staticmethod
+    def encode_get_request(group_id: str, name: str) -> "ClientMessage":
+        """Encode an AtomicLong.get request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_response(msg: "ClientMessage") -> int:
+        """Decode an AtomicLong.get response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_set_request(group_id: str, name: str, value: int) -> "ClientMessage":
+        """Encode an AtomicLong.set request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, value)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_get_and_set_request(group_id: str, name: str, value: int) -> "ClientMessage":
+        """Encode an AtomicLong.getAndSet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_GET_AND_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, value)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_and_set_response(msg: "ClientMessage") -> int:
+        """Decode an AtomicLong.getAndSet response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_compare_and_set_request(
+        group_id: str, name: str, expected: int, update: int
+    ) -> "ClientMessage":
+        """Encode an AtomicLong.compareAndSet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_COMPARE_AND_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, expected)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, update)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_compare_and_set_response(msg: "ClientMessage") -> bool:
+        """Decode an AtomicLong.compareAndSet response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_add_and_get_request(group_id: str, name: str, delta: int) -> "ClientMessage":
+        """Encode an AtomicLong.addAndGet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_ADD_AND_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, delta)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_add_and_get_response(msg: "ClientMessage") -> int:
+        """Decode an AtomicLong.addAndGet response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_get_and_add_request(group_id: str, name: str, delta: int) -> "ClientMessage":
+        """Encode an AtomicLong.getAndAdd request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_GET_AND_ADD)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, delta)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_and_add_response(msg: "ClientMessage") -> int:
+        """Decode an AtomicLong.getAndAdd response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_alter_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicLong.alter request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_ALTER)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def encode_alter_and_get_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicLong.alterAndGet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_ALTER_AND_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def decode_alter_and_get_response(msg: "ClientMessage") -> int:
+        """Decode an AtomicLong.alterAndGet response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_get_and_alter_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicLong.getAndAlter request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_GET_AND_ALTER)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def decode_get_and_alter_response(msg: "ClientMessage") -> int:
+        """Decode an AtomicLong.getAndAlter response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_apply_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicLong.apply request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_LONG_APPLY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def decode_apply_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode an AtomicLong.apply response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+
+class AtomicReferenceCodec:
+    """Codec for CP AtomicReference protocol messages."""
+
+    @staticmethod
+    def encode_get_request(group_id: str, name: str) -> "ClientMessage":
+        """Encode an AtomicReference.get request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode an AtomicReference.get response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_set_request(group_id: str, name: str, value: Optional[bytes]) -> "ClientMessage":
+        """Encode an AtomicReference.set request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        if value is not None:
+            msg.add_frame(Frame(value))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def encode_get_and_set_request(group_id: str, name: str, value: Optional[bytes]) -> "ClientMessage":
+        """Encode an AtomicReference.getAndSet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_GET_AND_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        if value is not None:
+            msg.add_frame(Frame(value))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_get_and_set_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode an AtomicReference.getAndSet response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_compare_and_set_request(
+        group_id: str, name: str, expected: Optional[bytes], update: Optional[bytes]
+    ) -> "ClientMessage":
+        """Encode an AtomicReference.compareAndSet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_COMPARE_AND_SET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        if expected is not None:
+            msg.add_frame(Frame(expected))
+        else:
+            msg.add_frame(NULL_FRAME)
+        if update is not None:
+            msg.add_frame(Frame(update))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_compare_and_set_response(msg: "ClientMessage") -> bool:
+        """Decode an AtomicReference.compareAndSet response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_is_null_request(group_id: str, name: str) -> "ClientMessage":
+        """Encode an AtomicReference.isNull request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_IS_NULL)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_is_null_response(msg: "ClientMessage") -> bool:
+        """Decode an AtomicReference.isNull response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return True
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_contains_request(group_id: str, name: str, value: Optional[bytes]) -> "ClientMessage":
+        """Encode an AtomicReference.contains request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_CONTAINS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        if value is not None:
+            msg.add_frame(Frame(value))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_contains_response(msg: "ClientMessage") -> bool:
+        """Decode an AtomicReference.contains response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_alter_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicReference.alter request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_ALTER)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def encode_alter_and_get_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicReference.alterAndGet request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_ALTER_AND_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def decode_alter_and_get_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode an AtomicReference.alterAndGet response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_get_and_alter_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicReference.getAndAlter request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_GET_AND_ALTER)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def decode_get_and_alter_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode an AtomicReference.getAndAlter response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_apply_request(group_id: str, name: str, function_data: bytes) -> "ClientMessage":
+        """Encode an AtomicReference.apply request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_ATOMIC_REF_APPLY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(function_data))
+        return msg
+
+    @staticmethod
+    def decode_apply_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode an AtomicReference.apply response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+
+class FencedLockCodec:
+    """Codec for CP FencedLock protocol messages."""
+
+    @staticmethod
+    def encode_lock_request(
+        group_id: str, name: str, session_id: int, thread_id: int, invocation_uid: int
+    ) -> "ClientMessage":
+        """Encode a FencedLock.lock request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_FENCED_LOCK_LOCK)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, session_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + 2 * LONG_SIZE, invocation_uid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_lock_response(msg: "ClientMessage") -> int:
+        """Decode a FencedLock.lock response (returns fence token)."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_try_lock_request(
+        group_id: str, name: str, session_id: int, thread_id: int,
+        invocation_uid: int, timeout_ms: int
+    ) -> "ClientMessage":
+        """Encode a FencedLock.tryLock request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_FENCED_LOCK_TRY_LOCK)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, session_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + 2 * LONG_SIZE, invocation_uid)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + 3 * LONG_SIZE, timeout_ms)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_try_lock_response(msg: "ClientMessage") -> int:
+        """Decode a FencedLock.tryLock response (returns fence token or 0)."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_unlock_request(
+        group_id: str, name: str, session_id: int, thread_id: int, invocation_uid: int
+    ) -> "ClientMessage":
+        """Encode a FencedLock.unlock request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_FENCED_LOCK_UNLOCK)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, session_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, thread_id)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + 2 * LONG_SIZE, invocation_uid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_unlock_response(msg: "ClientMessage") -> bool:
+        """Decode a FencedLock.unlock response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return True
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_get_lock_ownership_state_request(group_id: str, name: str) -> "ClientMessage":
+        """Encode a FencedLock.getLockOwnershipState request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_FENCED_LOCK_GET_LOCK_OWNERSHIP)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_lock_ownership_state_response(
+        msg: "ClientMessage"
+    ) -> tuple:
+        """Decode a FencedLock.getLockOwnershipState response.
+
+        Returns:
+            Tuple of (fence, lock_count, session_id, thread_id).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + 4 * LONG_SIZE:
+            return 0, 0, -1, 0
+
+        offset = RESPONSE_HEADER_SIZE
+        fence = struct.unpack_from("<q", frame.content, offset)[0]
+        offset += LONG_SIZE
+        lock_count = struct.unpack_from("<i", frame.content, offset)[0]
+        offset += INT_SIZE
+        session_id = struct.unpack_from("<q", frame.content, offset)[0]
+        offset += LONG_SIZE
+        thread_id = struct.unpack_from("<q", frame.content, offset)[0]
+
+        return fence, lock_count, session_id, thread_id
+
+
+class SemaphoreCodec:
+    """Codec for CP Semaphore protocol messages."""
+
+    @staticmethod
+    def encode_init_request(group_id: str, name: str, permits: int) -> "ClientMessage":
+        """Encode a Semaphore.init request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SEMAPHORE_INIT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, permits)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_init_response(msg: "ClientMessage") -> bool:
+        """Decode a Semaphore.init response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_acquire_request(
+        group_id: str, name: str, session_id: int, thread_id: int,
+        invocation_uid: int, permits: int, timeout_ms: int
+    ) -> "ClientMessage":
+        """Encode a Semaphore.acquire request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE + INT_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SEMAPHORE_ACQUIRE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, session_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, invocation_uid)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, permits)
+        offset += INT_SIZE
+        struct.pack_into("<q", buffer, offset, timeout_ms)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_acquire_response(msg: "ClientMessage") -> bool:
+        """Decode a Semaphore.acquire response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_release_request(
+        group_id: str, name: str, session_id: int, thread_id: int,
+        invocation_uid: int, permits: int
+    ) -> "ClientMessage":
+        """Encode a Semaphore.release request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SEMAPHORE_RELEASE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, session_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, invocation_uid)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, permits)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_drain_request(
+        group_id: str, name: str, session_id: int, thread_id: int, invocation_uid: int
+    ) -> "ClientMessage":
+        """Encode a Semaphore.drain request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SEMAPHORE_DRAIN)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, session_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, invocation_uid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_drain_response(msg: "ClientMessage") -> int:
+        """Decode a Semaphore.drain response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_change_request(
+        group_id: str, name: str, session_id: int, thread_id: int,
+        invocation_uid: int, permits: int
+    ) -> "ClientMessage":
+        """Encode a Semaphore.change request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + LONG_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SEMAPHORE_CHANGE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, session_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, invocation_uid)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, permits)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_available_permits_request(group_id: str, name: str) -> "ClientMessage":
+        """Encode a Semaphore.availablePermits request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SEMAPHORE_AVAILABLE_PERMITS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_available_permits_response(msg: "ClientMessage") -> int:
+        """Decode a Semaphore.availablePermits response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
+class CountDownLatchCodec:
+    """Codec for CP CountDownLatch protocol messages."""
+
+    @staticmethod
+    def encode_try_set_count_request(group_id: str, name: str, count: int) -> "ClientMessage":
+        """Encode a CountDownLatch.trySetCount request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_COUNT_DOWN_LATCH_TRY_SET_COUNT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, count)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_try_set_count_response(msg: "ClientMessage") -> bool:
+        """Decode a CountDownLatch.trySetCount response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_get_count_request(group_id: str, name: str) -> "ClientMessage":
+        """Encode a CountDownLatch.getCount request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_COUNT_DOWN_LATCH_GET_COUNT)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_count_response(msg: "ClientMessage") -> int:
+        """Decode a CountDownLatch.getCount response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_count_down_request(
+        group_id: str, name: str, invocation_uid: int, expected_round: int
+    ) -> "ClientMessage":
+        """Encode a CountDownLatch.countDown request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_COUNT_DOWN_LATCH_COUNT_DOWN)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, invocation_uid)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, expected_round)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_await_request(
+        group_id: str, name: str, invocation_uid: int, timeout_ms: int
+    ) -> "ClientMessage":
+        """Encode a CountDownLatch.await request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_COUNT_DOWN_LATCH_AWAIT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, invocation_uid)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, timeout_ms)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_await_response(msg: "ClientMessage") -> bool:
+        """Decode a CountDownLatch.await response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_get_round_request(group_id: str, name: str) -> "ClientMessage":
+        """Encode a CountDownLatch.getRound request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_COUNT_DOWN_LATCH_GET_ROUND)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_round_response(msg: "ClientMessage") -> int:
+        """Decode a CountDownLatch.getRound response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
 class ReplicatedMapCodec:
     """Codec for ReplicatedMap protocol messages."""
 

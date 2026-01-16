@@ -1,194 +1,362 @@
-"""CP Subsystem Synchronization primitives."""
+"""CP Subsystem synchronization primitives."""
 
 import threading
 import time
 from concurrent.futures import Future
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from hazelcast.proxy.base import Proxy, ProxyContext
-from hazelcast.exceptions import IllegalArgumentException, IllegalStateException
+from hazelcast.exceptions import IllegalStateException
+from hazelcast.protocol.codec import (
+    FencedLockCodec,
+    SemaphoreCodec,
+    CountDownLatchCodec,
+)
+
+if TYPE_CHECKING:
+    from hazelcast.protocol.client_message import ClientMessage
 
 
-class CountDownLatch(Proxy):
-    """CP Subsystem CountDownLatch.
+INVALID_FENCE = 0
 
-    A linearizable, distributed countdown latch for synchronization.
-    Uses the Raft consensus algorithm for strong consistency guarantees.
+
+class FencedLock(Proxy):
+    """A distributed reentrant mutex with fencing token support.
+
+    FencedLock provides mutual exclusion with strong consistency using
+    the CP Subsystem. Each lock acquisition returns a monotonically
+    increasing fencing token that can be used to detect stale lock
+    holders in distributed scenarios.
+
+    The lock is reentrant - a thread that holds the lock can acquire
+    it again without blocking. Each acquisition must be matched with
+    a corresponding release.
+
+    Example:
+        >>> lock = client.get_fenced_lock("my-lock")
+        >>> fence = lock.lock()
+        >>> try:
+        ...     # Critical section
+        ...     print(f"Lock acquired with fence: {fence}")
+        ... finally:
+        ...     lock.unlock()
+
+        Context manager usage::
+
+            with lock as fence:
+                # Critical section
+                pass
     """
 
-    SERVICE_NAME = "hz:raft:countDownLatchService"
+    def __init__(
+        self,
+        service_name: str,
+        name: str,
+        context: Optional[ProxyContext] = None,
+    ):
+        super().__init__(service_name, name, context)
+        self._group_id = self._parse_group_id(name)
+        self._lock = threading.RLock()
+        self._thread_id = 0
+        self._lock_count = 0
+        self._fence = INVALID_FENCE
+        self._session_id = -1
 
-    def __init__(self, name: str, context: Optional[ProxyContext] = None):
-        super().__init__(self.SERVICE_NAME, name, context)
-        self._count: int = 0
-        self._lock = threading.Lock()
-        self._condition = threading.Condition(self._lock)
+    def _parse_group_id(self, name: str) -> str:
+        """Parse CP group ID from name."""
+        if "@" in name:
+            return name.split("@")[1]
+        return "default"
 
-    def await_(self) -> bool:
-        """Wait for the count to reach zero.
+    def _get_object_name(self) -> str:
+        """Get the object name without group suffix."""
+        if "@" in self._name:
+            return self._name.split("@")[0]
+        return self._name
 
-        Blocks until the count reaches zero.
+    def _get_thread_id(self) -> int:
+        """Get a unique thread identifier."""
+        return threading.current_thread().ident or 0
+
+    def _get_session_id(self) -> int:
+        """Get or create session ID."""
+        if self._session_id < 0:
+            self._session_id = int(time.time() * 1000) % (2**31)
+        return self._session_id
+
+    def lock(self) -> int:
+        """Acquire the lock, blocking until available.
 
         Returns:
-            True when the count reaches zero.
-        """
-        return self.await_async().result()
+            The fencing token for this lock acquisition.
 
-    def await_async(self) -> Future:
-        """Wait for the count to reach zero asynchronously.
+        Raises:
+            IllegalStateException: If the lock is destroyed.
+        """
+        return self.lock_async().result()
+
+    def lock_async(self) -> Future:
+        """Acquire the lock asynchronously.
 
         Returns:
-            A Future that completes when the count reaches zero.
+            A Future that will contain the fencing token.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
-        with self._condition:
-            while self._count > 0:
-                self._condition.wait()
-        future.set_result(True)
-        return future
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
 
-    def await_with_timeout(self, timeout: float) -> bool:
-        """Wait for the count to reach zero with a timeout.
+        request = FencedLockCodec.encode_lock_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+        )
+
+        def handle_response(msg: "ClientMessage") -> int:
+            fence = FencedLockCodec.decode_lock_response(msg)
+            with self._lock:
+                self._fence = fence
+                self._thread_id = thread_id
+                self._lock_count += 1
+            return fence
+
+        return self._invoke(request, handle_response)
+
+    def try_lock(self, timeout: float = 0) -> int:
+        """Try to acquire the lock with an optional timeout.
+
+        Args:
+            timeout: Maximum time to wait in seconds. 0 means no waiting.
+
+        Returns:
+            The fencing token if acquired, INVALID_FENCE (0) otherwise.
+        """
+        return self.try_lock_async(timeout).result()
+
+    def try_lock_async(self, timeout: float = 0) -> Future:
+        """Try to acquire the lock asynchronously.
 
         Args:
             timeout: Maximum time to wait in seconds.
 
         Returns:
-            True if the count reached zero, False if timeout expired.
+            A Future that will contain the fencing token or INVALID_FENCE.
         """
-        return self.await_with_timeout_async(timeout).result()
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+        timeout_ms = int(timeout * 1000)
 
-    def await_with_timeout_async(self, timeout: float) -> Future:
-        """Wait for the count to reach zero with a timeout asynchronously.
+        request = FencedLockCodec.encode_try_lock_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+            timeout_ms,
+        )
 
-        Args:
-            timeout: Maximum time to wait in seconds.
+        def handle_response(msg: "ClientMessage") -> int:
+            fence = FencedLockCodec.decode_try_lock_response(msg)
+            if fence != INVALID_FENCE:
+                with self._lock:
+                    self._fence = fence
+                    self._thread_id = thread_id
+                    self._lock_count += 1
+            return fence
+
+        return self._invoke(request, handle_response)
+
+    def unlock(self) -> None:
+        """Release the lock.
+
+        Raises:
+            IllegalStateException: If the current thread doesn't hold the lock.
+        """
+        self.unlock_async().result()
+
+    def unlock_async(self) -> Future:
+        """Release the lock asynchronously.
 
         Returns:
-            A Future that will contain True if count reached zero.
+            A Future that completes when the lock is released.
+
+        Raises:
+            IllegalStateException: If the current thread doesn't hold the lock.
         """
-        self._check_not_destroyed()
-        if timeout < 0:
-            raise IllegalArgumentException("timeout cannot be negative")
-        future: Future = Future()
-        with self._condition:
-            if self._count == 0:
-                future.set_result(True)
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+
+        with self._lock:
+            if self._thread_id != thread_id or self._lock_count == 0:
+                future: Future = Future()
+                future.set_exception(
+                    IllegalStateException("Current thread does not hold this lock")
+                )
                 return future
-            end_time = time.monotonic() + timeout
-            while self._count > 0:
-                remaining = end_time - time.monotonic()
-                if remaining <= 0:
-                    future.set_result(False)
-                    return future
-                self._condition.wait(remaining)
-        future.set_result(True)
-        return future
 
-    def count_down(self) -> None:
-        """Decrement the count by one.
+        request = FencedLockCodec.encode_unlock_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+        )
 
-        If the count reaches zero, all waiting threads are released.
-        """
-        self.count_down_async().result()
+        def handle_response(msg: "ClientMessage") -> None:
+            FencedLockCodec.decode_unlock_response(msg)
+            with self._lock:
+                self._lock_count -= 1
+                if self._lock_count == 0:
+                    self._fence = INVALID_FENCE
+                    self._thread_id = 0
 
-    def count_down_async(self) -> Future:
-        """Decrement the count by one asynchronously.
+        return self._invoke(request, handle_response)
 
-        Returns:
-            A Future that completes when the operation is done.
-        """
-        self._check_not_destroyed()
-        future: Future = Future()
-        with self._condition:
-            if self._count > 0:
-                self._count -= 1
-                if self._count == 0:
-                    self._condition.notify_all()
-        future.set_result(None)
-        return future
-
-    def get_count(self) -> int:
-        """Get the current count.
+    def is_locked(self) -> bool:
+        """Check if the lock is currently held by any thread.
 
         Returns:
-            The current count.
+            True if the lock is held, False otherwise.
         """
-        return self.get_count_async().result()
+        return self.is_locked_async().result()
 
-    def get_count_async(self) -> Future:
-        """Get the current count asynchronously.
+    def is_locked_async(self) -> Future:
+        """Check if the lock is currently held asynchronously.
 
         Returns:
-            A Future that will contain the current count.
+            A Future that will contain True if the lock is held.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
+        request = FencedLockCodec.encode_get_lock_ownership_state_request(
+            self._group_id, self._get_object_name()
+        )
+
+        def handle_response(msg: "ClientMessage") -> bool:
+            fence, lock_count, _, _ = FencedLockCodec.decode_get_lock_ownership_state_response(msg)
+            return fence != INVALID_FENCE and lock_count > 0
+
+        return self._invoke(request, handle_response)
+
+    def is_locked_by_current_thread(self) -> bool:
+        """Check if the lock is held by the current thread.
+
+        Returns:
+            True if the current thread holds the lock.
+        """
         with self._lock:
-            future.set_result(self._count)
-        return future
+            return (
+                self._thread_id == self._get_thread_id()
+                and self._lock_count > 0
+            )
 
-    def try_set_count(self, count: int) -> bool:
-        """Try to set the count.
-
-        The count can only be set if the current count is zero.
-
-        Args:
-            count: The new count value.
+    def get_lock_count(self) -> int:
+        """Get the number of times the lock has been acquired.
 
         Returns:
-            True if the count was set, False otherwise.
+            The reentrant lock count.
         """
-        return self.try_set_count_async(count).result()
+        return self.get_lock_count_async().result()
 
-    def try_set_count_async(self, count: int) -> Future:
-        """Try to set the count asynchronously.
-
-        Args:
-            count: The new count value.
+    def get_lock_count_async(self) -> Future:
+        """Get the reentrant lock count asynchronously.
 
         Returns:
-            A Future that will contain True if the count was set.
+            A Future that will contain the lock count.
         """
-        self._check_not_destroyed()
-        if count < 0:
-            raise IllegalArgumentException("count cannot be negative")
-        future: Future = Future()
+        request = FencedLockCodec.encode_get_lock_ownership_state_request(
+            self._group_id, self._get_object_name()
+        )
+
+        def handle_response(msg: "ClientMessage") -> int:
+            _, lock_count, _, _ = FencedLockCodec.decode_get_lock_ownership_state_response(msg)
+            return lock_count
+
+        return self._invoke(request, handle_response)
+
+    def get_fence(self) -> int:
+        """Get the current fencing token.
+
+        Returns:
+            The fencing token, or INVALID_FENCE if not locked.
+        """
         with self._lock:
-            if self._count == 0:
-                self._count = count
-                future.set_result(True)
-            else:
-                future.set_result(False)
-        return future
+            return self._fence
+
+    def __enter__(self) -> int:
+        """Context manager entry - acquires the lock.
+
+        Returns:
+            The fencing token.
+        """
+        return self.lock()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit - releases the lock."""
+        self.unlock()
 
 
 class Semaphore(Proxy):
-    """CP Subsystem Semaphore.
+    """A distributed counting semaphore with strong consistency.
 
-    A linearizable, distributed semaphore for controlling access to resources.
-    Uses the Raft consensus algorithm for strong consistency guarantees.
+    Semaphore maintains a set of permits that can be acquired and released.
+    Acquire operations block when no permits are available.
+
+    The semaphore is initialized with a number of permits. The permit
+    count can be dynamically increased or decreased.
+
+    Example:
+        >>> sem = client.get_semaphore("my-semaphore")
+        >>> sem.init(5)  # Initialize with 5 permits
+        >>> sem.acquire()  # Acquire 1 permit
+        >>> sem.acquire(2)  # Acquire 2 permits
+        >>> print(sem.available_permits())  # 2
+        >>> sem.release(3)  # Release 3 permits
     """
 
-    SERVICE_NAME = "hz:raft:semaphoreService"
+    def __init__(
+        self,
+        service_name: str,
+        name: str,
+        context: Optional[ProxyContext] = None,
+    ):
+        super().__init__(service_name, name, context)
+        self._group_id = self._parse_group_id(name)
+        self._session_id = -1
 
-    def __init__(self, name: str, context: Optional[ProxyContext] = None):
-        super().__init__(self.SERVICE_NAME, name, context)
-        self._permits: int = 0
-        self._lock = threading.Lock()
-        self._condition = threading.Condition(self._lock)
+    def _parse_group_id(self, name: str) -> str:
+        """Parse CP group ID from name."""
+        if "@" in name:
+            return name.split("@")[1]
+        return "default"
+
+    def _get_object_name(self) -> str:
+        """Get the object name without group suffix."""
+        if "@" in self._name:
+            return self._name.split("@")[0]
+        return self._name
+
+    def _get_thread_id(self) -> int:
+        """Get a unique thread identifier."""
+        return threading.current_thread().ident or 0
+
+    def _get_session_id(self) -> int:
+        """Get or create session ID."""
+        if self._session_id < 0:
+            self._session_id = int(time.time() * 1000) % (2**31)
+        return self._session_id
 
     def init(self, permits: int) -> bool:
         """Initialize the semaphore with the given number of permits.
 
-        This can only be done once when permits are zero.
+        This operation is idempotent - it only initializes if not already done.
 
         Args:
-            permits: The initial number of permits.
+            permits: The initial number of permits. Must be non-negative.
 
         Returns:
-            True if initialization was successful.
+            True if initialization was successful, False if already initialized.
         """
         return self.init_async(permits).result()
 
@@ -199,27 +367,25 @@ class Semaphore(Proxy):
             permits: The initial number of permits.
 
         Returns:
-            A Future that will contain True if successful.
+            A Future that will contain True if initialization was successful.
         """
-        self._check_not_destroyed()
         if permits < 0:
-            raise IllegalArgumentException("permits cannot be negative")
-        future: Future = Future()
-        with self._lock:
-            if self._permits == 0:
-                self._permits = permits
-                future.set_result(True)
-            else:
-                future.set_result(False)
-        return future
+            future: Future = Future()
+            future.set_exception(
+                IllegalStateException("Permits cannot be negative")
+            )
+            return future
+
+        request = SemaphoreCodec.encode_init_request(
+            self._group_id, self._get_object_name(), permits
+        )
+        return self._invoke(request, SemaphoreCodec.decode_init_response)
 
     def acquire(self, permits: int = 1) -> None:
-        """Acquire the given number of permits.
-
-        Blocks until permits are available.
+        """Acquire permits, blocking until available.
 
         Args:
-            permits: Number of permits to acquire.
+            permits: The number of permits to acquire. Default is 1.
         """
         self.acquire_async(permits).result()
 
@@ -227,76 +393,83 @@ class Semaphore(Proxy):
         """Acquire permits asynchronously.
 
         Args:
-            permits: Number of permits to acquire.
+            permits: The number of permits to acquire.
 
         Returns:
             A Future that completes when permits are acquired.
         """
-        self._check_not_destroyed()
-        if permits < 0:
-            raise IllegalArgumentException("permits cannot be negative")
-        future: Future = Future()
-        with self._condition:
-            while self._permits < permits:
-                self._condition.wait()
-            self._permits -= permits
-        future.set_result(None)
-        return future
+        if permits < 1:
+            future: Future = Future()
+            future.set_exception(
+                IllegalStateException("Permits must be positive")
+            )
+            return future
 
-    def try_acquire(self, permits: int = 1, timeout: Optional[float] = None) -> bool:
-        """Try to acquire permits without blocking indefinitely.
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+
+        request = SemaphoreCodec.encode_acquire_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+            permits,
+            -1,  # No timeout
+        )
+        return self._invoke(request)
+
+    def try_acquire(self, permits: int = 1, timeout: float = 0) -> bool:
+        """Try to acquire permits with an optional timeout.
 
         Args:
-            permits: Number of permits to acquire.
-            timeout: Optional timeout in seconds. If None, returns immediately.
+            permits: The number of permits to acquire. Default is 1.
+            timeout: Maximum time to wait in seconds. 0 means no waiting.
 
         Returns:
             True if permits were acquired, False otherwise.
         """
         return self.try_acquire_async(permits, timeout).result()
 
-    def try_acquire_async(
-        self, permits: int = 1, timeout: Optional[float] = None
-    ) -> Future:
+    def try_acquire_async(self, permits: int = 1, timeout: float = 0) -> Future:
         """Try to acquire permits asynchronously.
 
         Args:
-            permits: Number of permits to acquire.
-            timeout: Optional timeout in seconds.
+            permits: The number of permits to acquire.
+            timeout: Maximum time to wait in seconds.
 
         Returns:
             A Future that will contain True if permits were acquired.
         """
-        self._check_not_destroyed()
-        if permits < 0:
-            raise IllegalArgumentException("permits cannot be negative")
-        if timeout is not None and timeout < 0:
-            raise IllegalArgumentException("timeout cannot be negative")
-        future: Future = Future()
-        with self._condition:
-            if timeout is None:
-                if self._permits >= permits:
-                    self._permits -= permits
-                    future.set_result(True)
-                else:
-                    future.set_result(False)
-            else:
-                end_time = time.monotonic() + timeout
-                while self._permits < permits:
-                    remaining = end_time - time.monotonic()
-                    if remaining <= 0:
-                        future.set_result(False)
-                        return future
-                    self._condition.wait(remaining)
-                self._permits -= permits
-                future.set_result(True)
-        return future
+        if permits < 1:
+            future: Future = Future()
+            future.set_exception(
+                IllegalStateException("Permits must be positive")
+            )
+            return future
+
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+        timeout_ms = int(timeout * 1000)
+
+        request = SemaphoreCodec.encode_acquire_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+            permits,
+            timeout_ms,
+        )
+        return self._invoke(request, SemaphoreCodec.decode_acquire_response)
 
     def release(self, permits: int = 1) -> None:
-        """Release the given number of permits.
+        """Release permits back to the semaphore.
 
         Args:
-            permits: Number of permits to release.
+            permits: The number of permits to release. Default is 1.
         """
         self.release_async(permits).result()
 
@@ -304,26 +477,37 @@ class Semaphore(Proxy):
         """Release permits asynchronously.
 
         Args:
-            permits: Number of permits to release.
+            permits: The number of permits to release.
 
         Returns:
-            A Future that completes when the operation is done.
+            A Future that completes when permits are released.
         """
-        self._check_not_destroyed()
-        if permits < 0:
-            raise IllegalArgumentException("permits cannot be negative")
-        future: Future = Future()
-        with self._condition:
-            self._permits += permits
-            self._condition.notify_all()
-        future.set_result(None)
-        return future
+        if permits < 1:
+            future: Future = Future()
+            future.set_exception(
+                IllegalStateException("Permits must be positive")
+            )
+            return future
+
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+
+        request = SemaphoreCodec.encode_release_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+            permits,
+        )
+        return self._invoke(request)
 
     def available_permits(self) -> int:
         """Get the number of available permits.
 
         Returns:
-            The number of available permits.
+            The number of permits currently available.
         """
         return self.available_permits_async().result()
 
@@ -331,16 +515,15 @@ class Semaphore(Proxy):
         """Get available permits asynchronously.
 
         Returns:
-            A Future that will contain the available permits count.
+            A Future that will contain the available permit count.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
-        with self._lock:
-            future.set_result(self._permits)
-        return future
+        request = SemaphoreCodec.encode_available_permits_request(
+            self._group_id, self._get_object_name()
+        )
+        return self._invoke(request, SemaphoreCodec.decode_available_permits_response)
 
     def drain_permits(self) -> int:
-        """Acquire all available permits.
+        """Acquire and return all immediately available permits.
 
         Returns:
             The number of permits acquired.
@@ -348,24 +531,29 @@ class Semaphore(Proxy):
         return self.drain_permits_async().result()
 
     def drain_permits_async(self) -> Future:
-        """Drain all permits asynchronously.
+        """Drain all available permits asynchronously.
 
         Returns:
-            A Future that will contain the number of permits drained.
+            A Future that will contain the number of permits acquired.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
-        with self._lock:
-            drained = self._permits
-            self._permits = 0
-            future.set_result(drained)
-        return future
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+
+        request = SemaphoreCodec.encode_drain_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+        )
+        return self._invoke(request, SemaphoreCodec.decode_drain_response)
 
     def reduce_permits(self, reduction: int) -> None:
         """Reduce the number of available permits.
 
         Args:
-            reduction: The number of permits to reduce.
+            reduction: The number of permits to reduce by.
         """
         self.reduce_permits_async(reduction).result()
 
@@ -373,19 +561,31 @@ class Semaphore(Proxy):
         """Reduce permits asynchronously.
 
         Args:
-            reduction: The number of permits to reduce.
+            reduction: The number of permits to reduce by.
 
         Returns:
             A Future that completes when the operation is done.
         """
-        self._check_not_destroyed()
         if reduction < 0:
-            raise IllegalArgumentException("reduction cannot be negative")
-        future: Future = Future()
-        with self._lock:
-            self._permits -= reduction
-        future.set_result(None)
-        return future
+            future: Future = Future()
+            future.set_exception(
+                IllegalStateException("Reduction cannot be negative")
+            )
+            return future
+
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+
+        request = SemaphoreCodec.encode_change_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+            -reduction,
+        )
+        return self._invoke(request)
 
     def increase_permits(self, increase: int) -> None:
         """Increase the number of available permits.
@@ -404,233 +604,193 @@ class Semaphore(Proxy):
         Returns:
             A Future that completes when the operation is done.
         """
-        self._check_not_destroyed()
         if increase < 0:
-            raise IllegalArgumentException("increase cannot be negative")
-        future: Future = Future()
-        with self._condition:
-            self._permits += increase
-            self._condition.notify_all()
-        future.set_result(None)
-        return future
+            future: Future = Future()
+            future.set_exception(
+                IllegalStateException("Increase cannot be negative")
+            )
+            return future
+
+        thread_id = self._get_thread_id()
+        session_id = self._get_session_id()
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+
+        request = SemaphoreCodec.encode_change_request(
+            self._group_id,
+            self._get_object_name(),
+            session_id,
+            thread_id,
+            invocation_uid,
+            increase,
+        )
+        return self._invoke(request)
 
 
-class FencedLock(Proxy):
-    """CP Subsystem FencedLock.
+class CountDownLatch(Proxy):
+    """A distributed synchronization aid with strong consistency.
 
-    A linearizable, distributed reentrant lock with fencing token support.
-    Uses the Raft consensus algorithm for strong consistency guarantees.
+    CountDownLatch allows one or more threads to wait until a set of
+    operations being performed in other threads completes.
 
-    The fencing token is a monotonically increasing value that changes
-    each time the lock is acquired, providing protection against
-    stale lock holders in distributed systems.
+    A CountDownLatch is initialized with a count. The await methods
+    block until the count reaches zero due to invocations of the
+    count_down method, after which all waiting threads are released.
+
+    This is a one-shot phenomenon - the count cannot be reset.
+
+    Example:
+        >>> latch = client.get_count_down_latch("my-latch")
+        >>> latch.try_set_count(3)
+        >>> # In worker threads:
+        >>> latch.count_down()
+        >>> # In waiting thread:
+        >>> latch.await(timeout=60)
     """
 
-    SERVICE_NAME = "hz:raft:lockService"
-    INVALID_FENCE = 0
+    def __init__(
+        self,
+        service_name: str,
+        name: str,
+        context: Optional[ProxyContext] = None,
+    ):
+        super().__init__(service_name, name, context)
+        self._group_id = self._parse_group_id(name)
 
-    def __init__(self, name: str, context: Optional[ProxyContext] = None):
-        super().__init__(self.SERVICE_NAME, name, context)
-        self._lock = threading.RLock()
-        self._condition = threading.Condition(self._lock)
-        self._owner_thread: Optional[int] = None
-        self._lock_count: int = 0
-        self._fence: int = 0
-        self._next_fence: int = 1
+    def _parse_group_id(self, name: str) -> str:
+        """Parse CP group ID from name."""
+        if "@" in name:
+            return name.split("@")[1]
+        return "default"
 
-    def lock(self) -> int:
-        """Acquire the lock.
+    def _get_object_name(self) -> str:
+        """Get the object name without group suffix."""
+        if "@" in self._name:
+            return self._name.split("@")[0]
+        return self._name
 
-        If the lock is held by another thread, this method blocks until
-        the lock becomes available. Supports reentrant locking.
+    def try_set_count(self, count: int) -> bool:
+        """Set the count if it hasn't been set yet.
 
-        Returns:
-            The fencing token for this lock acquisition.
-        """
-        return self.lock_async().result()
-
-    def lock_async(self) -> Future:
-        """Acquire the lock asynchronously.
-
-        Returns:
-            A Future that will contain the fencing token.
-        """
-        self._check_not_destroyed()
-        future: Future = Future()
-        current_thread = threading.current_thread().ident
-        with self._condition:
-            while self._owner_thread is not None and self._owner_thread != current_thread:
-                self._condition.wait()
-            if self._owner_thread is None:
-                self._owner_thread = current_thread
-                self._fence = self._next_fence
-                self._next_fence += 1
-            self._lock_count += 1
-            future.set_result(self._fence)
-        return future
-
-    def try_lock(self, timeout: Optional[float] = None) -> int:
-        """Try to acquire the lock.
+        This operation can only be performed once. Subsequent calls
+        will return False.
 
         Args:
-            timeout: Optional timeout in seconds. If None, returns immediately.
+            count: The count value. Must be positive.
 
         Returns:
-            The fencing token if lock was acquired, INVALID_FENCE (0) otherwise.
+            True if the count was set, False if already set.
         """
-        return self.try_lock_async(timeout).result()
+        return self.try_set_count_async(count).result()
 
-    def try_lock_async(self, timeout: Optional[float] = None) -> Future:
-        """Try to acquire the lock asynchronously.
+    def try_set_count_async(self, count: int) -> Future:
+        """Set the count asynchronously.
 
         Args:
-            timeout: Optional timeout in seconds.
+            count: The count value. Must be positive.
 
         Returns:
-            A Future that will contain the fencing token or INVALID_FENCE.
+            A Future that will contain True if the count was set.
         """
-        self._check_not_destroyed()
-        if timeout is not None and timeout < 0:
-            raise IllegalArgumentException("timeout cannot be negative")
-        future: Future = Future()
-        current_thread = threading.current_thread().ident
-        with self._condition:
-            if timeout is None:
-                if self._owner_thread is None or self._owner_thread == current_thread:
-                    if self._owner_thread is None:
-                        self._owner_thread = current_thread
-                        self._fence = self._next_fence
-                        self._next_fence += 1
-                    self._lock_count += 1
-                    future.set_result(self._fence)
-                else:
-                    future.set_result(self.INVALID_FENCE)
-            else:
-                end_time = time.monotonic() + timeout
-                while self._owner_thread is not None and self._owner_thread != current_thread:
-                    remaining = end_time - time.monotonic()
-                    if remaining <= 0:
-                        future.set_result(self.INVALID_FENCE)
-                        return future
-                    self._condition.wait(remaining)
-                if self._owner_thread is None:
-                    self._owner_thread = current_thread
-                    self._fence = self._next_fence
-                    self._next_fence += 1
-                self._lock_count += 1
-                future.set_result(self._fence)
-        return future
+        if count < 1:
+            future: Future = Future()
+            future.set_exception(
+                IllegalStateException("Count must be positive")
+            )
+            return future
 
-    def unlock(self) -> None:
-        """Release the lock.
+        request = CountDownLatchCodec.encode_try_set_count_request(
+            self._group_id, self._get_object_name(), count
+        )
+        return self._invoke(request, CountDownLatchCodec.decode_try_set_count_response)
 
-        Raises:
-            IllegalStateException: If the current thread does not hold the lock.
+    def get_count(self) -> int:
+        """Get the current count.
+
+        Returns:
+            The current count value.
         """
-        self.unlock_async().result()
+        return self.get_count_async().result()
 
-    def unlock_async(self) -> Future:
-        """Release the lock asynchronously.
+    def get_count_async(self) -> Future:
+        """Get the current count asynchronously.
+
+        Returns:
+            A Future that will contain the current count.
+        """
+        request = CountDownLatchCodec.encode_get_count_request(
+            self._group_id, self._get_object_name()
+        )
+        return self._invoke(request, CountDownLatchCodec.decode_get_count_response)
+
+    def count_down(self) -> None:
+        """Decrement the count by one.
+
+        If the count reaches zero, all waiting threads are released.
+        """
+        self.count_down_async().result()
+
+    def count_down_async(self) -> Future:
+        """Decrement the count asynchronously.
 
         Returns:
             A Future that completes when the operation is done.
-
-        Raises:
-            IllegalStateException: If the current thread does not hold the lock.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
-        current_thread = threading.current_thread().ident
-        with self._condition:
-            if self._owner_thread != current_thread:
-                raise IllegalStateException(
-                    "Current thread does not hold this lock"
-                )
-            self._lock_count -= 1
-            if self._lock_count == 0:
-                self._owner_thread = None
-                self._fence = self.INVALID_FENCE
-                self._condition.notify_all()
-        future.set_result(None)
-        return future
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+        request = CountDownLatchCodec.encode_count_down_request(
+            self._group_id, self._get_object_name(), invocation_uid, 1
+        )
+        return self._invoke(request)
 
-    def is_locked(self) -> bool:
-        """Check if the lock is currently held by any thread.
+    def await_(self, timeout: float = -1) -> bool:
+        """Wait for the count to reach zero.
+
+        Args:
+            timeout: Maximum time to wait in seconds.
+                     -1 means wait indefinitely.
 
         Returns:
-            True if the lock is held.
+            True if the count reached zero, False if timed out.
         """
-        return self.is_locked_async().result()
+        return self.await_async(timeout).result()
 
-    def is_locked_async(self) -> Future:
-        """Check if locked asynchronously.
+    # Alias for Python keyword conflict
+    wait = await_
+
+    def await_async(self, timeout: float = -1) -> Future:
+        """Wait for the count to reach zero asynchronously.
+
+        Args:
+            timeout: Maximum time to wait in seconds.
 
         Returns:
-            A Future that will contain True if the lock is held.
+            A Future that will contain True if count reached zero.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
-        with self._condition:
-            future.set_result(self._owner_thread is not None)
-        return future
+        invocation_uid = int(time.time() * 1000000) % (2**63)
+        timeout_ms = int(timeout * 1000) if timeout >= 0 else -1
 
-    def is_locked_by_current_thread(self) -> bool:
-        """Check if the lock is held by the current thread.
+        request = CountDownLatchCodec.encode_await_request(
+            self._group_id, self._get_object_name(), invocation_uid, timeout_ms
+        )
+        return self._invoke(request, CountDownLatchCodec.decode_await_response)
+
+    def get_round(self) -> int:
+        """Get the current round number.
+
+        The round is incremented each time the latch is reset after
+        reaching zero.
 
         Returns:
-            True if the current thread holds the lock.
+            The current round number.
         """
-        return self.is_locked_by_current_thread_async().result()
+        return self.get_round_async().result()
 
-    def is_locked_by_current_thread_async(self) -> Future:
-        """Check if locked by current thread asynchronously.
+    def get_round_async(self) -> Future:
+        """Get the round number asynchronously.
 
         Returns:
-            A Future that will contain True if current thread holds the lock.
+            A Future that will contain the round number.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
-        current_thread = threading.current_thread().ident
-        with self._condition:
-            future.set_result(self._owner_thread == current_thread)
-        return future
-
-    def get_lock_count(self) -> int:
-        """Get the reentrant lock count.
-
-        Returns:
-            The number of times the lock has been acquired by the owner.
-        """
-        return self.get_lock_count_async().result()
-
-    def get_lock_count_async(self) -> Future:
-        """Get the lock count asynchronously.
-
-        Returns:
-            A Future that will contain the lock count.
-        """
-        self._check_not_destroyed()
-        future: Future = Future()
-        with self._condition:
-            future.set_result(self._lock_count)
-        return future
-
-    def get_fence(self) -> int:
-        """Get the current fencing token.
-
-        Returns:
-            The fencing token, or INVALID_FENCE if not locked.
-        """
-        return self.get_fence_async().result()
-
-    def get_fence_async(self) -> Future:
-        """Get the fencing token asynchronously.
-
-        Returns:
-            A Future that will contain the fencing token.
-        """
-        self._check_not_destroyed()
-        future: Future = Future()
-        with self._condition:
-            future.set_result(self._fence)
-        return future
+        request = CountDownLatchCodec.encode_get_round_request(
+            self._group_id, self._get_object_name()
+        )
+        return self._invoke(request, CountDownLatchCodec.decode_get_round_response)

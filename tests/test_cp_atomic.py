@@ -1,587 +1,314 @@
-"""Unit tests for hazelcast.cp.atomic module."""
+"""Tests for CP Subsystem atomic data structures."""
 
-import pytest
+import unittest
 from concurrent.futures import Future
-from unittest.mock import Mock
+from unittest.mock import MagicMock, patch
 
 from hazelcast.cp.atomic import AtomicLong, AtomicReference
-from hazelcast.exceptions import IllegalArgumentException, IllegalStateException
-
-
-class TestAtomicLong:
-    """Tests for AtomicLong class."""
-
-    def test_service_name_constant(self):
-        assert AtomicLong.SERVICE_NAME == "hz:raft:atomicLongService"
-
-    def test_initial_value(self):
-        atomic = AtomicLong("test")
-        assert atomic._value == 0
-
-    def test_get(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        assert atomic.get() == 42
-
-    def test_get_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.get_async()
-        assert isinstance(future, Future)
-        assert future.result() == 42
-
-    def test_set(self):
-        atomic = AtomicLong("test")
-        atomic.set(100)
-        assert atomic._value == 100
-
-    def test_set_async(self):
-        atomic = AtomicLong("test")
-        future = atomic.set_async(100)
-        assert isinstance(future, Future)
-        assert future.result() is None
-        assert atomic._value == 100
-
-    def test_get_and_set(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        previous = atomic.get_and_set(100)
-        assert previous == 42
-        assert atomic._value == 100
-
-    def test_get_and_set_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.get_and_set_async(100)
-        assert future.result() == 42
-        assert atomic._value == 100
-
-    def test_compare_and_set_success(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.compare_and_set(42, 100)
-        assert result is True
-        assert atomic._value == 100
-
-    def test_compare_and_set_failure(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.compare_and_set(0, 100)
-        assert result is False
-        assert atomic._value == 42
-
-    def test_compare_and_set_async_success(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.compare_and_set_async(42, 100)
-        assert future.result() is True
-        assert atomic._value == 100
-
-    def test_compare_and_set_async_failure(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.compare_and_set_async(0, 100)
-        assert future.result() is False
-        assert atomic._value == 42
-
-    def test_get_and_add(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        previous = atomic.get_and_add(10)
-        assert previous == 42
-        assert atomic._value == 52
-
-    def test_get_and_add_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.get_and_add_async(10)
-        assert future.result() == 42
-        assert atomic._value == 52
-
-    def test_get_and_add_negative(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        previous = atomic.get_and_add(-10)
-        assert previous == 42
-        assert atomic._value == 32
-
-    def test_add_and_get(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.add_and_get(10)
-        assert result == 52
-        assert atomic._value == 52
-
-    def test_add_and_get_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.add_and_get_async(10)
-        assert future.result() == 52
-        assert atomic._value == 52
-
-    def test_get_and_increment(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        previous = atomic.get_and_increment()
-        assert previous == 42
-        assert atomic._value == 43
-
-    def test_get_and_increment_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.get_and_increment_async()
-        assert future.result() == 42
-        assert atomic._value == 43
-
-    def test_increment_and_get(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.increment_and_get()
-        assert result == 43
-        assert atomic._value == 43
-
-    def test_increment_and_get_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.increment_and_get_async()
-        assert future.result() == 43
-        assert atomic._value == 43
-
-    def test_get_and_decrement(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        previous = atomic.get_and_decrement()
-        assert previous == 42
-        assert atomic._value == 41
-
-    def test_get_and_decrement_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.get_and_decrement_async()
-        assert future.result() == 42
-        assert atomic._value == 41
-
-    def test_decrement_and_get(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.decrement_and_get()
-        assert result == 41
-        assert atomic._value == 41
-
-    def test_decrement_and_get_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.decrement_and_get_async()
-        assert future.result() == 41
-        assert atomic._value == 41
-
-    def test_alter(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        atomic.alter(lambda x: x * 2)
-        assert atomic._value == 84
-
-    def test_alter_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.alter_async(lambda x: x * 2)
-        assert future.result() is None
-        assert atomic._value == 84
-
-    def test_alter_with_none_function(self):
-        atomic = AtomicLong("test")
-        with pytest.raises(IllegalArgumentException) as exc_info:
-            atomic.alter(None)
-        assert "function cannot be None" in str(exc_info.value)
-
-    def test_alter_async_with_none_function(self):
-        atomic = AtomicLong("test")
-        with pytest.raises(IllegalArgumentException) as exc_info:
-            atomic.alter_async(None)
-        assert "function cannot be None" in str(exc_info.value)
-
-    def test_alter_and_get(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.alter_and_get(lambda x: x * 2)
-        assert result == 84
-        assert atomic._value == 84
-
-    def test_alter_and_get_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.alter_and_get_async(lambda x: x * 2)
-        assert future.result() == 84
-        assert atomic._value == 84
-
-    def test_alter_and_get_with_none_function(self):
-        atomic = AtomicLong("test")
-        with pytest.raises(IllegalArgumentException):
-            atomic.alter_and_get(None)
-
-    def test_get_and_alter(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        previous = atomic.get_and_alter(lambda x: x * 2)
-        assert previous == 42
-        assert atomic._value == 84
-
-    def test_get_and_alter_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.get_and_alter_async(lambda x: x * 2)
-        assert future.result() == 42
-        assert atomic._value == 84
-
-    def test_get_and_alter_with_none_function(self):
-        atomic = AtomicLong("test")
-        with pytest.raises(IllegalArgumentException):
-            atomic.get_and_alter(None)
-
-    def test_apply(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.apply(lambda x: x * 2)
-        assert result == 84
-        assert atomic._value == 42
-
-    def test_apply_async(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        future = atomic.apply_async(lambda x: x * 2)
-        assert future.result() == 84
-        assert atomic._value == 42
-
-    def test_apply_with_none_function(self):
-        atomic = AtomicLong("test")
-        with pytest.raises(IllegalArgumentException) as exc_info:
-            atomic.apply(None)
-        assert "function cannot be None" in str(exc_info.value)
-
-    def test_apply_async_with_none_function(self):
-        atomic = AtomicLong("test")
-        with pytest.raises(IllegalArgumentException):
-            atomic.apply_async(None)
-
-    def test_apply_returns_different_type(self):
-        atomic = AtomicLong("test")
-        atomic._value = 42
-        result = atomic.apply(lambda x: f"value is {x}")
-        assert result == "value is 42"
-
-    def test_operations_on_destroyed_proxy_get(self):
-        atomic = AtomicLong("test")
-        atomic.destroy()
-        with pytest.raises(IllegalStateException):
-            atomic.get()
-
-    def test_operations_on_destroyed_proxy_set(self):
-        atomic = AtomicLong("test")
-        atomic.destroy()
-        with pytest.raises(IllegalStateException):
-            atomic.set(100)
-
-    def test_operations_on_destroyed_proxy_compare_and_set(self):
-        atomic = AtomicLong("test")
-        atomic.destroy()
-        with pytest.raises(IllegalStateException):
-            atomic.compare_and_set(0, 100)
-
-    def test_operations_on_destroyed_proxy_increment(self):
-        atomic = AtomicLong("test")
-        atomic.destroy()
-        with pytest.raises(IllegalStateException):
-            atomic.increment_and_get()
-
-    def test_operations_on_destroyed_proxy_alter(self):
-        atomic = AtomicLong("test")
-        atomic.destroy()
-        with pytest.raises(IllegalStateException):
-            atomic.alter(lambda x: x + 1)
-
-
-class TestAtomicReference:
-    """Tests for AtomicReference class."""
-
-    def test_service_name_constant(self):
-        assert AtomicReference.SERVICE_NAME == "hz:raft:atomicRefService"
-
-    def test_initial_value_is_none(self):
-        ref = AtomicReference("test")
-        assert ref._value is None
-
-    def test_get(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        assert ref.get() == "hello"
-
-    def test_get_async(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.get_async()
-        assert isinstance(future, Future)
-        assert future.result() == "hello"
-
-    def test_set_string(self):
-        ref = AtomicReference("test")
-        ref.set("hello")
-        assert ref._value == "hello"
-
-    def test_set_dict(self):
-        ref = AtomicReference("test")
-        value = {"key": "value"}
-        ref.set(value)
-        assert ref._value == value
-
-    def test_set_list(self):
-        ref = AtomicReference("test")
-        value = [1, 2, 3]
-        ref.set(value)
-        assert ref._value == value
-
-    def test_set_none(self):
-        ref = AtomicReference("test")
-        ref._value = "something"
-        ref.set(None)
-        assert ref._value is None
-
-    def test_set_async(self):
-        ref = AtomicReference("test")
-        future = ref.set_async("hello")
-        assert future.result() is None
-        assert ref._value == "hello"
-
-    def test_get_and_set(self):
-        ref = AtomicReference("test")
-        ref._value = "old"
-        previous = ref.get_and_set("new")
-        assert previous == "old"
-        assert ref._value == "new"
-
-    def test_get_and_set_async(self):
-        ref = AtomicReference("test")
-        ref._value = "old"
-        future = ref.get_and_set_async("new")
-        assert future.result() == "old"
-        assert ref._value == "new"
-
-    def test_is_null_when_none(self):
-        ref = AtomicReference("test")
-        assert ref.is_null() is True
-
-    def test_is_null_when_has_value(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        assert ref.is_null() is False
-
-    def test_is_null_async_when_none(self):
-        ref = AtomicReference("test")
-        future = ref.is_null_async()
-        assert future.result() is True
-
-    def test_is_null_async_when_has_value(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.is_null_async()
-        assert future.result() is False
-
-    def test_clear(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        ref.clear()
-        assert ref._value is None
-
-    def test_clear_async(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.clear_async()
-        assert future.result() is None
-        assert ref._value is None
-
-    def test_contains_matching_value(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        assert ref.contains("hello") is True
-
-    def test_contains_non_matching_value(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        assert ref.contains("world") is False
-
-    def test_contains_none_when_none(self):
-        ref = AtomicReference("test")
-        assert ref.contains(None) is True
-
-    def test_contains_none_when_has_value(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        assert ref.contains(None) is False
-
-    def test_contains_async_matching(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.contains_async("hello")
-        assert future.result() is True
-
-    def test_contains_async_non_matching(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.contains_async("world")
-        assert future.result() is False
-
-    def test_compare_and_set_success(self):
-        ref = AtomicReference("test")
-        ref._value = "old"
-        result = ref.compare_and_set("old", "new")
-        assert result is True
-        assert ref._value == "new"
-
-    def test_compare_and_set_failure(self):
-        ref = AtomicReference("test")
-        ref._value = "old"
-        result = ref.compare_and_set("wrong", "new")
-        assert result is False
-        assert ref._value == "old"
-
-    def test_compare_and_set_with_none(self):
-        ref = AtomicReference("test")
-        result = ref.compare_and_set(None, "new")
-        assert result is True
-        assert ref._value == "new"
-
-    def test_compare_and_set_async_success(self):
-        ref = AtomicReference("test")
-        ref._value = "old"
-        future = ref.compare_and_set_async("old", "new")
-        assert future.result() is True
-        assert ref._value == "new"
-
-    def test_compare_and_set_async_failure(self):
-        ref = AtomicReference("test")
-        ref._value = "old"
-        future = ref.compare_and_set_async("wrong", "new")
-        assert future.result() is False
-        assert ref._value == "old"
-
-    def test_alter(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        ref.alter(lambda x: x.upper())
-        assert ref._value == "HELLO"
-
-    def test_alter_async(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.alter_async(lambda x: x.upper())
-        assert future.result() is None
-        assert ref._value == "HELLO"
-
-    def test_alter_with_none_function(self):
-        ref = AtomicReference("test")
-        with pytest.raises(IllegalArgumentException) as exc_info:
-            ref.alter(None)
-        assert "function cannot be None" in str(exc_info.value)
-
-    def test_alter_async_with_none_function(self):
-        ref = AtomicReference("test")
-        with pytest.raises(IllegalArgumentException):
-            ref.alter_async(None)
-
-    def test_alter_and_get(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        result = ref.alter_and_get(lambda x: x.upper())
-        assert result == "HELLO"
-        assert ref._value == "HELLO"
-
-    def test_alter_and_get_async(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.alter_and_get_async(lambda x: x.upper())
-        assert future.result() == "HELLO"
-        assert ref._value == "HELLO"
-
-    def test_alter_and_get_with_none_function(self):
-        ref = AtomicReference("test")
-        with pytest.raises(IllegalArgumentException):
-            ref.alter_and_get(None)
-
-    def test_get_and_alter(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        previous = ref.get_and_alter(lambda x: x.upper())
-        assert previous == "hello"
-        assert ref._value == "HELLO"
-
-    def test_get_and_alter_async(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.get_and_alter_async(lambda x: x.upper())
-        assert future.result() == "hello"
-        assert ref._value == "HELLO"
-
-    def test_get_and_alter_with_none_function(self):
-        ref = AtomicReference("test")
-        with pytest.raises(IllegalArgumentException):
-            ref.get_and_alter(None)
-
-    def test_apply(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        result = ref.apply(lambda x: len(x))
-        assert result == 5
-        assert ref._value == "hello"
-
-    def test_apply_async(self):
-        ref = AtomicReference("test")
-        ref._value = "hello"
-        future = ref.apply_async(lambda x: len(x))
-        assert future.result() == 5
-        assert ref._value == "hello"
-
-    def test_apply_with_none_function(self):
-        ref = AtomicReference("test")
-        with pytest.raises(IllegalArgumentException) as exc_info:
-            ref.apply(None)
-        assert "function cannot be None" in str(exc_info.value)
-
-    def test_apply_async_with_none_function(self):
-        ref = AtomicReference("test")
-        with pytest.raises(IllegalArgumentException):
-            ref.apply_async(None)
-
-    def test_operations_on_destroyed_proxy_get(self):
-        ref = AtomicReference("test")
-        ref.destroy()
-        with pytest.raises(IllegalStateException):
-            ref.get()
-
-    def test_operations_on_destroyed_proxy_set(self):
-        ref = AtomicReference("test")
-        ref.destroy()
-        with pytest.raises(IllegalStateException):
-            ref.set("value")
-
-    def test_operations_on_destroyed_proxy_is_null(self):
-        ref = AtomicReference("test")
-        ref.destroy()
-        with pytest.raises(IllegalStateException):
-            ref.is_null()
-
-    def test_operations_on_destroyed_proxy_clear(self):
-        ref = AtomicReference("test")
-        ref.destroy()
-        with pytest.raises(IllegalStateException):
+from hazelcast.proxy.base import ProxyContext
+
+
+class MockInvocationService:
+    """Mock invocation service for testing."""
+
+    def __init__(self, return_value=None):
+        self._return_value = return_value
+
+    def invoke(self, invocation):
+        future = Future()
+        future.set_result(self._return_value)
+        return future
+
+
+class TestAtomicLong(unittest.TestCase):
+    """Tests for AtomicLong proxy."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_invocation = MockInvocationService()
+        self.context = ProxyContext(
+            invocation_service=self.mock_invocation,
+            serialization_service=None,
+            partition_service=None,
+        )
+
+    def test_init(self):
+        """Test AtomicLong initialization."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "test-counter", self.context)
+        self.assertEqual(atomic.name, "test-counter")
+        self.assertEqual(atomic.service_name, "hz:raft:atomicLongService")
+
+    def test_parse_group_id_default(self):
+        """Test default CP group ID parsing."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        self.assertEqual(atomic._group_id, "default")
+
+    def test_parse_group_id_custom(self):
+        """Test custom CP group ID parsing."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter@custom-group", self.context)
+        self.assertEqual(atomic._group_id, "custom-group")
+
+    def test_get_object_name_simple(self):
+        """Test object name extraction without group."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        self.assertEqual(atomic._get_object_name(), "counter")
+
+    def test_get_object_name_with_group(self):
+        """Test object name extraction with group."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter@my-group", self.context)
+        self.assertEqual(atomic._get_object_name(), "counter")
+
+    def test_get_async_returns_future(self):
+        """Test that get_async returns a Future."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        result = atomic.get_async()
+        self.assertIsInstance(result, Future)
+
+    def test_set_async_returns_future(self):
+        """Test that set_async returns a Future."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        result = atomic.set_async(42)
+        self.assertIsInstance(result, Future)
+
+    def test_compare_and_set_async_returns_future(self):
+        """Test that compare_and_set_async returns a Future."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        result = atomic.compare_and_set_async(0, 1)
+        self.assertIsInstance(result, Future)
+
+    def test_increment_and_get_uses_add_and_get(self):
+        """Test increment_and_get delegates to add_and_get."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        with patch.object(atomic, "add_and_get", return_value=1) as mock_add:
+            result = atomic.increment_and_get()
+            mock_add.assert_called_once_with(1)
+            self.assertEqual(result, 1)
+
+    def test_decrement_and_get_uses_add_and_get(self):
+        """Test decrement_and_get delegates to add_and_get with -1."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        with patch.object(atomic, "add_and_get", return_value=-1) as mock_add:
+            result = atomic.decrement_and_get()
+            mock_add.assert_called_once_with(-1)
+            self.assertEqual(result, -1)
+
+    def test_get_and_increment_uses_get_and_add(self):
+        """Test get_and_increment delegates to get_and_add."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        with patch.object(atomic, "get_and_add", return_value=0) as mock_get_add:
+            result = atomic.get_and_increment()
+            mock_get_add.assert_called_once_with(1)
+            self.assertEqual(result, 0)
+
+    def test_get_and_decrement_uses_get_and_add(self):
+        """Test get_and_decrement delegates to get_and_add with -1."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        with patch.object(atomic, "get_and_add", return_value=1) as mock_get_add:
+            result = atomic.get_and_decrement()
+            mock_get_add.assert_called_once_with(-1)
+            self.assertEqual(result, 1)
+
+    def test_add_and_get_async_returns_future(self):
+        """Test that add_and_get_async returns a Future."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        result = atomic.add_and_get_async(5)
+        self.assertIsInstance(result, Future)
+
+    def test_get_and_add_async_returns_future(self):
+        """Test that get_and_add_async returns a Future."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        result = atomic.get_and_add_async(5)
+        self.assertIsInstance(result, Future)
+
+    def test_get_and_set_async_returns_future(self):
+        """Test that get_and_set_async returns a Future."""
+        atomic = AtomicLong("hz:raft:atomicLongService", "counter", self.context)
+        result = atomic.get_and_set_async(100)
+        self.assertIsInstance(result, Future)
+
+
+class TestAtomicReference(unittest.TestCase):
+    """Tests for AtomicReference proxy."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_invocation = MockInvocationService()
+        self.context = ProxyContext(
+            invocation_service=self.mock_invocation,
+            serialization_service=None,
+            partition_service=None,
+        )
+
+    def test_init(self):
+        """Test AtomicReference initialization."""
+        ref = AtomicReference("hz:raft:atomicRefService", "test-ref", self.context)
+        self.assertEqual(ref.name, "test-ref")
+        self.assertEqual(ref.service_name, "hz:raft:atomicRefService")
+
+    def test_parse_group_id_default(self):
+        """Test default CP group ID parsing."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        self.assertEqual(ref._group_id, "default")
+
+    def test_parse_group_id_custom(self):
+        """Test custom CP group ID parsing."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref@custom", self.context)
+        self.assertEqual(ref._group_id, "custom")
+
+    def test_get_object_name_simple(self):
+        """Test object name extraction without group."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        self.assertEqual(ref._get_object_name(), "ref")
+
+    def test_get_object_name_with_group(self):
+        """Test object name extraction with group."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref@group", self.context)
+        self.assertEqual(ref._get_object_name(), "ref")
+
+    def test_get_async_returns_future(self):
+        """Test that get_async returns a Future."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        result = ref.get_async()
+        self.assertIsInstance(result, Future)
+
+    def test_set_async_returns_future(self):
+        """Test that set_async returns a Future."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        result = ref.set_async({"key": "value"})
+        self.assertIsInstance(result, Future)
+
+    def test_compare_and_set_async_returns_future(self):
+        """Test that compare_and_set_async returns a Future."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        result = ref.compare_and_set_async("old", "new")
+        self.assertIsInstance(result, Future)
+
+    def test_is_null_async_returns_future(self):
+        """Test that is_null_async returns a Future."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        result = ref.is_null_async()
+        self.assertIsInstance(result, Future)
+
+    def test_clear_delegates_to_set_none(self):
+        """Test clear calls set with None."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        with patch.object(ref, "set") as mock_set:
             ref.clear()
+            mock_set.assert_called_once_with(None)
 
-    def test_operations_on_destroyed_proxy_compare_and_set(self):
-        ref = AtomicReference("test")
-        ref.destroy()
-        with pytest.raises(IllegalStateException):
-            ref.compare_and_set(None, "value")
+    def test_clear_async_delegates_to_set_async(self):
+        """Test clear_async calls set_async with None."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        with patch.object(ref, "set_async") as mock_set_async:
+            ref.clear_async()
+            mock_set_async.assert_called_once_with(None)
 
-    def test_operations_on_destroyed_proxy_alter(self):
-        ref = AtomicReference("test")
-        ref.destroy()
-        with pytest.raises(IllegalStateException):
-            ref.alter(lambda x: x)
+    def test_contains_async_returns_future(self):
+        """Test that contains_async returns a Future."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        result = ref.contains_async("test")
+        self.assertIsInstance(result, Future)
+
+    def test_get_and_set_async_returns_future(self):
+        """Test that get_and_set_async returns a Future."""
+        ref = AtomicReference("hz:raft:atomicRefService", "ref", self.context)
+        result = ref.get_and_set_async("new_value")
+        self.assertIsInstance(result, Future)
+
+
+class TestAtomicLongCodec(unittest.TestCase):
+    """Tests for AtomicLong protocol codec."""
+
+    def test_encode_get_request(self):
+        """Test encoding a get request."""
+        from hazelcast.protocol.codec import AtomicLongCodec
+
+        msg = AtomicLongCodec.encode_get_request("default", "counter")
+        self.assertIsNotNone(msg)
+
+    def test_encode_set_request(self):
+        """Test encoding a set request."""
+        from hazelcast.protocol.codec import AtomicLongCodec
+
+        msg = AtomicLongCodec.encode_set_request("default", "counter", 42)
+        self.assertIsNotNone(msg)
+
+    def test_encode_compare_and_set_request(self):
+        """Test encoding a compare-and-set request."""
+        from hazelcast.protocol.codec import AtomicLongCodec
+
+        msg = AtomicLongCodec.encode_compare_and_set_request("default", "counter", 0, 1)
+        self.assertIsNotNone(msg)
+
+    def test_encode_add_and_get_request(self):
+        """Test encoding an add-and-get request."""
+        from hazelcast.protocol.codec import AtomicLongCodec
+
+        msg = AtomicLongCodec.encode_add_and_get_request("default", "counter", 10)
+        self.assertIsNotNone(msg)
+
+    def test_encode_get_and_add_request(self):
+        """Test encoding a get-and-add request."""
+        from hazelcast.protocol.codec import AtomicLongCodec
+
+        msg = AtomicLongCodec.encode_get_and_add_request("default", "counter", 10)
+        self.assertIsNotNone(msg)
+
+    def test_encode_get_and_set_request(self):
+        """Test encoding a get-and-set request."""
+        from hazelcast.protocol.codec import AtomicLongCodec
+
+        msg = AtomicLongCodec.encode_get_and_set_request("default", "counter", 100)
+        self.assertIsNotNone(msg)
+
+
+class TestAtomicReferenceCodec(unittest.TestCase):
+    """Tests for AtomicReference protocol codec."""
+
+    def test_encode_get_request(self):
+        """Test encoding a get request."""
+        from hazelcast.protocol.codec import AtomicReferenceCodec
+
+        msg = AtomicReferenceCodec.encode_get_request("default", "ref")
+        self.assertIsNotNone(msg)
+
+    def test_encode_set_request(self):
+        """Test encoding a set request."""
+        from hazelcast.protocol.codec import AtomicReferenceCodec
+
+        msg = AtomicReferenceCodec.encode_set_request("default", "ref", b"value")
+        self.assertIsNotNone(msg)
+
+    def test_encode_set_request_null(self):
+        """Test encoding a set request with null value."""
+        from hazelcast.protocol.codec import AtomicReferenceCodec
+
+        msg = AtomicReferenceCodec.encode_set_request("default", "ref", None)
+        self.assertIsNotNone(msg)
+
+    def test_encode_compare_and_set_request(self):
+        """Test encoding a compare-and-set request."""
+        from hazelcast.protocol.codec import AtomicReferenceCodec
+
+        msg = AtomicReferenceCodec.encode_compare_and_set_request(
+            "default", "ref", b"old", b"new"
+        )
+        self.assertIsNotNone(msg)
+
+    def test_encode_is_null_request(self):
+        """Test encoding an is-null request."""
+        from hazelcast.protocol.codec import AtomicReferenceCodec
+
+        msg = AtomicReferenceCodec.encode_is_null_request("default", "ref")
+        self.assertIsNotNone(msg)
+
+    def test_encode_contains_request(self):
+        """Test encoding a contains request."""
+        from hazelcast.protocol.codec import AtomicReferenceCodec
+
+        msg = AtomicReferenceCodec.encode_contains_request("default", "ref", b"value")
+        self.assertIsNotNone(msg)
+
+
+if __name__ == "__main__":
+    unittest.main()

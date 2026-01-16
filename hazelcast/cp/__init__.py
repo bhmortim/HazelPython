@@ -1,18 +1,25 @@
-"""Hazelcast CP subsystem proxies."""
+"""CP Subsystem for Hazelcast.
 
-from hazelcast.cp.base import CPProxy, CPGroupId
-from hazelcast.cp.atomic_long import AtomicLong
-from hazelcast.cp.atomic_reference import AtomicReference
-from hazelcast.cp.count_down_latch import CountDownLatch
-from hazelcast.cp.fenced_lock import FencedLock
-from hazelcast.cp.semaphore import Semaphore
+The CP Subsystem provides strongly consistent distributed data structures
+using the Raft consensus algorithm. It includes:
+
+- AtomicLong: Distributed atomic long counter
+- AtomicReference: Distributed atomic reference
+- FencedLock: Distributed mutex with fencing tokens
+- Semaphore: Distributed semaphore
+- CountDownLatch: Distributed countdown synchronization
+
+These primitives require a CP Subsystem to be enabled on the Hazelcast
+cluster with at least 3 members for fault tolerance.
+"""
+
+from hazelcast.cp.atomic import AtomicLong, AtomicReference
+from hazelcast.cp.sync import FencedLock, Semaphore, CountDownLatch
 
 __all__ = [
-    "CPProxy",
-    "CPGroupId",
     "AtomicLong",
     "AtomicReference",
-    "CountDownLatch",
     "FencedLock",
     "Semaphore",
+    "CountDownLatch",
 ]
