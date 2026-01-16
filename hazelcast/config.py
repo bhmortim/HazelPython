@@ -8,6 +8,198 @@ from hazelcast.exceptions import ConfigurationException
 from hazelcast.network.ssl_config import TlsConfig
 
 
+class DiscoveryStrategyType(Enum):
+    """Type of cloud discovery strategy."""
+    AWS = "AWS"
+    AZURE = "AZURE"
+    GCP = "GCP"
+    KUBERNETES = "KUBERNETES"
+
+
+class DiscoveryConfig:
+    """Configuration for cloud discovery strategies.
+
+    Allows automatic discovery of Hazelcast cluster members from
+    cloud providers and orchestration platforms.
+
+    Attributes:
+        enabled: Whether discovery is enabled.
+        strategy_type: The type of discovery strategy to use.
+        aws: AWS-specific configuration.
+        azure: Azure-specific configuration.
+        gcp: GCP-specific configuration.
+        kubernetes: Kubernetes-specific configuration.
+
+    Example:
+        AWS discovery::
+
+            config = DiscoveryConfig()
+            config.enabled = True
+            config.strategy_type = DiscoveryStrategyType.AWS
+            config.aws = {
+                "region": "us-west-2",
+                "tag_key": "hazelcast-cluster",
+                "tag_value": "production",
+            }
+
+        Kubernetes discovery::
+
+            config = DiscoveryConfig()
+            config.enabled = True
+            config.strategy_type = DiscoveryStrategyType.KUBERNETES
+            config.kubernetes = {
+                "namespace": "hazelcast",
+                "service_name": "hazelcast-service",
+            }
+    """
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        strategy_type: Optional["DiscoveryStrategyType"] = None,
+    ):
+        self._enabled = enabled
+        self._strategy_type = strategy_type
+        self._aws: Optional[Dict] = None
+        self._azure: Optional[Dict] = None
+        self._gcp: Optional[Dict] = None
+        self._kubernetes: Optional[Dict] = None
+
+    @property
+    def enabled(self) -> bool:
+        """Get whether discovery is enabled."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    @property
+    def strategy_type(self) -> Optional["DiscoveryStrategyType"]:
+        """Get the discovery strategy type."""
+        return self._strategy_type
+
+    @strategy_type.setter
+    def strategy_type(self, value: Optional["DiscoveryStrategyType"]) -> None:
+        self._strategy_type = value
+
+    @property
+    def aws(self) -> Optional[Dict]:
+        """Get AWS discovery configuration."""
+        return self._aws
+
+    @aws.setter
+    def aws(self, value: Optional[Dict]) -> None:
+        self._aws = value
+        if value and not self._strategy_type:
+            self._strategy_type = DiscoveryStrategyType.AWS
+
+    @property
+    def azure(self) -> Optional[Dict]:
+        """Get Azure discovery configuration."""
+        return self._azure
+
+    @azure.setter
+    def azure(self, value: Optional[Dict]) -> None:
+        self._azure = value
+        if value and not self._strategy_type:
+            self._strategy_type = DiscoveryStrategyType.AZURE
+
+    @property
+    def gcp(self) -> Optional[Dict]:
+        """Get GCP discovery configuration."""
+        return self._gcp
+
+    @gcp.setter
+    def gcp(self, value: Optional[Dict]) -> None:
+        self._gcp = value
+        if value and not self._strategy_type:
+            self._strategy_type = DiscoveryStrategyType.GCP
+
+    @property
+    def kubernetes(self) -> Optional[Dict]:
+        """Get Kubernetes discovery configuration."""
+        return self._kubernetes
+
+    @kubernetes.setter
+    def kubernetes(self, value: Optional[Dict]) -> None:
+        self._kubernetes = value
+        if value and not self._strategy_type:
+            self._strategy_type = DiscoveryStrategyType.KUBERNETES
+
+    def create_strategy(self) -> "DiscoveryStrategy":
+        """Create and return the configured discovery strategy.
+
+        Returns:
+            A configured DiscoveryStrategy instance.
+
+        Raises:
+            ConfigurationException: If strategy type is not set or invalid.
+        """
+        if not self._enabled:
+            raise ConfigurationException("Discovery is not enabled")
+
+        if not self._strategy_type:
+            raise ConfigurationException("Discovery strategy type is not set")
+
+        from hazelcast.discovery import (
+            AwsDiscoveryStrategy,
+            AwsConfig,
+            AzureDiscoveryStrategy,
+            AzureConfig,
+            GcpDiscoveryStrategy,
+            GcpConfig,
+            KubernetesDiscoveryStrategy,
+            KubernetesConfig,
+        )
+
+        if self._strategy_type == DiscoveryStrategyType.AWS:
+            aws_config = AwsConfig.from_dict(self._aws or {})
+            return AwsDiscoveryStrategy(aws_config)
+
+        elif self._strategy_type == DiscoveryStrategyType.AZURE:
+            azure_config = AzureConfig.from_dict(self._azure or {})
+            return AzureDiscoveryStrategy(azure_config)
+
+        elif self._strategy_type == DiscoveryStrategyType.GCP:
+            gcp_config = GcpConfig.from_dict(self._gcp or {})
+            return GcpDiscoveryStrategy(gcp_config)
+
+        elif self._strategy_type == DiscoveryStrategyType.KUBERNETES:
+            k8s_config = KubernetesConfig.from_dict(self._kubernetes or {})
+            return KubernetesDiscoveryStrategy(k8s_config)
+
+        else:
+            raise ConfigurationException(
+                f"Unknown discovery strategy type: {self._strategy_type}"
+            )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DiscoveryConfig":
+        """Create DiscoveryConfig from a dictionary."""
+        config = cls(enabled=data.get("enabled", False))
+
+        strategy_str = data.get("strategy_type")
+        if strategy_str:
+            try:
+                config.strategy_type = DiscoveryStrategyType(strategy_str.upper())
+            except ValueError:
+                raise ConfigurationException(
+                    f"Invalid discovery strategy type: {strategy_str}"
+                )
+
+        if "aws" in data:
+            config.aws = data["aws"]
+        if "azure" in data:
+            config.azure = data["azure"]
+        if "gcp" in data:
+            config.gcp = data["gcp"]
+        if "kubernetes" in data:
+            config.kubernetes = data["kubernetes"]
+
+        return config
+
+
 class ReconnectMode(Enum):
     """Reconnection behavior mode."""
     OFF = "OFF"
@@ -1159,6 +1351,7 @@ class ClientConfig:
         self._serialization: SerializationConfig = SerializationConfig()
         self._near_caches: Dict[str, NearCacheConfig] = {}
         self._labels: List[str] = []
+        self._discovery: DiscoveryConfig = DiscoveryConfig()
 
     @property
     def cluster_name(self) -> str:
@@ -1288,6 +1481,16 @@ class ClientConfig:
         """Set client labels."""
         self._labels = value
 
+    @property
+    def discovery(self) -> DiscoveryConfig:
+        """Get the discovery configuration."""
+        return self._discovery
+
+    @discovery.setter
+    def discovery(self, value: DiscoveryConfig) -> None:
+        """Set the discovery configuration."""
+        self._discovery = value
+
     @classmethod
     def from_dict(cls, data: dict) -> "ClientConfig":
         """Create ClientConfig from a dictionary."""
@@ -1319,6 +1522,9 @@ class ClientConfig:
 
         if "labels" in data:
             config.labels = data["labels"]
+
+        if "discovery" in data:
+            config.discovery = DiscoveryConfig.from_dict(data["discovery"])
 
         return config
 
