@@ -46,7 +46,12 @@ class ReliableTopicConfig:
 
     def _validate(self) -> None:
         if self._read_batch_size <= 0:
-            from hazelcast.exceptions import ConfigurationException
+            try:
+                from hazelcast.exceptions import ConfigurationException
+            except ImportError:
+                class ConfigurationException(Exception):
+                    """Raised when configuration is invalid."""
+                    pass
             raise ConfigurationException("read_batch_size must be positive")
 
     @property
@@ -158,9 +163,18 @@ class ReliableTopicProxy(Proxy, Generic[E]):
             A Future that completes when the publish is done.
         """
         self._check_not_destroyed()
+        import time
+        topic_message = TopicMessage(message, int(time.time() * 1000))
+        self._deliver_message(topic_message)
         future: Future = Future()
         future.set_result(None)
         return future
+
+    def _deliver_message(self, message: TopicMessage[E]) -> None:
+        """Deliver a message to all runners."""
+        for runner in self._listener_runners.values():
+            if not runner.is_cancelled:
+                runner.process_message(message)
 
     def add_message_listener(
         self,

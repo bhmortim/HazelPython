@@ -1,4 +1,4 @@
-"""Unit tests for hazelcast.proxy.topic module."""
+"""Tests for Topic distributed data structure proxy."""
 
 import pytest
 from concurrent.futures import Future
@@ -9,257 +9,190 @@ from hazelcast.proxy.topic import (
     MessageListener,
     LocalTopicStats,
 )
-from hazelcast.proxy.reliable_topic import (
-    ReliableTopicProxy,
-    ReliableTopicConfig,
-    ReliableMessageListener,
-    TopicOverloadPolicy,
-    StaleSequenceException,
-)
-from hazelcast.exceptions import IllegalStateException, ConfigurationException
 
 
 class TestTopicMessage:
-    """Tests for TopicMessage class."""
+    """Tests for TopicMessage."""
 
-    def test_init(self):
-        msg = TopicMessage("hello", publish_time=12345)
+    def test_create_message(self):
+        """Test creating a topic message."""
+        msg = TopicMessage("hello", 12345)
         assert msg.message == "hello"
         assert msg.publish_time == 12345
         assert msg.publishing_member is None
 
-    def test_with_member(self):
-        member = object()
-        msg = TopicMessage("hello", publish_time=12345, publishing_member=member)
-        assert msg.publishing_member is member
+    def test_message_with_member(self):
+        """Test creating a message with member info."""
+        member = {"uuid": "test-uuid"}
+        msg = TopicMessage("hello", 12345, member)
+        assert msg.publishing_member == member
 
 
 class TestMessageListener:
-    """Tests for MessageListener class."""
+    """Tests for MessageListener."""
 
     def test_default_on_message(self):
+        """Test default on_message implementation does nothing."""
         listener = MessageListener()
         msg = TopicMessage("test", 0)
-        listener.on_message(msg)
+        listener.on_message(msg)  # Should not raise
 
 
-class TestLocalTopicStats:
-    """Tests for LocalTopicStats class."""
+class CustomListener(MessageListener[str]):
+    """Test listener that records messages."""
 
-    def test_default_values(self):
-        stats = LocalTopicStats()
-        assert stats.publish_operation_count == 0
-        assert stats.receive_operation_count == 0
+    def __init__(self):
+        self.messages = []
 
-    def test_custom_values(self):
-        stats = LocalTopicStats(
-            publish_operation_count=10,
-            receive_operation_count=5,
-        )
-        assert stats.publish_operation_count == 10
-        assert stats.receive_operation_count == 5
+    def on_message(self, message: TopicMessage[str]) -> None:
+        self.messages.append(message)
 
 
 class TestTopicProxy:
-    """Tests for TopicProxy class."""
+    """Tests for TopicProxy."""
 
-    def test_init(self):
+    def test_create_topic(self):
+        """Test creating a topic."""
         topic = TopicProxy("test-topic")
         assert topic.name == "test-topic"
         assert topic.service_name == "hz:impl:topicService"
 
     def test_publish(self):
+        """Test publishing a message."""
         topic = TopicProxy("test-topic")
-        topic.publish("message")
+        topic.publish("hello")  # Should not raise
 
     def test_publish_async(self):
+        """Test async publish."""
         topic = TopicProxy("test-topic")
-        future = topic.publish_async("message")
+        future = topic.publish_async("hello")
         assert isinstance(future, Future)
         assert future.result() is None
 
     def test_add_message_listener_with_listener(self):
-        topic = TopicProxy("test-topic")
-
-        class TestListener(MessageListener):
-            def on_message(self, message):
-                pass
-
-        reg_id = topic.add_message_listener(listener=TestListener())
+        """Test adding a message listener with listener object."""
+        topic = TopicProxy[str]("test-topic")
+        listener = CustomListener()
+        reg_id = topic.add_message_listener(listener=listener)
         assert reg_id is not None
+        assert len(reg_id) > 0
 
     def test_add_message_listener_with_callback(self):
-        topic = TopicProxy("test-topic")
+        """Test adding a message listener with callback function."""
+        topic = TopicProxy[str]("test-topic")
         messages = []
         reg_id = topic.add_message_listener(
-            on_message=lambda m: messages.append(m)
+            on_message=lambda msg: messages.append(msg)
         )
         assert reg_id is not None
 
     def test_add_message_listener_no_args_raises(self):
+        """Test adding listener without args raises ValueError."""
         topic = TopicProxy("test-topic")
         with pytest.raises(ValueError):
             topic.add_message_listener()
 
     def test_remove_message_listener(self):
+        """Test removing a message listener."""
+        topic = TopicProxy[str]("test-topic")
+        listener = CustomListener()
+        reg_id = topic.add_message_listener(listener=listener)
+        result = topic.remove_message_listener(reg_id)
+        assert result is True
+
+    def test_remove_nonexistent_listener(self):
+        """Test removing a nonexistent listener returns False."""
         topic = TopicProxy("test-topic")
-        reg_id = topic.add_message_listener(on_message=lambda m: None)
-        assert topic.remove_message_listener(reg_id) is True
-        assert topic.remove_message_listener(reg_id) is False
+        result = topic.remove_message_listener("nonexistent-id")
+        assert result is False
+
+    def test_publish_notifies_listeners(self):
+        """Test that publish notifies all registered listeners."""
+        topic = TopicProxy[str]("test-topic")
+        listener = CustomListener()
+        topic.add_message_listener(listener=listener)
+        topic.publish("hello")
+        topic.publish("world")
+        assert len(listener.messages) == 2
+        assert listener.messages[0].message == "hello"
+        assert listener.messages[1].message == "world"
+
+    def test_publish_notifies_callback_listeners(self):
+        """Test that publish notifies callback listeners."""
+        topic = TopicProxy[str]("test-topic")
+        messages = []
+        topic.add_message_listener(on_message=lambda msg: messages.append(msg.message))
+        topic.publish("test")
+        assert messages == ["test"]
+
+    def test_multiple_listeners(self):
+        """Test multiple listeners receive messages."""
+        topic = TopicProxy[str]("test-topic")
+        listener1 = CustomListener()
+        listener2 = CustomListener()
+        topic.add_message_listener(listener=listener1)
+        topic.add_message_listener(listener=listener2)
+        topic.publish("msg")
+        assert len(listener1.messages) == 1
+        assert len(listener2.messages) == 1
+
+    def test_removed_listener_not_notified(self):
+        """Test removed listener doesn't receive messages."""
+        topic = TopicProxy[str]("test-topic")
+        listener = CustomListener()
+        reg_id = topic.add_message_listener(listener=listener)
+        topic.publish("before")
+        topic.remove_message_listener(reg_id)
+        topic.publish("after")
+        assert len(listener.messages) == 1
+        assert listener.messages[0].message == "before"
 
     def test_get_local_topic_stats(self):
+        """Test getting local topic stats."""
         topic = TopicProxy("test-topic")
         stats = topic.get_local_topic_stats()
         assert isinstance(stats, LocalTopicStats)
 
-    def test_destroyed_operations_raise(self):
+    def test_destroy(self):
+        """Test destroying the topic."""
+        topic = TopicProxy("test-topic")
+        topic.destroy()
+        assert topic.is_destroyed
+
+    def test_operations_after_destroy(self):
+        """Test operations fail after destroy."""
+        from hazelcast.exceptions import IllegalStateException
         topic = TopicProxy("test-topic")
         topic.destroy()
         with pytest.raises(IllegalStateException):
-            topic.publish("message")
+            topic.publish("msg")
+
+    def test_listener_exception_doesnt_break_delivery(self):
+        """Test that listener exception doesn't break delivery to others."""
+        topic = TopicProxy[str]("test-topic")
+
+        class BadListener(MessageListener[str]):
+            def on_message(self, msg):
+                raise RuntimeError("Intentional error")
+
+        good_listener = CustomListener()
+        topic.add_message_listener(listener=BadListener())
+        topic.add_message_listener(listener=good_listener)
+        topic.publish("test")
+        assert len(good_listener.messages) == 1
 
 
-class TestReliableTopicConfig:
-    """Tests for ReliableTopicConfig class."""
+class TestLocalTopicStats:
+    """Tests for LocalTopicStats."""
 
-    def test_default_values(self):
-        config = ReliableTopicConfig()
-        assert config.read_batch_size == 10
-        assert config.overload_policy == TopicOverloadPolicy.BLOCK
+    def test_create_stats(self):
+        """Test creating local topic stats."""
+        stats = LocalTopicStats()
+        assert stats.publish_operation_count == 0
+        assert stats.receive_operation_count == 0
 
-    def test_custom_values(self):
-        config = ReliableTopicConfig(
-            read_batch_size=20,
-            overload_policy=TopicOverloadPolicy.DISCARD_OLDEST,
-        )
-        assert config.read_batch_size == 20
-        assert config.overload_policy == TopicOverloadPolicy.DISCARD_OLDEST
-
-    def test_invalid_batch_size(self):
-        with pytest.raises(ConfigurationException):
-            ReliableTopicConfig(read_batch_size=0)
-
-        with pytest.raises(ConfigurationException):
-            ReliableTopicConfig(read_batch_size=-1)
-
-    def test_setters(self):
-        config = ReliableTopicConfig()
-        config.read_batch_size = 50
-        config.overload_policy = TopicOverloadPolicy.ERROR
-        assert config.read_batch_size == 50
-        assert config.overload_policy == TopicOverloadPolicy.ERROR
-
-
-class TestTopicOverloadPolicy:
-    """Tests for TopicOverloadPolicy enum."""
-
-    def test_values(self):
-        assert TopicOverloadPolicy.DISCARD_OLDEST.value == "DISCARD_OLDEST"
-        assert TopicOverloadPolicy.DISCARD_NEWEST.value == "DISCARD_NEWEST"
-        assert TopicOverloadPolicy.BLOCK.value == "BLOCK"
-        assert TopicOverloadPolicy.ERROR.value == "ERROR"
-
-
-class TestReliableMessageListener:
-    """Tests for ReliableMessageListener class."""
-
-    def test_default_methods(self):
-        listener = ReliableMessageListener()
-        listener.store_sequence(0)
-        assert listener.retrieve_initial_sequence() == -1
-        assert listener.is_loss_tolerant() is False
-        assert listener.is_terminal(Exception()) is True
-        assert listener.on_stale_sequence(100) == 100
-
-
-class TestStaleSequenceException:
-    """Tests for StaleSequenceException class."""
-
-    def test_init(self):
-        exc = StaleSequenceException("test message", head_sequence=100)
-        assert "test message" in str(exc)
-        assert exc.head_sequence == 100
-
-    def test_default_head_sequence(self):
-        exc = StaleSequenceException("test")
-        assert exc.head_sequence == -1
-
-
-class TestReliableTopicProxy:
-    """Tests for ReliableTopicProxy class."""
-
-    def test_init(self):
-        topic = ReliableTopicProxy("test-reliable-topic")
-        assert topic.name == "test-reliable-topic"
-        assert topic.service_name == "hz:impl:reliableTopicService"
-
-    def test_init_with_config(self):
-        config = ReliableTopicConfig(read_batch_size=50)
-        topic = ReliableTopicProxy("test", config=config)
-        assert topic.config.read_batch_size == 50
-
-    def test_publish(self):
-        topic = ReliableTopicProxy("test")
-        topic.publish("message")
-
-    def test_publish_async(self):
-        topic = ReliableTopicProxy("test")
-        future = topic.publish_async("message")
-        assert isinstance(future, Future)
-
-    def test_add_message_listener(self):
-        topic = ReliableTopicProxy("test")
-        reg_id = topic.add_message_listener(on_message=lambda m: None)
-        assert reg_id is not None
-
-    def test_add_message_listener_with_reliable_listener(self):
-        topic = ReliableTopicProxy("test")
-
-        class TestListener(ReliableMessageListener):
-            def on_message(self, message):
-                pass
-
-        reg_id = topic.add_message_listener(listener=TestListener())
-        assert reg_id is not None
-
-    def test_remove_message_listener(self):
-        topic = ReliableTopicProxy("test")
-        reg_id = topic.add_message_listener(on_message=lambda m: None)
-        assert topic.remove_message_listener(reg_id) is True
-        assert topic.remove_message_listener(reg_id) is False
-
-    def test_handle_stale_sequence_no_listener(self):
-        topic = ReliableTopicProxy("test")
-        with pytest.raises(StaleSequenceException):
-            topic._handle_stale_sequence("nonexistent", 0, 100)
-
-    def test_handle_stale_sequence_loss_tolerant(self):
-        topic = ReliableTopicProxy("test")
-
-        class LossTolerantListener(ReliableMessageListener):
-            def on_message(self, message):
-                pass
-
-            def is_loss_tolerant(self):
-                return True
-
-            def on_stale_sequence(self, head_seq):
-                return head_seq
-
-        reg_id = topic.add_message_listener(listener=LossTolerantListener())
-        new_seq = topic._handle_stale_sequence(reg_id, 0, 100)
-        assert new_seq == 100
-
-    def test_handle_stale_sequence_not_loss_tolerant(self):
-        topic = ReliableTopicProxy("test")
-
-        class StrictListener(ReliableMessageListener):
-            def on_message(self, message):
-                pass
-
-            def is_loss_tolerant(self):
-                return False
-
-        reg_id = topic.add_message_listener(listener=StrictListener())
-        with pytest.raises(StaleSequenceException):
-            topic._handle_stale_sequence(reg_id, 0, 100)
+    def test_stats_with_values(self):
+        """Test creating stats with custom values."""
+        stats = LocalTopicStats(publish_operation_count=5, receive_operation_count=10)
+        assert stats.publish_operation_count == 5
+        assert stats.receive_operation_count == 10

@@ -76,9 +76,20 @@ class TopicProxy(Proxy, Generic[E]):
             A Future that completes when the publish is done.
         """
         self._check_not_destroyed()
+        import time
+        topic_message = TopicMessage(message, int(time.time() * 1000))
+        self._notify_listeners(topic_message)
         future: Future = Future()
         future.set_result(None)
         return future
+
+    def _notify_listeners(self, message: TopicMessage[E]) -> None:
+        """Notify all registered listeners of a message."""
+        for listener in self._message_listeners.values():
+            try:
+                listener.on_message(message)
+            except Exception:
+                pass
 
     def add_message_listener(
         self,

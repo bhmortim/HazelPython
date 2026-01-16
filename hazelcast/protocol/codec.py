@@ -2310,6 +2310,253 @@ class SetCodec:
         return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
 
 
+# Ringbuffer protocol constants
+RINGBUFFER_SIZE = 0x190100
+RINGBUFFER_TAIL_SEQUENCE = 0x190200
+RINGBUFFER_HEAD_SEQUENCE = 0x190300
+RINGBUFFER_CAPACITY = 0x190400
+RINGBUFFER_REMAINING_CAPACITY = 0x190500
+RINGBUFFER_ADD = 0x190600
+RINGBUFFER_READ_ONE = 0x190700
+RINGBUFFER_ADD_ALL = 0x190800
+RINGBUFFER_READ_MANY = 0x190900
+
+
+class RingbufferCodec:
+    """Codec for Ringbuffer protocol messages."""
+
+    @staticmethod
+    def encode_capacity_request(name: str) -> "ClientMessage":
+        """Encode a Ringbuffer.capacity request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_CAPACITY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_capacity_response(msg: "ClientMessage") -> int:
+        """Decode a Ringbuffer.capacity response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_size_request(name: str) -> "ClientMessage":
+        """Encode a Ringbuffer.size request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a Ringbuffer.size response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_tail_sequence_request(name: str) -> "ClientMessage":
+        """Encode a Ringbuffer.tailSequence request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_TAIL_SEQUENCE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_tail_sequence_response(msg: "ClientMessage") -> int:
+        """Decode a Ringbuffer.tailSequence response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return -1
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_head_sequence_request(name: str) -> "ClientMessage":
+        """Encode a Ringbuffer.headSequence request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_HEAD_SEQUENCE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_head_sequence_response(msg: "ClientMessage") -> int:
+        """Decode a Ringbuffer.headSequence response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_remaining_capacity_request(name: str) -> "ClientMessage":
+        """Encode a Ringbuffer.remainingCapacity request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_REMAINING_CAPACITY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_remaining_capacity_response(msg: "ClientMessage") -> int:
+        """Decode a Ringbuffer.remainingCapacity response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_add_request(name: str, overflow_policy: int, value: bytes) -> "ClientMessage":
+        """Encode a Ringbuffer.add request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_ADD)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, overflow_policy)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_add_response(msg: "ClientMessage") -> int:
+        """Decode a Ringbuffer.add response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return -1
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_add_all_request(
+        name: str, overflow_policy: int, values: List[bytes]
+    ) -> "ClientMessage":
+        """Encode a Ringbuffer.addAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_ADD_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, overflow_policy)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        _encode_data_list(msg, values)
+        return msg
+
+    @staticmethod
+    def decode_add_all_response(msg: "ClientMessage") -> int:
+        """Decode a Ringbuffer.addAll response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return -1
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_read_one_request(name: str, sequence: int) -> "ClientMessage":
+        """Encode a Ringbuffer.readOne request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_READ_ONE)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, sequence)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_read_one_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Ringbuffer.readOne response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_read_many_request(
+        name: str,
+        start_sequence: int,
+        min_count: int,
+        max_count: int,
+        filter_data: Optional[bytes] = None,
+    ) -> "ClientMessage":
+        """Encode a Ringbuffer.readMany request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, RINGBUFFER_READ_MANY)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, start_sequence)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, min_count)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE, max_count)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        if filter_data:
+            msg.add_frame(Frame(filter_data))
+        else:
+            from hazelcast.protocol.client_message import NULL_FRAME
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_read_many_response(
+        msg: "ClientMessage",
+    ) -> Tuple[int, int, List[bytes], Optional[List[int]]]:
+        """Decode a Ringbuffer.readMany response.
+
+        Returns:
+            Tuple of (read_count, next_seq, items, item_seqs).
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return 0, 0, [], None
+
+        read_count = struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+        next_seq = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE + INT_SIZE)[0]
+
+        items = _decode_data_list(msg)
+        return read_count, next_seq, items, None
+
+
 class TopicCodec:
     """Codec for Topic protocol messages."""
 
