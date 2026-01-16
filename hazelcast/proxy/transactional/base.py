@@ -41,6 +41,18 @@ class TransactionalProxy(ABC):
         """
         self._transaction_context._check_active()
 
+    def _has_server_connection(self) -> bool:
+        """Check if a server connection is available."""
+        ctx = self._transaction_context._context
+        return ctx is not None and ctx.invocation_service is not None
+
+    def _invoke(self, request: Any) -> Any:
+        """Send a request through the invocation service."""
+        ctx = self._transaction_context._context
+        if ctx and ctx.invocation_service:
+            return ctx.invocation_service.invoke(request)
+        return None
+
     def _to_data(self, obj: Any) -> bytes:
         """Serialize an object to binary data."""
         ctx = self._transaction_context._context

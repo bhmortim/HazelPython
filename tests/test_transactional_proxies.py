@@ -447,5 +447,121 @@ class TestTransactionalProxyIsolation(unittest.TestCase):
         self.assertFalse(txn_map.contains_key("key1"))
 
 
+class TestTransactionalMapCodec(unittest.TestCase):
+    """Tests for TransactionalMapCodec encode/decode methods."""
+
+    def test_encode_put_request_message_type(self):
+        """Test that put request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMapCodec, TXN_MAP_PUT
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMapCodec.encode_put_request(
+            name="test-map",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+            value=b"value",
+            ttl=-1,
+        )
+
+        frame = msg.next_frame()
+        assert frame is not None
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MAP_PUT)
+
+    def test_encode_get_request_message_type(self):
+        """Test that get request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMapCodec, TXN_MAP_GET
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMapCodec.encode_get_request(
+            name="test-map",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MAP_GET)
+
+    def test_encode_remove_request_message_type(self):
+        """Test that remove request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMapCodec, TXN_MAP_REMOVE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMapCodec.encode_remove_request(
+            name="test-map",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MAP_REMOVE)
+
+    def test_encode_size_request_message_type(self):
+        """Test that size request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMapCodec, TXN_MAP_SIZE
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMapCodec.encode_size_request(
+            name="test-map",
+            txn_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MAP_SIZE)
+
+    def test_encode_contains_key_request_message_type(self):
+        """Test that containsKey request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMapCodec, TXN_MAP_CONTAINS_KEY
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMapCodec.encode_contains_key_request(
+            name="test-map",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MAP_CONTAINS_KEY)
+
+    def test_encode_replace_if_same_request_message_type(self):
+        """Test that replaceIfSame request has correct message type."""
+        import struct
+        import uuid
+        from hazelcast.protocol.codec import TransactionalMapCodec, TXN_MAP_REPLACE_IF_SAME
+
+        txn_id = uuid.uuid4()
+        msg = TransactionalMapCodec.encode_replace_if_same_request(
+            name="test-map",
+            txn_id=txn_id,
+            thread_id=12345,
+            key=b"key",
+            old_value=b"old",
+            new_value=b"new",
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        self.assertEqual(message_type, TXN_MAP_REPLACE_IF_SAME)
+
+
 if __name__ == "__main__":
     unittest.main()

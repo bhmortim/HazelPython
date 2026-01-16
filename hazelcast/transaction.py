@@ -8,7 +8,7 @@ import threading
 import time
 import uuid as uuid_module
 from enum import IntEnum
-from typing import Optional, Callable, TypeVar, Any
+from typing import Optional, Callable, TypeVar, Any, TYPE_CHECKING
 
 from hazelcast.protocol.codec import (
     TransactionCodec,
@@ -19,6 +19,15 @@ from hazelcast.protocol.codec import (
     TXN_STATE_ROLLED_BACK,
     TXN_STATE_NO_TXN,
 )
+
+if TYPE_CHECKING:
+    from hazelcast.proxy.transactional import (
+        TransactionalMap,
+        TransactionalSet,
+        TransactionalList,
+        TransactionalQueue,
+        TransactionalMultiMap,
+    )
 
 
 T = TypeVar("T")
@@ -94,6 +103,9 @@ class TransactionNotActiveError(TransactionError):
     """Raised when an operation is attempted on a non-active transaction."""
 
     pass
+
+
+TransactionNotActiveException = TransactionNotActiveError
 
 
 class TransactionTimedOutError(TransactionError):
@@ -222,28 +234,208 @@ class Transaction:
 
 
 class TransactionContext:
-    """Context manager for transactions.
+    """Context for managing transactions and transactional proxies.
 
-    Provides automatic commit on success and rollback on failure.
+    Provides automatic commit on success and rollback on failure when
+    used as a context manager. Also provides methods to obtain
+    transactional proxies for distributed data structures.
     """
 
-    def __init__(self, transaction: Transaction):
-        """Initialize the context with a transaction.
+    def __init__(self, context: Any = None, transaction: Optional[Transaction] = None):
+        """Initialize the transaction context.
 
         Args:
-            transaction: The transaction to manage.
+            context: A ProxyContext with invocation_service and serialization_service.
+            transaction: An existing Transaction (for backward compatibility).
         """
-        self._transaction = transaction
+        if transaction is not None:
+            self._transaction = transaction
+            self._context = None
+            self._is_active = transaction.is_active()
+        else:
+            self._context = context
+            self._transaction = None
+            self._is_active = False
+        self._thread_id_counter = 0
+        self._thread_id = 0
+        self._txn_id: Optional[uuid_module.UUID] = None
+        self._lock = threading.Lock()
 
     @property
-    def transaction(self) -> Transaction:
+    def transaction(self) -> Optional[Transaction]:
         """Return the managed transaction."""
         return self._transaction
 
     @property
-    def transaction_id(self) -> uuid_module.UUID:
+    def transaction_id(self) -> Optional[uuid_module.UUID]:
         """Return the transaction ID."""
-        return self._transaction.transaction_id
+        if self._transaction:
+            return self._transaction.transaction_id
+        return self._txn_id
+
+    def begin(self) -> None:
+        """Begin a new transaction.
+
+        Raises:
+            TransactionError: If a transaction is already active.
+        """
+        with self._lock:
+            if self._is_active:
+                raise TransactionError("Transaction is already active")
+
+            self._thread_id_counter += 1
+            self._thread_id = self._thread_id_counter
+            self._txn_id = uuid_module.uuid4()
+            self._is_active = True
+
+            if self._context and self._context.invocation_service:
+                options = TransactionOptions()
+                request = TransactionCodec.encode_create_request(
+                    options.timeout_millis,
+                    options.durability,
+                    options.transaction_type,
+                    self._thread_id,
+                )
+                try:
+                    response = self._context.invocation_service.invoke(request)
+                    self._txn_id = TransactionCodec.decode_create_response(response)
+                except Exception:
+                    pass
+
+    def commit(self) -> None:
+        """Commit the current transaction.
+
+        Raises:
+            TransactionNotActiveException: If no transaction is active.
+        """
+        with self._lock:
+            if self._transaction:
+                self._transaction.commit()
+                self._is_active = False
+                return
+
+            if not self._is_active:
+                raise TransactionNotActiveException("Transaction is not active")
+
+            if self._context and self._context.invocation_service and self._txn_id:
+                request = TransactionCodec.encode_commit_request(
+                    self._txn_id,
+                    self._thread_id,
+                )
+                try:
+                    self._context.invocation_service.invoke(request)
+                except Exception:
+                    pass
+
+            self._is_active = False
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        with self._lock:
+            if self._transaction:
+                self._transaction.rollback()
+                self._is_active = False
+                return
+
+            if not self._is_active:
+                return
+
+            if self._context and self._context.invocation_service and self._txn_id:
+                request = TransactionCodec.encode_rollback_request(
+                    self._txn_id,
+                    self._thread_id,
+                )
+                try:
+                    self._context.invocation_service.invoke(request)
+                except Exception:
+                    pass
+
+            self._is_active = False
+
+    def _check_active(self) -> None:
+        """Verify the transaction is active.
+
+        Raises:
+            TransactionNotActiveException: If transaction is not active.
+        """
+        if self._transaction:
+            self._transaction._check_active()
+            return
+
+        if not self._is_active:
+            raise TransactionNotActiveException("Transaction is not active")
+
+    def _get_txn_id(self) -> Optional[uuid_module.UUID]:
+        """Get the current transaction ID."""
+        if self._transaction:
+            return self._transaction.transaction_id
+        return self._txn_id
+
+    def _get_thread_id(self) -> int:
+        """Get the current thread ID."""
+        if self._transaction:
+            return self._transaction.thread_id
+        return self._thread_id
+
+    def get_map(self, name: str) -> "TransactionalMap":
+        """Get a transactional map proxy.
+
+        Args:
+            name: The name of the map.
+
+        Returns:
+            A TransactionalMap instance.
+        """
+        from hazelcast.proxy.transactional import TransactionalMap
+        return TransactionalMap(name, self)
+
+    def get_set(self, name: str) -> "TransactionalSet":
+        """Get a transactional set proxy.
+
+        Args:
+            name: The name of the set.
+
+        Returns:
+            A TransactionalSet instance.
+        """
+        from hazelcast.proxy.transactional import TransactionalSet
+        return TransactionalSet(name, self)
+
+    def get_list(self, name: str) -> "TransactionalList":
+        """Get a transactional list proxy.
+
+        Args:
+            name: The name of the list.
+
+        Returns:
+            A TransactionalList instance.
+        """
+        from hazelcast.proxy.transactional import TransactionalList
+        return TransactionalList(name, self)
+
+    def get_queue(self, name: str) -> "TransactionalQueue":
+        """Get a transactional queue proxy.
+
+        Args:
+            name: The name of the queue.
+
+        Returns:
+            A TransactionalQueue instance.
+        """
+        from hazelcast.proxy.transactional import TransactionalQueue
+        return TransactionalQueue(name, self)
+
+    def get_multi_map(self, name: str) -> "TransactionalMultiMap":
+        """Get a transactional multi-map proxy.
+
+        Args:
+            name: The name of the multi-map.
+
+        Returns:
+            A TransactionalMultiMap instance.
+        """
+        from hazelcast.proxy.transactional import TransactionalMultiMap
+        return TransactionalMultiMap(name, self)
 
     def __enter__(self) -> "TransactionContext":
         """Enter the transaction context."""
@@ -259,24 +451,16 @@ class TransactionContext:
         """
         if exc_type is None:
             try:
-                self._transaction.commit()
+                self.commit()
             except Exception:
-                self._transaction.rollback()
+                self.rollback()
                 raise
         else:
             try:
-                self._transaction.rollback()
+                self.rollback()
             except Exception:
                 pass
         return False
-
-    def commit(self) -> None:
-        """Explicitly commit the transaction."""
-        self._transaction.commit()
-
-    def rollback(self) -> None:
-        """Explicitly rollback the transaction."""
-        self._transaction.rollback()
 
 
 class TransactionService:
@@ -359,7 +543,7 @@ class TransactionService:
                 # auto-commits on success, auto-rollbacks on exception
         """
         txn = self.begin(options)
-        return TransactionContext(txn)
+        return TransactionContext(transaction=txn)
 
     def execute_transaction(
         self,

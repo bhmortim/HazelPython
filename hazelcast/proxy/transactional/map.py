@@ -28,12 +28,13 @@ class TransactionalMap(TransactionalProxy):
         self._local_changes: Dict[Any, Any] = {}
         self._deleted_keys: Set[Any] = set()
 
-    def put(self, key: Any, value: Any) -> Optional[Any]:
+    def put(self, key: Any, value: Any, ttl: int = -1) -> Optional[Any]:
         """Put a key-value pair into the map within the transaction.
 
         Args:
             key: The key to store.
             value: The value to associate with the key.
+            ttl: Time to live in milliseconds (-1 for infinite).
 
         Returns:
             The previous value associated with the key, or None.
@@ -42,6 +43,24 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            value_data = self._to_data(value)
+            request = TransactionalMapCodec.encode_put_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+                value_data,
+                ttl,
+            )
+            response = self._invoke(request)
+            if response:
+                result_data = TransactionalMapCodec.decode_put_response(response)
+                return self._to_object(result_data)
+
         old_value = self._local_changes.get(key)
         self._local_changes[key] = value
         self._deleted_keys.discard(key)
@@ -60,6 +79,21 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            request = TransactionalMapCodec.encode_get_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+            )
+            response = self._invoke(request)
+            if response:
+                result_data = TransactionalMapCodec.decode_get_response(response)
+                return self._to_object(result_data)
+
         if key in self._deleted_keys:
             return None
         return self._local_changes.get(key)
@@ -77,6 +111,21 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            request = TransactionalMapCodec.encode_remove_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+            )
+            response = self._invoke(request)
+            if response:
+                result_data = TransactionalMapCodec.decode_remove_response(response)
+                return self._to_object(result_data)
+
         old_value = self._local_changes.pop(key, None)
         self._deleted_keys.add(key)
         return old_value
@@ -94,6 +143,20 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            request = TransactionalMapCodec.encode_contains_key_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+            )
+            response = self._invoke(request)
+            if response:
+                return TransactionalMapCodec.decode_contains_key_response(response)
+
         if key in self._deleted_keys:
             return False
         return key in self._local_changes
@@ -108,6 +171,18 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            request = TransactionalMapCodec.encode_size_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+            )
+            response = self._invoke(request)
+            if response:
+                return TransactionalMapCodec.decode_size_response(response)
+
         return len(self._local_changes)
 
     def is_empty(self) -> bool:
@@ -131,6 +206,19 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            request = TransactionalMapCodec.encode_key_set_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+            )
+            response = self._invoke(request)
+            if response:
+                keys_data = TransactionalMapCodec.decode_key_set_response(response)
+                return {self._to_object(k) for k in keys_data}
+
         return set(self._local_changes.keys())
 
     def values(self) -> List[Any]:
@@ -143,6 +231,19 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            request = TransactionalMapCodec.encode_values_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+            )
+            response = self._invoke(request)
+            if response:
+                values_data = TransactionalMapCodec.decode_values_response(response)
+                return [self._to_object(v) for v in values_data]
+
         return list(self._local_changes.values())
 
     def get_for_update(self, key: Any) -> Optional[Any]:
@@ -161,6 +262,21 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            request = TransactionalMapCodec.encode_get_for_update_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+            )
+            response = self._invoke(request)
+            if response:
+                result_data = TransactionalMapCodec.decode_get_for_update_response(response)
+                return self._to_object(result_data)
+
         if key in self._deleted_keys:
             return None
         return self._local_changes.get(key)
@@ -179,6 +295,23 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            value_data = self._to_data(value)
+            request = TransactionalMapCodec.encode_put_if_absent_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+                value_data,
+            )
+            response = self._invoke(request)
+            if response:
+                result_data = TransactionalMapCodec.decode_put_if_absent_response(response)
+                return self._to_object(result_data)
+
         if key in self._local_changes and key not in self._deleted_keys:
             return self._local_changes[key]
         self._local_changes[key] = value
@@ -199,6 +332,23 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            value_data = self._to_data(value)
+            request = TransactionalMapCodec.encode_replace_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+                value_data,
+            )
+            response = self._invoke(request)
+            if response:
+                result_data = TransactionalMapCodec.decode_replace_response(response)
+                return self._to_object(result_data)
+
         if key not in self._local_changes or key in self._deleted_keys:
             return None
         old_value = self._local_changes[key]
@@ -220,6 +370,24 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            old_value_data = self._to_data(old_value)
+            new_value_data = self._to_data(new_value)
+            request = TransactionalMapCodec.encode_replace_if_same_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+                old_value_data,
+                new_value_data,
+            )
+            response = self._invoke(request)
+            if response:
+                return TransactionalMapCodec.decode_replace_if_same_response(response)
+
         if key in self._deleted_keys:
             return False
         if key not in self._local_changes:
@@ -239,6 +407,19 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            request = TransactionalMapCodec.encode_delete_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+            )
+            self._invoke(request)
+            return
+
         self._local_changes.pop(key, None)
         self._deleted_keys.add(key)
 
@@ -253,5 +434,20 @@ class TransactionalMap(TransactionalProxy):
             TransactionNotActiveException: If transaction is not active.
         """
         self._check_transaction_active()
+
+        if self._has_server_connection():
+            from hazelcast.protocol.codec import TransactionalMapCodec
+            key_data = self._to_data(key)
+            value_data = self._to_data(value)
+            request = TransactionalMapCodec.encode_set_request(
+                self._name,
+                self._transaction_context._get_txn_id(),
+                self._transaction_context._get_thread_id(),
+                key_data,
+                value_data,
+            )
+            self._invoke(request)
+            return
+
         self._local_changes[key] = value
         self._deleted_keys.discard(key)
