@@ -1,9 +1,12 @@
 """SQL result handling for Hazelcast SQL queries."""
 
+import asyncio
+from decimal import Decimal
 from enum import Enum
-from typing import Any, Callable, Dict, Iterator, List, Optional, TYPE_CHECKING
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, TYPE_CHECKING
 from concurrent.futures import Future
 import threading
+from datetime import date, time, datetime, timezone, timedelta
 
 if TYPE_CHECKING:
     from hazelcast.sql.service import SqlService
@@ -28,6 +31,92 @@ class SqlColumnType(Enum):
     OBJECT = "OBJECT"
     NULL = "NULL"
     JSON = "JSON"
+
+
+# Python type mappings for SQL column types
+SQL_TYPE_TO_PYTHON = {
+    SqlColumnType.VARCHAR: str,
+    SqlColumnType.BOOLEAN: bool,
+    SqlColumnType.TINYINT: int,
+    SqlColumnType.SMALLINT: int,
+    SqlColumnType.INTEGER: int,
+    SqlColumnType.BIGINT: int,
+    SqlColumnType.DECIMAL: Decimal,
+    SqlColumnType.REAL: float,
+    SqlColumnType.DOUBLE: float,
+    SqlColumnType.DATE: date,
+    SqlColumnType.TIME: time,
+    SqlColumnType.TIMESTAMP: datetime,
+    SqlColumnType.TIMESTAMP_WITH_TIME_ZONE: datetime,
+    SqlColumnType.OBJECT: object,
+    SqlColumnType.NULL: type(None),
+    SqlColumnType.JSON: (dict, list, str),
+}
+
+
+def convert_sql_value(value: Any, column_type: SqlColumnType) -> Any:
+    """Convert a raw SQL value to the appropriate Python type.
+
+    Args:
+        value: The raw value from the query result.
+        column_type: The SQL column type.
+
+    Returns:
+        The converted Python value.
+    """
+    if value is None:
+        return None
+
+    if column_type == SqlColumnType.DECIMAL:
+        if isinstance(value, (int, float, str)):
+            return Decimal(str(value))
+        return value
+
+    if column_type == SqlColumnType.DATE:
+        if isinstance(value, str):
+            return date.fromisoformat(value)
+        if isinstance(value, int):
+            return date.fromordinal(value + date(1970, 1, 1).toordinal())
+        return value
+
+    if column_type == SqlColumnType.TIME:
+        if isinstance(value, str):
+            return time.fromisoformat(value)
+        if isinstance(value, int):
+            seconds = value // 1_000_000_000
+            nanos = value % 1_000_000_000
+            return time(
+                hour=seconds // 3600,
+                minute=(seconds % 3600) // 60,
+                second=seconds % 60,
+                microsecond=nanos // 1000,
+            )
+        return value
+
+    if column_type == SqlColumnType.TIMESTAMP:
+        if isinstance(value, str):
+            return datetime.fromisoformat(value)
+        if isinstance(value, int):
+            return datetime.fromtimestamp(value / 1000.0)
+        return value
+
+    if column_type == SqlColumnType.TIMESTAMP_WITH_TIME_ZONE:
+        if isinstance(value, str):
+            return datetime.fromisoformat(value)
+        if isinstance(value, int):
+            return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
+        return value
+
+    if column_type == SqlColumnType.JSON:
+        if isinstance(value, str):
+            import json
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                return value
+        return value
+
+    return value
 
 
 class SqlColumnMetadata:
@@ -111,16 +200,56 @@ class SqlRowMetadata:
         """
         return self._name_to_index.get(name, -1)
 
+    def get_column_names(self) -> List[str]:
+        """Get all column names in order.
+
+        Returns:
+            List of column names.
+        """
+        return [col.name for col in self._columns]
+
+    def get_column_types(self) -> List[SqlColumnType]:
+        """Get all column types in order.
+
+        Returns:
+            List of column types.
+        """
+        return [col.type for col in self._columns]
+
     def __repr__(self) -> str:
         return f"SqlRowMetadata(columns={self._columns!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SqlRowMetadata):
+            return False
+        return self._columns == other._columns
 
 
 class SqlRow:
     """A single row in an SQL result set."""
 
-    def __init__(self, values: List[Any], metadata: SqlRowMetadata):
-        self._values = values
+    def __init__(
+        self,
+        values: List[Any],
+        metadata: SqlRowMetadata,
+        convert_types: bool = False,
+    ):
         self._metadata = metadata
+        if convert_types:
+            self._values = self._convert_values(values)
+        else:
+            self._values = values
+
+    def _convert_values(self, values: List[Any]) -> List[Any]:
+        """Convert raw values to appropriate Python types."""
+        result = []
+        columns = self._metadata.columns
+        for i, val in enumerate(values):
+            if i < len(columns):
+                result.append(convert_sql_value(val, columns[i].type))
+            else:
+                result.append(val)
+        return result
 
     @property
     def metadata(self) -> SqlRowMetadata:
@@ -158,16 +287,39 @@ class SqlRow:
             raise KeyError(f"Column not found: {name}")
         return self._values[index]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, convert_types: bool = False) -> Dict[str, Any]:
         """Convert the row to a dictionary.
+
+        Args:
+            convert_types: If True, convert values to Python types.
 
         Returns:
             Dictionary mapping column names to values.
         """
-        return {
-            col.name: self._values[i]
-            for i, col in enumerate(self._metadata.columns)
-        }
+        columns = self._metadata.columns
+        result = {}
+        for i, col in enumerate(columns):
+            val = self._values[i] if i < len(self._values) else None
+            if convert_types:
+                val = convert_sql_value(val, col.type)
+            result[col.name] = val
+        return result
+
+    def to_tuple(self) -> tuple:
+        """Convert the row to a tuple of values.
+
+        Returns:
+            Tuple containing all column values in order.
+        """
+        return tuple(self._values)
+
+    def to_list(self) -> List[Any]:
+        """Convert the row to a list of values.
+
+        Returns:
+            List containing all column values in order.
+        """
+        return list(self._values)
 
     def __getitem__(self, key) -> Any:
         if isinstance(key, int):
@@ -180,8 +332,95 @@ class SqlRow:
     def __iter__(self) -> Iterator[Any]:
         return iter(self._values)
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SqlRow):
+            return False
+        return self._values == other._values
+
+    def __hash__(self) -> int:
+        return hash(tuple(self._values))
+
     def __repr__(self) -> str:
         return f"SqlRow({self.to_dict()!r})"
+
+
+class SqlPage:
+    """A page of SQL result rows.
+
+    Represents a batch of rows fetched from the server,
+    useful for paginated result processing.
+    """
+
+    def __init__(
+        self,
+        rows: List[SqlRow],
+        metadata: Optional[SqlRowMetadata] = None,
+        is_last: bool = False,
+        page_number: int = 0,
+    ):
+        self._rows = rows
+        self._metadata = metadata
+        self._is_last = is_last
+        self._page_number = page_number
+
+    @property
+    def rows(self) -> List[SqlRow]:
+        """Get the rows in this page."""
+        return self._rows
+
+    @property
+    def metadata(self) -> Optional[SqlRowMetadata]:
+        """Get the row metadata."""
+        return self._metadata
+
+    @property
+    def is_last(self) -> bool:
+        """Check if this is the last page."""
+        return self._is_last
+
+    @property
+    def page_number(self) -> int:
+        """Get the page number (0-based)."""
+        return self._page_number
+
+    @property
+    def row_count(self) -> int:
+        """Get the number of rows in this page."""
+        return len(self._rows)
+
+    def to_dicts(self, convert_types: bool = False) -> List[Dict[str, Any]]:
+        """Convert all rows to dictionaries.
+
+        Args:
+            convert_types: If True, convert values to Python types.
+
+        Returns:
+            List of dictionaries.
+        """
+        return [row.to_dict(convert_types) for row in self._rows]
+
+    def to_tuples(self) -> List[tuple]:
+        """Convert all rows to tuples.
+
+        Returns:
+            List of tuples.
+        """
+        return [row.to_tuple() for row in self._rows]
+
+    def __iter__(self) -> Iterator[SqlRow]:
+        return iter(self._rows)
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def __getitem__(self, index: int) -> SqlRow:
+        return self._rows[index]
+
+    def __repr__(self) -> str:
+        return (
+            f"SqlPage(page_number={self._page_number}, "
+            f"row_count={len(self._rows)}, is_last={self._is_last})"
+        )
 
 
 class SqlResult:
@@ -189,6 +428,9 @@ class SqlResult:
 
     Supports iteration over rows for SELECT queries,
     or provides update count for DML queries.
+
+    Provides both synchronous and asynchronous iteration,
+    with backpressure support for streaming results.
     """
 
     def __init__(
@@ -198,6 +440,7 @@ class SqlResult:
         update_count: int = -1,
         is_infinite: bool = False,
         close_callback: Optional[Callable[[], None]] = None,
+        convert_types: bool = False,
     ):
         self._query_id = query_id
         self._metadata = metadata
@@ -208,10 +451,16 @@ class SqlResult:
         self._closed = False
         self._lock = threading.Lock()
         self._fetch_callback: Optional[Callable[[], List[SqlRow]]] = None
+        self._async_fetch_callback: Optional[Callable[[], Any]] = None
         self._close_callback: Optional[Callable[[], None]] = close_callback
         self._has_more = True
         self._iteration_started = False
         self._exhausted = False
+        self._convert_types = convert_types
+        self._page_number = 0
+        self._backpressure_threshold = 1000
+        self._backpressure_event = threading.Event()
+        self._backpressure_event.set()
 
     @property
     def query_id(self) -> Optional[str]:
@@ -246,14 +495,30 @@ class SqlResult:
         """Set callback for fetching more rows."""
         self._fetch_callback = callback
 
+    def set_async_fetch_callback(self, callback: Callable[[], Any]) -> None:
+        """Set async callback for fetching more rows."""
+        self._async_fetch_callback = callback
+
     def add_rows(self, rows: List[SqlRow]) -> None:
-        """Add rows to the result set."""
+        """Add rows to the result set with backpressure support."""
         with self._lock:
             self._rows.extend(rows)
+            if len(self._rows) - self._row_index > self._backpressure_threshold:
+                self._backpressure_event.clear()
 
     def set_has_more(self, has_more: bool) -> None:
         """Set whether more rows are available."""
         self._has_more = has_more
+
+    def set_backpressure_threshold(self, threshold: int) -> None:
+        """Set the backpressure threshold.
+
+        Args:
+            threshold: Maximum number of buffered rows before applying backpressure.
+        """
+        if threshold <= 0:
+            raise ValueError("Backpressure threshold must be positive")
+        self._backpressure_threshold = threshold
 
     def __iter__(self) -> Iterator[SqlRow]:
         """Iterate over result rows."""
@@ -280,6 +545,8 @@ class SqlResult:
             if self._row_index < len(self._rows):
                 row = self._rows[self._row_index]
                 self._row_index += 1
+                if len(self._rows) - self._row_index < self._backpressure_threshold // 2:
+                    self._backpressure_event.set()
                 return row
 
             if self._exhausted or not self._has_more:
@@ -304,6 +571,73 @@ class SqlResult:
         self._exhausted = True
         raise StopIteration
 
+    def __aiter__(self) -> AsyncIterator[SqlRow]:
+        """Async iterate over result rows."""
+        return self
+
+    async def __anext__(self) -> SqlRow:
+        """Get the next row asynchronously.
+
+        Returns:
+            The next SqlRow.
+
+        Raises:
+            StopAsyncIteration: If no more rows are available.
+        """
+        if self._closed:
+            raise StopAsyncIteration
+
+        if not self.is_row_set:
+            raise StopAsyncIteration
+
+        self._iteration_started = True
+
+        with self._lock:
+            if self._row_index < len(self._rows):
+                row = self._rows[self._row_index]
+                self._row_index += 1
+                if len(self._rows) - self._row_index < self._backpressure_threshold // 2:
+                    self._backpressure_event.set()
+                return row
+
+            if self._exhausted or not self._has_more:
+                raise StopAsyncIteration
+
+        if self._async_fetch_callback and self._has_more:
+            try:
+                new_rows = await self._async_fetch_callback()
+                if new_rows:
+                    with self._lock:
+                        self._rows.extend(new_rows)
+                        if self._row_index < len(self._rows):
+                            row = self._rows[self._row_index]
+                            self._row_index += 1
+                            return row
+                else:
+                    self._exhausted = True
+            except Exception:
+                self._exhausted = True
+                raise StopAsyncIteration
+        elif self._fetch_callback and self._has_more:
+            try:
+                loop = asyncio.get_event_loop()
+                new_rows = await loop.run_in_executor(None, self._fetch_callback)
+                if new_rows:
+                    with self._lock:
+                        self._rows.extend(new_rows)
+                        if self._row_index < len(self._rows):
+                            row = self._rows[self._row_index]
+                            self._row_index += 1
+                            return row
+                else:
+                    self._exhausted = True
+            except Exception:
+                self._exhausted = True
+                raise StopAsyncIteration
+
+        self._exhausted = True
+        raise StopAsyncIteration
+
     def get_all(self) -> List[SqlRow]:
         """Get all rows as a list.
 
@@ -311,6 +645,128 @@ class SqlResult:
             List of all SqlRow objects.
         """
         return list(self)
+
+    async def get_all_async(self) -> List[SqlRow]:
+        """Get all rows as a list asynchronously.
+
+        Returns:
+            List of all SqlRow objects.
+        """
+        rows = []
+        async for row in self:
+            rows.append(row)
+        return rows
+
+    def fetch_page(self) -> SqlPage:
+        """Fetch the next page of results.
+
+        Returns:
+            SqlPage containing the next batch of rows.
+        """
+        if self._closed or not self.is_row_set:
+            return SqlPage([], self._metadata, is_last=True, page_number=self._page_number)
+
+        rows = []
+        is_last = False
+
+        with self._lock:
+            while self._row_index < len(self._rows):
+                rows.append(self._rows[self._row_index])
+                self._row_index += 1
+
+        if self._fetch_callback and self._has_more and not rows:
+            try:
+                new_rows = self._fetch_callback()
+                if new_rows:
+                    rows.extend(new_rows)
+                else:
+                    is_last = True
+                    self._exhausted = True
+            except Exception:
+                is_last = True
+                self._exhausted = True
+
+        if not self._has_more or self._exhausted:
+            is_last = True
+
+        page = SqlPage(rows, self._metadata, is_last=is_last, page_number=self._page_number)
+        self._page_number += 1
+        return page
+
+    async def fetch_page_async(self) -> SqlPage:
+        """Fetch the next page of results asynchronously.
+
+        Returns:
+            SqlPage containing the next batch of rows.
+        """
+        if self._closed or not self.is_row_set:
+            return SqlPage([], self._metadata, is_last=True, page_number=self._page_number)
+
+        rows = []
+        is_last = False
+
+        with self._lock:
+            while self._row_index < len(self._rows):
+                rows.append(self._rows[self._row_index])
+                self._row_index += 1
+
+        if self._has_more and not rows:
+            if self._async_fetch_callback:
+                try:
+                    new_rows = await self._async_fetch_callback()
+                    if new_rows:
+                        rows.extend(new_rows)
+                    else:
+                        is_last = True
+                        self._exhausted = True
+                except Exception:
+                    is_last = True
+                    self._exhausted = True
+            elif self._fetch_callback:
+                try:
+                    loop = asyncio.get_event_loop()
+                    new_rows = await loop.run_in_executor(None, self._fetch_callback)
+                    if new_rows:
+                        rows.extend(new_rows)
+                    else:
+                        is_last = True
+                        self._exhausted = True
+                except Exception:
+                    is_last = True
+                    self._exhausted = True
+
+        if not self._has_more or self._exhausted:
+            is_last = True
+
+        page = SqlPage(rows, self._metadata, is_last=is_last, page_number=self._page_number)
+        self._page_number += 1
+        return page
+
+    def pages(self) -> Iterator[SqlPage]:
+        """Iterate over result pages.
+
+        Yields:
+            SqlPage objects until all results are consumed.
+        """
+        while True:
+            page = self.fetch_page()
+            if page.row_count > 0:
+                yield page
+            if page.is_last:
+                break
+
+    async def pages_async(self) -> AsyncIterator[SqlPage]:
+        """Iterate over result pages asynchronously.
+
+        Yields:
+            SqlPage objects until all results are consumed.
+        """
+        while True:
+            page = await self.fetch_page_async()
+            if page.row_count > 0:
+                yield page
+            if page.is_last:
+                break
 
     def close(self) -> None:
         """Close this result and release resources."""
@@ -342,18 +798,83 @@ class SqlResult:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close_async()
 
-    def rows_as_dicts(self) -> List[Dict[str, Any]]:
+    def rows_as_dicts(self, convert_types: bool = False) -> List[Dict[str, Any]]:
         """Get all rows as a list of dictionaries.
+
+        Args:
+            convert_types: If True, convert values to Python types.
 
         Returns:
             List of dictionaries mapping column names to values.
         """
-        return [row.to_dict() for row in self.get_all()]
+        return [row.to_dict(convert_types) for row in self.get_all()]
+
+    def rows_as_tuples(self) -> List[tuple]:
+        """Get all rows as a list of tuples.
+
+        Returns:
+            List of tuples containing column values.
+        """
+        return [row.to_tuple() for row in self.get_all()]
+
+    def first(self) -> Optional[SqlRow]:
+        """Get the first row, if available.
+
+        Returns:
+            The first SqlRow, or None if no rows exist.
+        """
+        try:
+            return next(iter(self))
+        except StopIteration:
+            return None
+
+    def first_or_raise(self) -> SqlRow:
+        """Get the first row, raising if not available.
+
+        Returns:
+            The first SqlRow.
+
+        Raises:
+            ValueError: If no rows are available.
+        """
+        row = self.first()
+        if row is None:
+            raise ValueError("No rows in result")
+        return row
+
+    def scalar(self) -> Any:
+        """Get the single value from a single-row, single-column result.
+
+        Returns:
+            The scalar value.
+
+        Raises:
+            ValueError: If result doesn't contain exactly one row and column.
+        """
+        row = self.first_or_raise()
+        if len(row) != 1:
+            raise ValueError(f"Expected 1 column, got {len(row)}")
+        return row[0]
+
+    def column_values(self, column: str) -> List[Any]:
+        """Get all values for a specific column.
+
+        Args:
+            column: The column name.
+
+        Returns:
+            List of values from that column across all rows.
+        """
+        return [row.get_object_by_name(column) for row in self.get_all()]
 
     def __len__(self) -> int:
         """Return the number of rows fetched so far."""
         with self._lock:
             return len(self._rows)
+
+    def __bool__(self) -> bool:
+        """Return True if this is a row set with potential rows."""
+        return self.is_row_set
 
     def __repr__(self) -> str:
         if self.is_row_set:

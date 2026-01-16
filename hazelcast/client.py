@@ -1186,14 +1186,32 @@ class HazelcastClient:
         """
         self._check_running()
 
+            )
+        return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
+=======
+        return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
+        """Enter context manager - starts the client."""
+        return self.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+=======
         if self._jet_service is None:
             from hazelcast.jet.service import JetService
             self._jet_service = JetService(
                 invocation_service=self._invocation_service,
                 serialization_service=self._serialization_service,
+            )
         return self._jet_service
 
     def __enter__(self) -> "HazelcastClient":
+        """Enter context manager - starts the client."""
+        return self.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
 =======
             )
         return self._jet_service

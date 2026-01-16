@@ -1,5 +1,6 @@
 """SQL service for executing SQL queries against Hazelcast."""
 
+import asyncio
 import uuid
 import threading
 from typing import Any, Callable, List, Optional, TYPE_CHECKING
@@ -12,12 +13,51 @@ from hazelcast.sql.result import (
     SqlRowMetadata,
     SqlColumnMetadata,
     SqlColumnType,
+    SqlPage,
 )
 from hazelcast.exceptions import HazelcastException, IllegalStateException
 
 if TYPE_CHECKING:
     from hazelcast.invocation import InvocationService
     from hazelcast.serialization.service import SerializationService
+
+
+class SqlExplainResult:
+    """Result of an EXPLAIN query.
+
+    Contains the query execution plan and related metadata.
+    """
+
+    def __init__(
+        self,
+        plan: str,
+        plan_nodes: Optional[List[dict]] = None,
+        query: str = "",
+    ):
+        self._plan = plan
+        self._plan_nodes = plan_nodes or []
+        self._query = query
+
+    @property
+    def plan(self) -> str:
+        """Get the textual execution plan."""
+        return self._plan
+
+    @property
+    def plan_nodes(self) -> List[dict]:
+        """Get the structured plan nodes."""
+        return self._plan_nodes
+
+    @property
+    def query(self) -> str:
+        """Get the original query."""
+        return self._query
+
+    def __str__(self) -> str:
+        return self._plan
+
+    def __repr__(self) -> str:
+        return f"SqlExplainResult(query={self._query!r})"
 
 
 class SqlServiceError(HazelcastException):
@@ -73,7 +113,8 @@ class SqlService:
     """Service for executing SQL queries against Hazelcast.
 
     Provides methods to execute SQL queries, both synchronously
-    and asynchronously, with support for parameterized queries.
+    and asynchronously, with support for parameterized queries,
+    EXPLAIN plans, and streaming results with backpressure.
     """
 
     _EXPECTED_RESULT_TYPE_MAP = {
@@ -101,11 +142,22 @@ class SqlService:
         15: SqlColumnType.JSON,
     }
 
+    _PYTHON_TYPE_TO_SQL_TYPE = {
+        str: SqlColumnType.VARCHAR,
+        bool: SqlColumnType.BOOLEAN,
+        int: SqlColumnType.BIGINT,
+        float: SqlColumnType.DOUBLE,
+        bytes: SqlColumnType.OBJECT,
+        type(None): SqlColumnType.NULL,
+    }
+
     def __init__(
         self,
         invocation_service: Optional["InvocationService"] = None,
         serialization_service: Optional["SerializationService"] = None,
         connection_manager: Optional[Any] = None,
+        default_timeout: float = -1,
+        default_cursor_buffer_size: int = SqlStatement.DEFAULT_CURSOR_BUFFER_SIZE,
     ):
         self._invocation_service = invocation_service
         self._serialization_service = serialization_service
@@ -113,6 +165,8 @@ class SqlService:
         self._running = False
         self._active_queries: dict = {}
         self._lock = threading.Lock()
+        self._default_timeout = default_timeout
+        self._default_cursor_buffer_size = default_cursor_buffer_size
 
     def start(self) -> None:
         """Start the SQL service."""
@@ -127,6 +181,81 @@ class SqlService:
         """Check if the service is running."""
         return self._running
 
+    def explain(
+        self,
+        sql: str,
+        *params: Any,
+        schema: Optional[str] = None,
+    ) -> SqlExplainResult:
+        """Get the execution plan for an SQL query.
+
+        Args:
+            sql: The SQL query string.
+            *params: Positional parameters for the query.
+            schema: Default schema name.
+
+        Returns:
+            SqlExplainResult containing the query plan.
+
+        Raises:
+            SqlServiceError: If the explain fails.
+            IllegalStateException: If the service is not running.
+        """
+        if not self._running:
+            raise IllegalStateException("SQL service is not running")
+
+        if not sql:
+            raise SqlServiceError("SQL query cannot be empty")
+
+        explain_sql = f"EXPLAIN PLAN FOR {sql}"
+
+        statement = SqlStatement(explain_sql)
+        statement.set_parameters(*params)
+        statement.schema = schema
+        statement.expected_result_type = SqlExpectedResultType.ROWS
+
+        result = self.execute_statement(statement)
+
+        plan_lines = []
+        plan_nodes = []
+
+        for row in result:
+            row_dict = row.to_dict()
+            if "PLAN" in row_dict:
+                plan_lines.append(str(row_dict["PLAN"]))
+            elif len(row) > 0:
+                plan_lines.append(str(row[0]))
+            plan_nodes.append(row_dict)
+
+        plan_text = "\n".join(plan_lines) if plan_lines else "Plan not available"
+
+        return SqlExplainResult(
+            plan=plan_text,
+            plan_nodes=plan_nodes,
+            query=sql,
+        )
+
+    async def explain_async(
+        self,
+        sql: str,
+        *params: Any,
+        schema: Optional[str] = None,
+    ) -> SqlExplainResult:
+        """Get the execution plan for an SQL query asynchronously.
+
+        Args:
+            sql: The SQL query string.
+            *params: Positional parameters for the query.
+            schema: Default schema name.
+
+        Returns:
+            SqlExplainResult containing the query plan.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.explain(sql, *params, schema=schema)
+        )
+
     def execute(
         self,
         sql: str,
@@ -135,6 +264,7 @@ class SqlService:
         cursor_buffer_size: int = SqlStatement.DEFAULT_CURSOR_BUFFER_SIZE,
         schema: Optional[str] = None,
         expected_result_type: SqlExpectedResultType = SqlExpectedResultType.ANY,
+        convert_types: bool = False,
     ) -> SqlResult:
         """Execute an SQL query.
 
@@ -145,6 +275,7 @@ class SqlService:
             cursor_buffer_size: Number of rows to buffer.
             schema: Default schema name.
             expected_result_type: Expected result type.
+            convert_types: If True, convert values to Python types.
 
         Returns:
             SqlResult for iterating over results.
@@ -155,18 +286,23 @@ class SqlService:
         """
         statement = SqlStatement(sql)
         statement.set_parameters(*params)
-        statement.timeout = timeout
-        statement.cursor_buffer_size = cursor_buffer_size
+        statement.timeout = timeout if timeout != -1 else self._default_timeout
+        statement.cursor_buffer_size = cursor_buffer_size or self._default_cursor_buffer_size
         statement.schema = schema
         statement.expected_result_type = expected_result_type
 
-        return self.execute_statement(statement)
+        return self.execute_statement(statement, convert_types=convert_types)
 
-    def execute_statement(self, statement: SqlStatement) -> SqlResult:
+    def execute_statement(
+        self,
+        statement: SqlStatement,
+        convert_types: bool = False,
+    ) -> SqlResult:
         """Execute an SQL statement.
 
         Args:
             statement: The SqlStatement to execute.
+            convert_types: If True, convert values to Python types.
 
         Returns:
             SqlResult for iterating over results.
@@ -181,7 +317,7 @@ class SqlService:
         if not statement.sql:
             raise SqlServiceError("SQL query cannot be empty")
 
-        return self._execute_statement_sync(statement)
+        return self._execute_statement_sync(statement, convert_types=convert_types)
 
     def execute_async(
         self,
@@ -191,6 +327,7 @@ class SqlService:
         cursor_buffer_size: int = SqlStatement.DEFAULT_CURSOR_BUFFER_SIZE,
         schema: Optional[str] = None,
         expected_result_type: SqlExpectedResultType = SqlExpectedResultType.ANY,
+        convert_types: bool = False,
     ) -> Future:
         """Execute an SQL query asynchronously.
 
@@ -201,24 +338,30 @@ class SqlService:
             cursor_buffer_size: Number of rows to buffer.
             schema: Default schema name.
             expected_result_type: Expected result type.
+            convert_types: If True, convert values to Python types.
 
         Returns:
             Future that will contain the SqlResult.
         """
         statement = SqlStatement(sql)
         statement.set_parameters(*params)
-        statement.timeout = timeout
-        statement.cursor_buffer_size = cursor_buffer_size
+        statement.timeout = timeout if timeout != -1 else self._default_timeout
+        statement.cursor_buffer_size = cursor_buffer_size or self._default_cursor_buffer_size
         statement.schema = schema
         statement.expected_result_type = expected_result_type
 
-        return self.execute_statement_async(statement)
+        return self.execute_statement_async(statement, convert_types=convert_types)
 
-    def execute_statement_async(self, statement: SqlStatement) -> Future:
+    def execute_statement_async(
+        self,
+        statement: SqlStatement,
+        convert_types: bool = False,
+    ) -> Future:
         """Execute an SQL statement asynchronously.
 
         Args:
             statement: The SqlStatement to execute.
+            convert_types: If True, convert values to Python types.
 
         Returns:
             Future that will contain the SqlResult.
@@ -238,14 +381,18 @@ class SqlService:
             return future
 
         try:
-            result = self._execute_statement_sync(statement)
+            result = self._execute_statement_sync(statement, convert_types=convert_types)
             future.set_result(result)
         except Exception as e:
             future.set_exception(e)
 
         return future
 
-    def _execute_statement_sync(self, statement: SqlStatement) -> SqlResult:
+    def _execute_statement_sync(
+        self,
+        statement: SqlStatement,
+        convert_types: bool = False,
+    ) -> SqlResult:
         """Internal synchronous execution."""
         query_id_bytes = self._generate_query_id()
         query_id = query_id_bytes.hex()
@@ -262,6 +409,7 @@ class SqlService:
             query_id=query_id,
             metadata=None,
             update_count=-1,
+            convert_types=convert_types,
         )
 
         if self._invocation_service is None:
@@ -478,6 +626,11 @@ class SqlService:
             for keyword in ("INSERT", "UPDATE", "DELETE", "MERGE", "SINK", "CREATE", "DROP", "ALTER")
         )
 
+    def _is_explain_query(self, sql: str) -> bool:
+        """Check if the query is an EXPLAIN statement."""
+        sql_upper = sql.strip().upper()
+        return sql_upper.startswith("EXPLAIN")
+
     def _create_default_metadata(self, sql: str) -> SqlRowMetadata:
         """Create default metadata for a SELECT query."""
         columns = [
@@ -485,5 +638,48 @@ class SqlService:
         ]
         return SqlRowMetadata(columns)
 
+    def get_column_type_for_value(self, value: Any) -> SqlColumnType:
+        """Determine the SQL column type for a Python value.
+
+        Args:
+            value: The Python value.
+
+        Returns:
+            The corresponding SqlColumnType.
+        """
+        if value is None:
+            return SqlColumnType.NULL
+
+        value_type = type(value)
+        return self._PYTHON_TYPE_TO_SQL_TYPE.get(value_type, SqlColumnType.OBJECT)
+
+    def get_active_query_count(self) -> int:
+        """Get the number of active queries.
+
+        Returns:
+            Number of queries currently being processed.
+        """
+        with self._lock:
+            return len(self._active_queries)
+
+    def cancel_all_queries(self) -> int:
+        """Cancel all active queries.
+
+        Returns:
+            Number of queries cancelled.
+        """
+        with self._lock:
+            query_ids = list(self._active_queries.keys())
+
+        cancelled = 0
+        for query_id in query_ids:
+            try:
+                self.close_query(query_id)
+                cancelled += 1
+            except Exception:
+                pass
+
+        return cancelled
+
     def __repr__(self) -> str:
-        return f"SqlService(running={self._running})"
+        return f"SqlService(running={self._running}, active_queries={self.get_active_query_count()})"
