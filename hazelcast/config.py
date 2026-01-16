@@ -15,6 +15,7 @@ class DiscoveryStrategyType(Enum):
     GCP = "GCP"
     KUBERNETES = "KUBERNETES"
     CLOUD = "CLOUD"
+    MULTICAST = "MULTICAST"
 
 
 class DiscoveryConfig:
@@ -66,6 +67,7 @@ class DiscoveryConfig:
         self._gcp: Optional[Dict] = None
         self._kubernetes: Optional[Dict] = None
         self._cloud: Optional[Dict] = None
+        self._multicast: Optional[Dict] = None
 
     @property
     def enabled(self) -> bool:
@@ -140,6 +142,17 @@ class DiscoveryConfig:
         if value and not self._strategy_type:
             self._strategy_type = DiscoveryStrategyType.CLOUD
 
+    @property
+    def multicast(self) -> Optional[Dict]:
+        """Get Multicast discovery configuration."""
+        return self._multicast
+
+    @multicast.setter
+    def multicast(self, value: Optional[Dict]) -> None:
+        self._multicast = value
+        if value and not self._strategy_type:
+            self._strategy_type = DiscoveryStrategyType.MULTICAST
+
     def create_strategy(self) -> "DiscoveryStrategy":
         """Create and return the configured discovery strategy.
 
@@ -164,6 +177,8 @@ class DiscoveryConfig:
             GcpConfig,
             KubernetesDiscoveryStrategy,
             KubernetesConfig,
+            MulticastDiscoveryStrategy,
+            MulticastConfig,
             HazelcastCloudDiscovery,
             CloudConfig,
         )
@@ -187,6 +202,10 @@ class DiscoveryConfig:
         elif self._strategy_type == DiscoveryStrategyType.CLOUD:
             cloud_config = CloudConfig.from_dict(self._cloud or {})
             return HazelcastCloudDiscovery(cloud_config)
+
+        elif self._strategy_type == DiscoveryStrategyType.MULTICAST:
+            multicast_config = MulticastConfig.from_dict(self._multicast or {})
+            return MulticastDiscoveryStrategy(multicast_config)
 
         else:
             raise ConfigurationException(
@@ -217,6 +236,8 @@ class DiscoveryConfig:
             config.kubernetes = data["kubernetes"]
         if "cloud" in data:
             config.cloud = data["cloud"]
+        if "multicast" in data:
+            config.multicast = data["multicast"]
 
         return config
 
