@@ -7029,7 +7029,136 @@ class CacheCodec:
         return msg
 
 
-# Transactional protocol constants
+# Transaction protocol constants
+TXN_CREATE = 0x150100
+TXN_COMMIT = 0x150200
+TXN_ROLLBACK = 0x150300
+
+# Transaction type constants
+TXN_TYPE_TWO_PHASE = 1
+TXN_TYPE_ONE_PHASE = 2
+
+# Transaction state constants
+TXN_STATE_ACTIVE = 0
+TXN_STATE_PREPARED = 1
+TXN_STATE_COMMITTED = 2
+TXN_STATE_ROLLED_BACK = 3
+TXN_STATE_NO_TXN = 4
+
+
+class TransactionCodec:
+    """Codec for Transaction protocol messages."""
+
+    @staticmethod
+    def encode_create_request(
+        timeout_millis: int,
+        durability: int,
+        transaction_type: int,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a Transaction.create request.
+
+        Args:
+            timeout_millis: Transaction timeout in milliseconds.
+            durability: Number of backups for transaction log.
+            transaction_type: Transaction type (ONE_PHASE or TWO_PHASE).
+            thread_id: The thread ID for this transaction.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE + INT_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_CREATE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, timeout_millis)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, durability)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, transaction_type)
+        offset += INT_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_create_response(msg: "ClientMessage") -> uuid_module.UUID:
+        """Decode a Transaction.create response.
+
+        Returns:
+            The transaction ID (UUID).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + UUID_SIZE:
+            raise ValueError("Invalid transaction create response")
+
+        txn_id, _ = FixSizedTypesCodec.decode_uuid(frame.content, RESPONSE_HEADER_SIZE)
+        if txn_id is None:
+            raise ValueError("Transaction ID is null")
+        return txn_id
+
+    @staticmethod
+    def encode_commit_request(
+        transaction_id: uuid_module.UUID,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a Transaction.commit request.
+
+        Args:
+            transaction_id: The transaction ID to commit.
+            thread_id: The thread ID for this transaction.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_COMMIT)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, transaction_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def encode_rollback_request(
+        transaction_id: uuid_module.UUID,
+        thread_id: int,
+    ) -> "ClientMessage":
+        """Encode a Transaction.rollback request.
+
+        Args:
+            transaction_id: The transaction ID to rollback.
+            thread_id: The thread ID for this transaction.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, TXN_ROLLBACK)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, transaction_id)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, thread_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+
+# Transactional data structure protocol constants
 TXN_MAP_PUT = 0x0E0100
 TXN_MAP_GET = 0x0E0200
 TXN_MAP_REMOVE = 0x0E0300

@@ -1,434 +1,520 @@
-"""Tests for Hazelcast transaction API."""
+"""Tests for Transaction codecs and service."""
 
+import struct
+import uuid
 import pytest
-import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock, MagicMock
 
+from hazelcast.protocol.codec import (
+    TransactionCodec,
+    TXN_CREATE,
+    TXN_COMMIT,
+    TXN_ROLLBACK,
+    TXN_TYPE_ONE_PHASE,
+    TXN_TYPE_TWO_PHASE,
+    REQUEST_HEADER_SIZE,
+    RESPONSE_HEADER_SIZE,
+    LONG_SIZE,
+    INT_SIZE,
+    UUID_SIZE,
+    FixSizedTypesCodec,
+)
 from hazelcast.transaction import (
-    TransactionType,
-    TransactionState,
+    Transaction,
+    TransactionService,
     TransactionOptions,
     TransactionContext,
-    TransactionException,
-    TransactionNotActiveException,
-    TransactionTimedOutException,
-    XAFlags,
-    XAReturnCode,
-    XAErrorCode,
-    Xid,
-    XAException,
-    XAResource,
-    XATransactionContext,
+    TransactionType,
+    TransactionState,
+    TransactionError,
+    TransactionNotActiveError,
+    TransactionTimedOutError,
 )
-from hazelcast.exceptions import IllegalStateException
+
+
+class TestTransactionCodec:
+    """Tests for TransactionCodec encode/decode methods."""
+
+    def test_encode_create_request_message_type(self):
+        """Test that create request has correct message type."""
+        msg = TransactionCodec.encode_create_request(
+            timeout_millis=120000,
+            durability=1,
+            transaction_type=TXN_TYPE_TWO_PHASE,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        assert frame is not None
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        assert message_type == TXN_CREATE
+
+    def test_encode_create_request_parameters(self):
+        """Test that create request encodes all parameters correctly."""
+        timeout = 60000
+        durability = 2
+        txn_type = TXN_TYPE_ONE_PHASE
+        thread_id = 98765
+
+        msg = TransactionCodec.encode_create_request(
+            timeout_millis=timeout,
+            durability=durability,
+            transaction_type=txn_type,
+            thread_id=thread_id,
+        )
+
+        frame = msg.next_frame()
+        buf = frame.buf
+        offset = REQUEST_HEADER_SIZE
+
+        decoded_timeout = struct.unpack_from("<q", buf, offset)[0]
+        offset += LONG_SIZE
+        decoded_durability = struct.unpack_from("<i", buf, offset)[0]
+        offset += INT_SIZE
+        decoded_type = struct.unpack_from("<i", buf, offset)[0]
+        offset += INT_SIZE
+        decoded_thread_id = struct.unpack_from("<q", buf, offset)[0]
+
+        assert decoded_timeout == timeout
+        assert decoded_durability == durability
+        assert decoded_type == txn_type
+        assert decoded_thread_id == thread_id
+
+    def test_decode_create_response(self):
+        """Test decoding a create response with transaction ID."""
+        expected_uuid = uuid.uuid4()
+
+        response_buf = bytearray(RESPONSE_HEADER_SIZE + UUID_SIZE)
+        FixSizedTypesCodec.encode_uuid(response_buf, RESPONSE_HEADER_SIZE, expected_uuid)
+
+        mock_frame = Mock()
+        mock_frame.content = bytes(response_buf)
+
+        mock_msg = Mock()
+        mock_msg.next_frame.return_value = mock_frame
+
+        result = TransactionCodec.decode_create_response(mock_msg)
+        assert result == expected_uuid
+
+    def test_decode_create_response_invalid_frame(self):
+        """Test that decode raises error for invalid frame."""
+        mock_msg = Mock()
+        mock_msg.next_frame.return_value = None
+
+        with pytest.raises(ValueError, match="Invalid transaction create response"):
+            TransactionCodec.decode_create_response(mock_msg)
+
+    def test_encode_commit_request_message_type(self):
+        """Test that commit request has correct message type."""
+        txn_id = uuid.uuid4()
+
+        msg = TransactionCodec.encode_commit_request(
+            transaction_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        assert message_type == TXN_COMMIT
+
+    def test_encode_commit_request_parameters(self):
+        """Test that commit request encodes parameters correctly."""
+        txn_id = uuid.uuid4()
+        thread_id = 54321
+
+        msg = TransactionCodec.encode_commit_request(
+            transaction_id=txn_id,
+            thread_id=thread_id,
+        )
+
+        frame = msg.next_frame()
+        buf = frame.buf
+        offset = REQUEST_HEADER_SIZE
+
+        decoded_uuid, offset = FixSizedTypesCodec.decode_uuid(buf, offset)
+        decoded_thread_id = struct.unpack_from("<q", buf, offset)[0]
+
+        assert decoded_uuid == txn_id
+        assert decoded_thread_id == thread_id
+
+    def test_encode_rollback_request_message_type(self):
+        """Test that rollback request has correct message type."""
+        txn_id = uuid.uuid4()
+
+        msg = TransactionCodec.encode_rollback_request(
+            transaction_id=txn_id,
+            thread_id=12345,
+        )
+
+        frame = msg.next_frame()
+        message_type = struct.unpack_from("<I", frame.buf, 0)[0]
+        assert message_type == TXN_ROLLBACK
+
+    def test_encode_rollback_request_parameters(self):
+        """Test that rollback request encodes parameters correctly."""
+        txn_id = uuid.uuid4()
+        thread_id = 11111
+
+        msg = TransactionCodec.encode_rollback_request(
+            transaction_id=txn_id,
+            thread_id=thread_id,
+        )
+
+        frame = msg.next_frame()
+        buf = frame.buf
+        offset = REQUEST_HEADER_SIZE
+
+        decoded_uuid, offset = FixSizedTypesCodec.decode_uuid(buf, offset)
+        decoded_thread_id = struct.unpack_from("<q", buf, offset)[0]
+
+        assert decoded_uuid == txn_id
+        assert decoded_thread_id == thread_id
 
 
 class TestTransactionOptions:
     """Tests for TransactionOptions configuration."""
 
     def test_default_options(self):
+        """Test default transaction options values."""
         options = TransactionOptions()
-        assert options.timeout == 120.0
-        assert options.timeout_millis == 120000
-        assert options.durability == 1
-        assert options.transaction_type == TransactionType.ONE_PHASE
 
-    def test_custom_options(self):
-        options = TransactionOptions(
-            timeout=60.0,
-            durability=2,
-            transaction_type=TransactionType.TWO_PHASE,
-        )
-        assert options.timeout == 60.0
-        assert options.timeout_millis == 60000
-        assert options.durability == 2
+        assert options.timeout_millis == TransactionOptions.DEFAULT_TIMEOUT_MILLIS
+        assert options.durability == TransactionOptions.DEFAULT_DURABILITY
         assert options.transaction_type == TransactionType.TWO_PHASE
 
-    def test_invalid_timeout(self):
-        with pytest.raises(ValueError, match="Timeout must be positive"):
-            TransactionOptions(timeout=0)
-        with pytest.raises(ValueError, match="Timeout must be positive"):
-            TransactionOptions(timeout=-1)
+    def test_custom_options(self):
+        """Test custom transaction options."""
+        options = TransactionOptions(
+            timeout_millis=30000,
+            durability=3,
+            transaction_type=TransactionType.ONE_PHASE,
+        )
 
-    def test_invalid_durability(self):
-        with pytest.raises(ValueError, match="Durability must be non-negative"):
+        assert options.timeout_millis == 30000
+        assert options.durability == 3
+        assert options.transaction_type == TransactionType.ONE_PHASE
+
+    def test_invalid_timeout_raises_error(self):
+        """Test that non-positive timeout raises error."""
+        with pytest.raises(ValueError, match="Timeout must be positive"):
+            TransactionOptions(timeout_millis=0)
+
+        with pytest.raises(ValueError, match="Timeout must be positive"):
+            TransactionOptions(timeout_millis=-1)
+
+    def test_invalid_durability_raises_error(self):
+        """Test that negative durability raises error."""
+        with pytest.raises(ValueError, match="Durability cannot be negative"):
             TransactionOptions(durability=-1)
 
-    def test_repr(self):
-        options = TransactionOptions()
-        repr_str = repr(options)
-        assert "timeout=120.0" in repr_str
-        assert "durability=1" in repr_str
-        assert "ONE_PHASE" in repr_str
+
+class TestTransaction:
+    """Tests for Transaction class."""
+
+    def _create_transaction(
+        self,
+        invocation_service=None,
+        timeout_millis=120000,
+    ) -> Transaction:
+        """Helper to create a transaction for testing."""
+        options = TransactionOptions(timeout_millis=timeout_millis)
+        return Transaction(
+            transaction_id=uuid.uuid4(),
+            thread_id=1,
+            options=options,
+            invocation_service=invocation_service,
+        )
+
+    def test_transaction_initial_state(self):
+        """Test transaction starts in ACTIVE state."""
+        txn = self._create_transaction()
+        assert txn.state == TransactionState.ACTIVE
+        assert txn.is_active()
+
+    def test_transaction_properties(self):
+        """Test transaction property accessors."""
+        txn_id = uuid.uuid4()
+        thread_id = 42
+        options = TransactionOptions(timeout_millis=60000)
+
+        txn = Transaction(
+            transaction_id=txn_id,
+            thread_id=thread_id,
+            options=options,
+            invocation_service=None,
+        )
+
+        assert txn.transaction_id == txn_id
+        assert txn.thread_id == thread_id
+        assert txn.timeout_millis == 60000
+
+    def test_commit_changes_state(self):
+        """Test that commit changes transaction state."""
+        txn = self._create_transaction()
+        txn.commit()
+        assert txn.state == TransactionState.COMMITTED
+        assert not txn.is_active()
+
+    def test_commit_invokes_service(self):
+        """Test that commit calls invocation service."""
+        mock_service = Mock()
+        txn = self._create_transaction(invocation_service=mock_service)
+
+        txn.commit()
+
+        mock_service.invoke.assert_called_once()
+
+    def test_commit_on_committed_raises_error(self):
+        """Test that committing already committed transaction raises error."""
+        txn = self._create_transaction()
+        txn.commit()
+
+        with pytest.raises(TransactionNotActiveError):
+            txn.commit()
+
+    def test_rollback_changes_state(self):
+        """Test that rollback changes transaction state."""
+        txn = self._create_transaction()
+        txn.rollback()
+        assert txn.state == TransactionState.ROLLED_BACK
+        assert not txn.is_active()
+
+    def test_rollback_invokes_service(self):
+        """Test that rollback calls invocation service."""
+        mock_service = Mock()
+        txn = self._create_transaction(invocation_service=mock_service)
+
+        txn.rollback()
+
+        mock_service.invoke.assert_called_once()
+
+    def test_rollback_on_rolled_back_is_idempotent(self):
+        """Test that rolling back already rolled back transaction is safe."""
+        txn = self._create_transaction()
+        txn.rollback()
+        txn.rollback()
+        assert txn.state == TransactionState.ROLLED_BACK
+
+    def test_rollback_after_commit_is_no_op(self):
+        """Test that rollback after commit does nothing."""
+        txn = self._create_transaction()
+        txn.commit()
+        txn.rollback()
+        assert txn.state == TransactionState.COMMITTED
+
+    def test_timeout_detection(self):
+        """Test that timed out transactions raise error."""
+        txn = self._create_transaction(timeout_millis=1)
+        time.sleep(0.01)
+
+        with pytest.raises(TransactionTimedOutError):
+            txn.commit()
 
 
 class TestTransactionContext:
-    """Tests for TransactionContext lifecycle."""
+    """Tests for TransactionContext (context manager)."""
 
-    @pytest.fixture
-    def mock_context(self):
-        return MagicMock()
-
-    @pytest.fixture
-    def txn_context(self, mock_context):
-        return TransactionContext(mock_context)
-
-    def test_initial_state(self, txn_context):
-        assert txn_context.state == TransactionState.NO_TXN
-        assert txn_context.txn_id is None
-
-    def test_begin_transaction(self, txn_context):
-        result = txn_context.begin()
-        assert result is txn_context
-        assert txn_context.state == TransactionState.ACTIVE
-        assert txn_context.txn_id is not None
-
-    def test_commit_one_phase(self, txn_context):
-        txn_context.begin()
-        txn_context.commit()
-        assert txn_context.state == TransactionState.COMMITTED
-
-    def test_commit_two_phase(self, mock_context):
-        options = TransactionOptions(transaction_type=TransactionType.TWO_PHASE)
-        txn_context = TransactionContext(mock_context, options)
-        txn_context.begin()
-        txn_context.commit()
-        assert txn_context.state == TransactionState.COMMITTED
-
-    def test_rollback(self, txn_context):
-        txn_context.begin()
-        txn_context.rollback()
-        assert txn_context.state == TransactionState.ROLLED_BACK
-
-    def test_rollback_not_started(self, txn_context):
-        txn_context.rollback()
-        assert txn_context.state == TransactionState.NO_TXN
-
-    def test_commit_without_begin(self, txn_context):
-        with pytest.raises(TransactionNotActiveException):
-            txn_context.commit()
-
-    def test_invalid_state_transition(self, txn_context):
-        txn_context.begin()
-        txn_context.commit()
-        with pytest.raises(IllegalStateException):
-            txn_context.begin()
-
-    def test_context_manager_commit(self, mock_context):
-        with TransactionContext(mock_context) as ctx:
-            assert ctx.state == TransactionState.ACTIVE
-        assert ctx.state == TransactionState.COMMITTED
-
-    def test_context_manager_rollback_on_exception(self, mock_context):
-        with pytest.raises(ValueError):
-            with TransactionContext(mock_context) as ctx:
-                raise ValueError("test error")
-        assert ctx.state == TransactionState.ROLLED_BACK
-
-    def test_timeout_check(self, mock_context):
-        options = TransactionOptions(timeout=0.01)
-        txn_context = TransactionContext(mock_context, options)
-        txn_context.begin()
-        time.sleep(0.02)
-        with pytest.raises(TransactionTimedOutException):
-            txn_context.commit()
-
-    def test_get_map_requires_active(self, txn_context):
-        with pytest.raises(TransactionNotActiveException):
-            txn_context.get_map("test")
-
-    def test_get_proxies(self, txn_context):
-        txn_context.begin()
-        map_proxy = txn_context.get_map("test-map")
-        set_proxy = txn_context.get_set("test-set")
-        list_proxy = txn_context.get_list("test-list")
-        queue_proxy = txn_context.get_queue("test-queue")
-        multimap_proxy = txn_context.get_multi_map("test-multimap")
-
-        assert map_proxy is txn_context.get_map("test-map")
-        assert set_proxy is txn_context.get_set("test-set")
-        assert list_proxy is txn_context.get_list("test-list")
-        assert queue_proxy is txn_context.get_queue("test-queue")
-        assert multimap_proxy is txn_context.get_multi_map("test-multimap")
-
-
-class TestXid:
-    """Tests for XA Transaction Identifier."""
-
-    def test_create_xid(self):
-        xid = Xid(
-            format_id=1,
-            global_transaction_id=b"global-123",
-            branch_qualifier=b"branch-001",
+    def _create_context(self, invocation_service=None) -> TransactionContext:
+        """Helper to create a transaction context for testing."""
+        options = TransactionOptions()
+        txn = Transaction(
+            transaction_id=uuid.uuid4(),
+            thread_id=1,
+            options=options,
+            invocation_service=invocation_service,
         )
-        assert xid.format_id == 1
-        assert xid.global_transaction_id == b"global-123"
-        assert xid.branch_qualifier == b"branch-001"
+        return TransactionContext(txn)
 
-    def test_create_factory(self):
-        xid = Xid.create(b"global-123", b"branch-001")
-        assert xid.format_id == 1
-        assert xid.global_transaction_id == b"global-123"
+    def test_context_properties(self):
+        """Test context property accessors."""
+        ctx = self._create_context()
+        assert ctx.transaction is not None
+        assert ctx.transaction_id is not None
 
-    def test_xid_immutable(self):
-        xid = Xid(1, b"global", b"branch")
-        with pytest.raises(AttributeError):
-            xid.format_id = 2
+    def test_context_auto_commits_on_success(self):
+        """Test that context auto-commits when no exception."""
+        ctx = self._create_context()
 
-    def test_xid_equality(self):
-        xid1 = Xid(1, b"global", b"branch")
-        xid2 = Xid(1, b"global", b"branch")
-        xid3 = Xid(1, b"global", b"other")
-        assert xid1 == xid2
-        assert xid1 != xid3
+        with ctx:
+            pass
 
-    def test_xid_hash(self):
-        xid1 = Xid(1, b"global", b"branch")
-        xid2 = Xid(1, b"global", b"branch")
-        assert hash(xid1) == hash(xid2)
-        xid_set = {xid1, xid2}
-        assert len(xid_set) == 1
+        assert ctx.transaction.state == TransactionState.COMMITTED
 
-    def test_global_transaction_id_too_long(self):
-        with pytest.raises(ValueError, match="global_transaction_id must be at most 64 bytes"):
-            Xid(1, b"x" * 65, b"branch")
+    def test_context_auto_rollbacks_on_exception(self):
+        """Test that context auto-rollbacks on exception."""
+        ctx = self._create_context()
 
-    def test_branch_qualifier_too_long(self):
-        with pytest.raises(ValueError, match="branch_qualifier must be at most 64 bytes"):
-            Xid(1, b"global", b"x" * 65)
+        with pytest.raises(RuntimeError):
+            with ctx:
+                raise RuntimeError("Test error")
 
-    def test_str_representation(self):
-        xid = Xid(1, b"\x01\x02", b"\x03\x04")
-        str_repr = str(xid)
-        assert "format_id=1" in str_repr
-        assert "gtrid=0102" in str_repr
-        assert "bqual=0304" in str_repr
+        assert ctx.transaction.state == TransactionState.ROLLED_BACK
 
+    def test_context_explicit_commit(self):
+        """Test explicit commit within context."""
+        ctx = self._create_context()
 
-class TestXAException:
-    """Tests for XA Exception handling."""
+        with ctx:
+            ctx.commit()
 
-    def test_xa_exception_with_code(self):
-        exc = XAException(XAErrorCode.XAER_NOTA, "Unknown XID")
-        assert exc.error_code == XAErrorCode.XAER_NOTA
-        assert "Unknown XID" in str(exc)
+        assert ctx.transaction.state == TransactionState.COMMITTED
 
-    def test_xa_exception_default_message(self):
-        exc = XAException(XAErrorCode.XAER_RMERR)
-        assert exc.error_code == XAErrorCode.XAER_RMERR
-        assert "XAER_RMERR" in str(exc)
+    def test_context_explicit_rollback(self):
+        """Test explicit rollback within context."""
+        ctx = self._create_context()
+
+        with ctx:
+            ctx.rollback()
+
+        assert ctx.transaction.state == TransactionState.ROLLED_BACK
 
 
-class TestXATransactionContext:
-    """Tests for XA Transaction Context."""
+class TestTransactionService:
+    """Tests for TransactionService."""
 
-    @pytest.fixture
-    def mock_context(self):
-        return MagicMock()
+    def test_begin_creates_transaction(self):
+        """Test that begin creates a new transaction."""
+        service = TransactionService()
+        txn = service.begin()
 
-    @pytest.fixture
-    def xa_context(self, mock_context):
-        return XATransactionContext(mock_context)
+        assert txn is not None
+        assert txn.is_active()
+        assert txn.transaction_id is not None
 
-    @pytest.fixture
-    def xid(self):
-        return Xid.create(b"global-txn-123", b"branch-001")
+    def test_begin_with_custom_options(self):
+        """Test begin with custom options."""
+        service = TransactionService()
+        options = TransactionOptions(
+            timeout_millis=30000,
+            durability=2,
+            transaction_type=TransactionType.ONE_PHASE,
+        )
 
-    def test_initial_state(self, xa_context):
-        assert xa_context.xid is None
-        assert xa_context.xa_state == XATransactionContext.XAState.INITIAL
+        txn = service.begin(options)
 
-    def test_start(self, xa_context, xid):
-        xa_context.start(xid)
-        assert xa_context.xid == xid
-        assert xa_context.xa_state == XATransactionContext.XAState.STARTED
-        assert xa_context.state == TransactionState.ACTIVE
+        assert txn.timeout_millis == 30000
 
-    def test_start_with_join(self, xa_context, xid):
-        xa_context.start(xid, XAFlags.TMJOIN)
-        assert xa_context.xa_state == XATransactionContext.XAState.STARTED
+    def test_begin_generates_unique_thread_ids(self):
+        """Test that each transaction gets a unique thread ID."""
+        service = TransactionService()
 
-    def test_start_already_started(self, xa_context, xid):
-        xa_context.start(xid)
-        with pytest.raises(XAException) as exc_info:
-            xa_context.start(xid)
-        assert exc_info.value.error_code == XAErrorCode.XAER_PROTO
+        txn1 = service.begin()
+        txn2 = service.begin()
 
-    def test_end(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        assert xa_context.xa_state == XATransactionContext.XAState.ENDED
+        assert txn1.thread_id != txn2.thread_id
 
-    def test_end_with_fail(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid, XAFlags.TMFAIL)
-        assert xa_context.xa_state == XATransactionContext.XAState.ENDED
+    def test_transaction_context_manager(self):
+        """Test transaction() returns a context manager."""
+        service = TransactionService()
 
-    def test_end_not_started(self, xa_context, xid):
-        with pytest.raises(XAException) as exc_info:
-            xa_context.end(xid)
-        assert exc_info.value.error_code == XAErrorCode.XAER_NOTA
+        with service.transaction() as ctx:
+            assert ctx.transaction.is_active()
 
-    def test_end_wrong_xid(self, xa_context, xid):
-        xa_context.start(xid)
-        other_xid = Xid.create(b"other-global", b"branch")
-        with pytest.raises(XAException) as exc_info:
-            xa_context.end(other_xid)
-        assert exc_info.value.error_code == XAErrorCode.XAER_NOTA
+        assert ctx.transaction.state == TransactionState.COMMITTED
 
-    def test_prepare(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        result = xa_context.prepare(xid)
-        assert result == XAReturnCode.XA_OK
-        assert xa_context.xa_state == XATransactionContext.XAState.PREPARED
+    def test_execute_transaction_success(self):
+        """Test execute_transaction with successful callback."""
+        service = TransactionService()
 
-    def test_prepare_not_ended(self, xa_context, xid):
-        xa_context.start(xid)
-        with pytest.raises(XAException) as exc_info:
-            xa_context.prepare(xid)
-        assert exc_info.value.error_code == XAErrorCode.XAER_PROTO
+        def callback(ctx: TransactionContext) -> str:
+            return "success"
 
-    def test_commit_two_phase(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        xa_context.prepare(xid)
-        xa_context.commit(xid)
-        assert xa_context.xa_state == XATransactionContext.XAState.COMMITTED
-        assert xa_context.state == TransactionState.COMMITTED
+        result = service.execute_transaction(callback)
 
-    def test_commit_one_phase(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        xa_context.commit(xid, one_phase=True)
-        assert xa_context.xa_state == XATransactionContext.XAState.COMMITTED
+        assert result == "success"
 
-    def test_commit_one_phase_wrong_state(self, xa_context, xid):
-        xa_context.start(xid)
-        with pytest.raises(XAException) as exc_info:
-            xa_context.commit(xid, one_phase=True)
-        assert exc_info.value.error_code == XAErrorCode.XAER_PROTO
+    def test_execute_transaction_with_options(self):
+        """Test execute_transaction with custom options."""
+        service = TransactionService()
+        options = TransactionOptions(timeout_millis=30000)
 
-    def test_commit_two_phase_not_prepared(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        with pytest.raises(XAException) as exc_info:
-            xa_context.commit(xid)
-        assert exc_info.value.error_code == XAErrorCode.XAER_PROTO
+        def callback(ctx: TransactionContext) -> int:
+            return ctx.transaction.timeout_millis
 
-    def test_rollback(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.rollback(xid)
-        assert xa_context.xa_state == XATransactionContext.XAState.ROLLED_BACK
+        result = service.execute_transaction(callback, options)
 
-    def test_rollback_after_prepare(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        xa_context.prepare(xid)
-        xa_context.rollback(xid)
-        assert xa_context.xa_state == XATransactionContext.XAState.ROLLED_BACK
+        assert result == 30000
 
-    def test_rollback_not_started(self, xa_context, xid):
-        xa_context.rollback(xid)
-        assert xa_context.xa_state == XATransactionContext.XAState.INITIAL
+    def test_execute_transaction_rollback_on_error(self):
+        """Test execute_transaction rollbacks on callback error."""
+        service = TransactionService()
+        captured_ctx = None
 
-    def test_recover(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        xa_context.prepare(xid)
+        def callback(ctx: TransactionContext):
+            nonlocal captured_ctx
+            captured_ctx = ctx
+            raise ValueError("Callback error")
 
-        recovered = xa_context.recover()
-        assert len(recovered) == 1
-        assert recovered[0] == xid
+        with pytest.raises(ValueError, match="Callback error"):
+            service.execute_transaction(callback)
 
-    def test_recover_empty(self, xa_context):
-        recovered = xa_context.recover()
-        assert len(recovered) == 0
-
-    def test_forget(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid)
-        xa_context.prepare(xid)
-        xa_context.forget(xid)
-        assert xid not in xa_context.recover()
-
-    def test_forget_unknown_xid(self, xa_context, xid):
-        with pytest.raises(XAException) as exc_info:
-            xa_context.forget(xid)
-        assert exc_info.value.error_code == XAErrorCode.XAER_NOTA
-
-    def test_is_same_rm(self, mock_context):
-        ctx1 = XATransactionContext(mock_context)
-        ctx2 = XATransactionContext(mock_context)
-        other_mock = MagicMock()
-        ctx3 = XATransactionContext(other_mock)
-
-        assert ctx1.is_same_rm(ctx2) is True
-        assert ctx1.is_same_rm(ctx3) is False
-        assert ctx1.is_same_rm(MagicMock()) is False
-
-    def test_transaction_timeout(self, xa_context):
-        assert xa_context.get_transaction_timeout() == 120
-        assert xa_context.set_transaction_timeout(60) is True
-        assert xa_context.get_transaction_timeout() == 60
-        assert xa_context.set_transaction_timeout(-1) is False
-
-    def test_resume(self, xa_context, xid):
-        xa_context.start(xid)
-        xa_context.end(xid, XAFlags.TMSUSPEND)
-        xa_context.start(xid, XAFlags.TMRESUME)
-        assert xa_context.xa_state == XATransactionContext.XAState.STARTED
-
-    def test_resume_wrong_state(self, xa_context, xid):
-        with pytest.raises(XAException) as exc_info:
-            xa_context.start(xid, XAFlags.TMRESUME)
-        assert exc_info.value.error_code == XAErrorCode.XAER_PROTO
-
-    def test_context_manager(self, mock_context, xid):
-        xa_ctx = XATransactionContext(mock_context)
-        with xa_ctx:
-            xa_ctx.start(xid)
-        assert xa_ctx.xa_state == XATransactionContext.XAState.ROLLED_BACK
-
-    def test_context_manager_with_commit(self, mock_context, xid):
-        xa_ctx = XATransactionContext(mock_context)
-        with xa_ctx:
-            xa_ctx.start(xid)
-            xa_ctx.end(xid)
-            xa_ctx.prepare(xid)
-            xa_ctx.commit(xid)
-        assert xa_ctx.xa_state == XATransactionContext.XAState.COMMITTED
-
-    def test_repr(self, xa_context, xid):
-        repr_str = repr(xa_context)
-        assert "XATransactionContext" in repr_str
-        assert "INITIAL" in repr_str
+        assert captured_ctx is not None
+        assert captured_ctx.transaction.state == TransactionState.ROLLED_BACK
 
 
-class TestXAFlags:
-    """Tests for XA Flags enumeration."""
+class TestTransactionTypes:
+    """Tests for transaction type and state enums."""
 
-    def test_flag_values(self):
-        assert XAFlags.TMNOFLAGS.value == 0
-        assert XAFlags.TMSUCCESS.value == 0x04000000
-        assert XAFlags.TMFAIL.value == 0x20000000
-        assert XAFlags.TMONEPHASE.value == 0x40000000
+    def test_transaction_type_values(self):
+        """Test TransactionType enum values match constants."""
+        assert TransactionType.ONE_PHASE == TXN_TYPE_ONE_PHASE
+        assert TransactionType.TWO_PHASE == TXN_TYPE_TWO_PHASE
 
-
-class TestXAReturnCode:
-    """Tests for XA Return Codes."""
-
-    def test_return_codes(self):
-        assert XAReturnCode.XA_OK.value == 0
-        assert XAReturnCode.XA_RDONLY.value == 3
+    def test_transaction_state_values(self):
+        """Test TransactionState enum values."""
+        assert TransactionState.ACTIVE == 0
+        assert TransactionState.COMMITTED == 2
+        assert TransactionState.ROLLED_BACK == 3
+        assert TransactionState.NO_TXN == 4
 
 
-class TestXAErrorCode:
-    """Tests for XA Error Codes."""
+class TestTransactionIntegration:
+    """Integration-style tests for transaction workflow."""
 
-    def test_error_codes(self):
-        assert XAErrorCode.XAER_NOTA.value == -4
-        assert XAErrorCode.XAER_PROTO.value == -6
-        assert XAErrorCode.XAER_RMERR.value == -3
-        assert XAErrorCode.XA_RBROLLBACK.value == 100
+    def test_full_transaction_lifecycle_commit(self):
+        """Test complete transaction lifecycle with commit."""
+        service = TransactionService()
+
+        txn = service.begin()
+        assert txn.state == TransactionState.ACTIVE
+
+        txn.commit()
+        assert txn.state == TransactionState.COMMITTED
+
+    def test_full_transaction_lifecycle_rollback(self):
+        """Test complete transaction lifecycle with rollback."""
+        service = TransactionService()
+
+        txn = service.begin()
+        assert txn.state == TransactionState.ACTIVE
+
+        txn.rollback()
+        assert txn.state == TransactionState.ROLLED_BACK
+
+    def test_context_manager_workflow(self):
+        """Test using transaction service with context manager."""
+        service = TransactionService()
+        operations_performed = []
+
+        with service.transaction() as ctx:
+            operations_performed.append(f"txn:{ctx.transaction_id}")
+
+        assert len(operations_performed) == 1
+        assert ctx.transaction.state == TransactionState.COMMITTED
+
+    def test_nested_transactions_are_independent(self):
+        """Test that multiple transactions are independent."""
+        service = TransactionService()
+
+        txn1 = service.begin()
+        txn2 = service.begin()
+
+        assert txn1.transaction_id != txn2.transaction_id
+
+        txn1.commit()
+        assert txn1.state == TransactionState.COMMITTED
+        assert txn2.state == TransactionState.ACTIVE
+
+        txn2.rollback()
+        assert txn2.state == TransactionState.ROLLED_BACK
