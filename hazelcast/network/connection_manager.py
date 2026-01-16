@@ -398,8 +398,29 @@ class ConnectionManager:
         return backoff
 
     def _send_heartbeat(self, connection: Connection) -> None:
-        """Send a heartbeat to a connection."""
-        pass
+        """Send a heartbeat ping to a connection."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, UNFRAGMENTED_FLAG
+        import struct
+
+        PING_MESSAGE_TYPE = 0x000000
+
+        initial_content = bytearray(22)
+        struct.pack_into("<I", initial_content, 0, PING_MESSAGE_TYPE)
+        struct.pack_into("<q", initial_content, 4, 0)
+        struct.pack_into("<i", initial_content, 12, -1)
+
+        ping_frame = Frame(bytes(initial_content), UNFRAGMENTED_FLAG)
+        ping_message = ClientMessage([ping_frame])
+
+        try:
+            connection.send_sync(ping_message)
+            _logger.debug("Heartbeat sent to connection %d", connection.connection_id)
+        except Exception as e:
+            _logger.warning(
+                "Failed to send heartbeat to connection %d: %s",
+                connection.connection_id,
+                e,
+            )
 
     def _on_heartbeat_failure(self, connection: Connection, reason: str) -> None:
         """Handle heartbeat failure."""

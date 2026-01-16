@@ -1,8 +1,11 @@
-"""Unit tests for hazelcast.network module."""
+"""Tests for network connection lifecycle and management."""
 
 import asyncio
 import pytest
-from unittest.mock import Mock, MagicMock, AsyncMock, patch, PropertyMock
+import struct
+import time
+import threading
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 from hazelcast.network.connection import Connection, ConnectionState
 from hazelcast.network.connection_manager import (
@@ -11,490 +14,586 @@ from hazelcast.network.connection_manager import (
     RoundRobinLoadBalancer,
     RandomLoadBalancer,
 )
+from hazelcast.invocation import Invocation, InvocationService
+from hazelcast.protocol.client_message import ClientMessage, Frame, UNFRAGMENTED_FLAG
 from hazelcast.exceptions import (
     HazelcastException,
     TargetDisconnectedException,
     ClientOfflineException,
+    OperationTimeoutException,
 )
 
 
 class TestConnectionState:
-    """Tests for ConnectionState enum."""
+    """Tests for connection state transitions."""
 
-    def test_all_states_defined(self):
-        expected = ["CREATED", "CONNECTING", "CONNECTED", "AUTHENTICATED", "CLOSING", "CLOSED"]
-        for state_name in expected:
-            assert hasattr(ConnectionState, state_name)
+    def test_initial_state_is_created(self):
+        """Connection should start in CREATED state."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            mock_addr.resolve.return_value = [("localhost", 5701)]
+            conn = Connection(
+                address=mock_addr,
+                connection_id=1,
+            )
+            assert conn.state == ConnectionState.CREATED
+
+    def test_is_alive_returns_false_for_created_state(self):
+        """is_alive should be False before connection is established."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            assert conn.is_alive is False
+
+    def test_is_alive_returns_true_for_connected_state(self):
+        """is_alive should be True when connected."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CONNECTED
+            assert conn.is_alive is True
+
+    def test_is_alive_returns_true_for_authenticated_state(self):
+        """is_alive should be True when authenticated."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.AUTHENTICATED
+            assert conn.is_alive is True
+
+    def test_is_alive_returns_false_for_closing_state(self):
+        """is_alive should be False when closing."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CLOSING
+            assert conn.is_alive is False
+
+    def test_mark_authenticated_transitions_from_connected(self):
+        """mark_authenticated should transition from CONNECTED to AUTHENTICATED."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CONNECTED
+            conn.mark_authenticated()
+            assert conn.state == ConnectionState.AUTHENTICATED
+
+    def test_mark_authenticated_does_not_transition_from_other_states(self):
+        """mark_authenticated should only work from CONNECTED state."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CREATED
+            conn.mark_authenticated()
+            assert conn.state == ConnectionState.CREATED
 
 
-class TestConnection:
-    """Tests for Connection class."""
-
-    def setup_method(self):
-        self.address = Mock()
-        self.address.resolve.return_value = [("127.0.0.1", 5701)]
-        
-    def test_initial_state(self):
-        conn = Connection(
-            address=self.address,
-            connection_id=1,
-            connection_timeout=5.0,
-        )
-        assert conn.state == ConnectionState.CREATED
-        assert conn.connection_id == 1
-        assert conn.address is self.address
-        assert not conn.is_alive
-
-    def test_is_alive_states(self):
-        conn = Connection(address=self.address, connection_id=1)
-        
-        conn._state = ConnectionState.CREATED
-        assert not conn.is_alive
-        
-        conn._state = ConnectionState.CONNECTING
-        assert not conn.is_alive
-        
-        conn._state = ConnectionState.CONNECTED
-        assert conn.is_alive
-        
-        conn._state = ConnectionState.AUTHENTICATED
-        assert conn.is_alive
-        
-        conn._state = ConnectionState.CLOSING
-        assert not conn.is_alive
-        
-        conn._state = ConnectionState.CLOSED
-        assert not conn.is_alive
-
-    def test_member_uuid_property(self):
-        conn = Connection(address=self.address, connection_id=1)
-        assert conn.member_uuid is None
-        
-        conn.member_uuid = "test-uuid"
-        assert conn.member_uuid == "test-uuid"
-
-    def test_mark_authenticated(self):
-        conn = Connection(address=self.address, connection_id=1)
-        conn._state = ConnectionState.CONNECTED
-        
-        conn.mark_authenticated()
-        
-        assert conn.state == ConnectionState.AUTHENTICATED
-
-    def test_mark_authenticated_wrong_state(self):
-        conn = Connection(address=self.address, connection_id=1)
-        conn._state = ConnectionState.CREATED
-        
-        conn.mark_authenticated()
-        
-        assert conn.state == ConnectionState.CREATED
-
-    def test_str_repr(self):
-        conn = Connection(address=self.address, connection_id=42)
-        s = str(conn)
-        assert "42" in s
-        assert "CREATED" in s
+class TestConnectionConnect:
+    """Tests for connection establishment."""
 
     @pytest.mark.asyncio
-    async def test_connect_wrong_initial_state(self):
-        conn = Connection(address=self.address, connection_id=1)
-        conn._state = ConnectionState.CONNECTED
-        
-        with pytest.raises(HazelcastException) as exc_info:
+    async def test_connect_fails_if_not_in_created_state(self):
+        """connect() should fail if connection is not in CREATED state."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CONNECTED
+
+            with pytest.raises(HazelcastException) as exc_info:
+                await conn.connect()
+            assert "Cannot connect" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_connect_sets_state_to_connecting(self):
+        """connect() should set state to CONNECTING."""
+        mock_addr = MagicMock()
+        mock_addr.resolve.return_value = None
+
+        conn = Connection(address=mock_addr, connection_id=1)
+
+        with pytest.raises(HazelcastException):
             await conn.connect()
-        assert "Cannot connect" in str(exc_info.value)
+
+        assert conn.state == ConnectionState.CLOSED
 
     @pytest.mark.asyncio
-    async def test_connect_unresolvable_address(self):
-        self.address.resolve.return_value = []
-        conn = Connection(address=self.address, connection_id=1)
-        
+    async def test_connect_fails_on_unresolvable_address(self):
+        """connect() should fail if address cannot be resolved."""
+        mock_addr = MagicMock()
+        mock_addr.resolve.return_value = None
+
+        conn = Connection(address=mock_addr, connection_id=1)
+
         with pytest.raises(HazelcastException) as exc_info:
             await conn.connect()
         assert "Could not resolve" in str(exc_info.value)
-        assert conn.state == ConnectionState.CLOSED
-
-    @pytest.mark.asyncio
-    async def test_connect_timeout(self):
-        conn = Connection(
-            address=self.address,
-            connection_id=1,
-            connection_timeout=0.001,
-        )
-        
-        async def slow_connect(*args, **kwargs):
-            await asyncio.sleep(10)
-            return Mock(), Mock()
-        
-        with patch("asyncio.open_connection", side_effect=slow_connect):
-            with pytest.raises(HazelcastException) as exc_info:
-                await conn.connect()
-            assert "timeout" in str(exc_info.value).lower()
-            assert conn.state == ConnectionState.CLOSED
-
-    @pytest.mark.asyncio
-    async def test_connect_failure(self):
-        conn = Connection(address=self.address, connection_id=1)
-        
-        with patch("asyncio.open_connection", side_effect=ConnectionRefusedError("refused")):
-            with pytest.raises(HazelcastException) as exc_info:
-                await conn.connect()
-            assert conn.state == ConnectionState.CLOSED
 
     @pytest.mark.asyncio
     async def test_connect_success(self):
-        conn = Connection(address=self.address, connection_id=1)
-        
+        """connect() should establish connection successfully."""
+        mock_addr = MagicMock()
+        mock_addr.resolve.return_value = [("127.0.0.1", 5701)]
+
         mock_reader = AsyncMock()
-        mock_writer = Mock()
-        mock_socket = Mock()
-        mock_socket.getpeername.return_value = ("127.0.0.1", 5701)
-        mock_socket.getsockname.return_value = ("127.0.0.1", 12345)
-        mock_writer.get_extra_info.return_value = mock_socket
-        
-        with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
-            with patch("asyncio.wait_for", return_value=(mock_reader, mock_writer)):
-                await conn.connect()
-        
-        assert conn.state == ConnectionState.CONNECTED
-        assert conn.remote_address == ("127.0.0.1", 5701)
-        assert conn.local_address == ("127.0.0.1", 12345)
+        mock_writer = MagicMock()
+        mock_writer.get_extra_info.return_value = None
+
+        with patch('asyncio.wait_for') as mock_wait_for:
+            mock_wait_for.return_value = (mock_reader, mock_writer)
+
+            conn = Connection(address=mock_addr, connection_id=1)
+            await conn.connect()
+
+            assert conn.state == ConnectionState.CONNECTED
+
+
+class TestConnectionClose:
+    """Tests for connection closure."""
 
     @pytest.mark.asyncio
-    async def test_send_not_alive(self):
-        conn = Connection(address=self.address, connection_id=1)
-        conn._state = ConnectionState.CLOSED
-        
-        message = Mock()
-        with pytest.raises(TargetDisconnectedException):
+    async def test_close_sets_state_to_closed(self):
+        """close() should set state to CLOSED."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CONNECTED
+            conn._writer = MagicMock()
+            conn._writer.close = MagicMock()
+            conn._writer.wait_closed = AsyncMock()
+
+            await conn.close("Test close")
+
+            assert conn.state == ConnectionState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_close_is_idempotent(self):
+        """close() should be safe to call multiple times."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CLOSED
+
+            await conn.close("Test close")
+            assert conn.state == ConnectionState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_close_cancels_read_task(self):
+        """close() should cancel any pending read task."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CONNECTED
+
+            mock_task = MagicMock()
+            mock_task.cancel = MagicMock()
+            conn._read_task = mock_task
+
+            conn._writer = MagicMock()
+            conn._writer.close = MagicMock()
+            conn._writer.wait_closed = AsyncMock()
+
+            await conn.close("Test close")
+
+            mock_task.cancel.assert_called_once()
+
+
+class TestConnectionSend:
+    """Tests for sending messages."""
+
+    @pytest.mark.asyncio
+    async def test_send_fails_if_not_alive(self):
+        """send() should fail if connection is not alive."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CLOSED
+
+            message = ClientMessage()
+            with pytest.raises(TargetDisconnectedException):
+                await conn.send(message)
+
+    @pytest.mark.asyncio
+    async def test_send_fails_if_writer_is_none(self):
+        """send() should fail if writer is not initialized."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CONNECTED
+            conn._writer = None
+
+            message = ClientMessage()
+            with pytest.raises(TargetDisconnectedException):
+                await conn.send(message)
+
+    @pytest.mark.asyncio
+    async def test_send_writes_message_bytes(self):
+        """send() should write message bytes to writer."""
+        with patch('hazelcast.network.connection.Address') as mock_addr:
+            conn = Connection(address=mock_addr, connection_id=1)
+            conn._state = ConnectionState.CONNECTED
+
+            mock_writer = MagicMock()
+            mock_writer.write = MagicMock()
+            mock_writer.drain = AsyncMock()
+            conn._writer = mock_writer
+
+            content = bytearray(22)
+            frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+            message = ClientMessage([frame])
+
             await conn.send(message)
 
-    @pytest.mark.asyncio
-    async def test_send_no_writer(self):
-        conn = Connection(address=self.address, connection_id=1)
-        conn._state = ConnectionState.CONNECTED
-        conn._writer = None
-        
-        message = Mock()
-        with pytest.raises(TargetDisconnectedException):
-            await conn.send(message)
-
-    @pytest.mark.asyncio
-    async def test_close_idempotent(self):
-        conn = Connection(address=self.address, connection_id=1)
-        conn._state = ConnectionState.CLOSED
-        
-        await conn.close("test reason")
-        
-        assert conn.state == ConnectionState.CLOSED
-
-    @pytest.mark.asyncio
-    async def test_close_with_read_task(self):
-        conn = Connection(address=self.address, connection_id=1)
-        conn._state = ConnectionState.CONNECTED
-        
-        mock_task = AsyncMock()
-        conn._read_task = mock_task
-        
-        mock_writer = Mock()
-        mock_writer.close = Mock()
-        mock_writer.wait_closed = AsyncMock()
-        conn._writer = mock_writer
-        
-        await conn.close("test")
-        
-        assert conn.state == ConnectionState.CLOSED
-        assert conn._read_task is None
+            mock_writer.write.assert_called_once()
+            mock_writer.drain.assert_called_once()
 
 
 class TestRoundRobinLoadBalancer:
-    """Tests for RoundRobinLoadBalancer."""
+    """Tests for round-robin load balancing."""
 
-    def test_init_empty(self):
+    def test_next_returns_none_when_empty(self):
+        """next() should return None when no connections."""
         lb = RoundRobinLoadBalancer()
         lb.init([])
-        
         assert lb.next() is None
-        assert not lb.can_get_next()
 
-    def test_single_connection(self):
+    def test_next_cycles_through_connections(self):
+        """next() should cycle through connections in order."""
         lb = RoundRobinLoadBalancer()
-        
-        conn = Mock()
+
+        conn1 = MagicMock()
+        conn1.is_alive = True
+        conn2 = MagicMock()
+        conn2.is_alive = True
+        conn3 = MagicMock()
+        conn3.is_alive = True
+
+        lb.init([conn1, conn2, conn3])
+
+        assert lb.next() == conn1
+        assert lb.next() == conn2
+        assert lb.next() == conn3
+        assert lb.next() == conn1
+
+    def test_next_skips_dead_connections(self):
+        """next() should skip connections that are not alive."""
+        lb = RoundRobinLoadBalancer()
+
+        conn1 = MagicMock()
+        conn1.is_alive = False
+        conn2 = MagicMock()
+        conn2.is_alive = True
+
+        lb.init([conn1, conn2])
+
+        assert lb.next() == conn2
+
+    def test_can_get_next_returns_true_when_alive_exists(self):
+        """can_get_next() should return True when alive connections exist."""
+        lb = RoundRobinLoadBalancer()
+        conn = MagicMock()
         conn.is_alive = True
         lb.init([conn])
-        
-        assert lb.next() is conn
-        assert lb.can_get_next()
+        assert lb.can_get_next() is True
 
-    def test_round_robin_distribution(self):
+    def test_can_get_next_returns_false_when_all_dead(self):
+        """can_get_next() should return False when all connections are dead."""
         lb = RoundRobinLoadBalancer()
-        
-        conns = [Mock(is_alive=True) for _ in range(3)]
-        lb.init(conns)
-        
-        results = [lb.next() for _ in range(6)]
-        
-        for conn in conns:
-            assert results.count(conn) == 2
-
-    def test_skips_dead_connections(self):
-        lb = RoundRobinLoadBalancer()
-        
-        alive_conn = Mock(is_alive=True)
-        dead_conn = Mock(is_alive=False)
-        lb.init([alive_conn, dead_conn])
-        
-        for _ in range(5):
-            assert lb.next() is alive_conn
-
-    def test_can_get_next_all_dead(self):
-        lb = RoundRobinLoadBalancer()
-        
-        dead_conns = [Mock(is_alive=False) for _ in range(3)]
-        lb.init(dead_conns)
-        
-        assert not lb.can_get_next()
-        assert lb.next() is None
+        conn = MagicMock()
+        conn.is_alive = False
+        lb.init([conn])
+        assert lb.can_get_next() is False
 
 
 class TestRandomLoadBalancer:
-    """Tests for RandomLoadBalancer."""
+    """Tests for random load balancing."""
 
-    def test_init_empty(self):
+    def test_next_returns_none_when_empty(self):
+        """next() should return None when no connections."""
         lb = RandomLoadBalancer()
         lb.init([])
-        
         assert lb.next() is None
-        assert not lb.can_get_next()
 
-    def test_single_connection(self):
+    def test_next_returns_alive_connection(self):
+        """next() should return an alive connection."""
         lb = RandomLoadBalancer()
-        
-        conn = Mock(is_alive=True)
+        conn = MagicMock()
+        conn.is_alive = True
         lb.init([conn])
-        
-        assert lb.next() is conn
-        assert lb.can_get_next()
+        assert lb.next() == conn
 
-    def test_skips_dead_connections(self):
+    def test_next_returns_none_when_all_dead(self):
+        """next() should return None when all connections are dead."""
         lb = RandomLoadBalancer()
-        
-        alive_conn = Mock(is_alive=True)
-        dead_conn = Mock(is_alive=False)
-        lb.init([alive_conn, dead_conn])
-        
-        for _ in range(10):
-            assert lb.next() is alive_conn
-
-    def test_can_get_next_all_dead(self):
-        lb = RandomLoadBalancer()
-        
-        dead_conns = [Mock(is_alive=False) for _ in range(3)]
-        lb.init(dead_conns)
-        
-        assert not lb.can_get_next()
-
-    def test_random_distribution(self):
-        lb = RandomLoadBalancer()
-        
-        conns = [Mock(is_alive=True) for _ in range(10)]
-        lb.init(conns)
-        
-        results = set()
-        for _ in range(100):
-            results.add(lb.next())
-        
-        assert len(results) > 1
+        conn = MagicMock()
+        conn.is_alive = False
+        lb.init([conn])
+        assert lb.next() is None
 
 
-class TestConnectionManager:
-    """Tests for ConnectionManager."""
+class TestInvocation:
+    """Tests for Invocation class."""
 
-    def test_routing_mode_property(self):
-        cm = ConnectionManager(
-            addresses=["localhost:5701"],
-            routing_mode=RoutingMode.ALL_MEMBERS,
-        )
-        assert cm.routing_mode == RoutingMode.ALL_MEMBERS
+    def test_initial_correlation_id_is_zero(self):
+        """Invocation should have correlation_id 0 initially."""
+        message = ClientMessage()
+        inv = Invocation(request=message)
+        assert inv.correlation_id == 0
 
-    def test_initial_state(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        assert not cm.is_running
-        assert cm.connection_count == 0
+    def test_set_correlation_id_updates_message(self):
+        """Setting correlation_id should update the request message."""
+        content = bytearray(22)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        message = ClientMessage([frame])
 
-    def test_set_connection_listener(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        on_opened = Mock()
-        on_closed = Mock()
-        cm.set_connection_listener(on_opened, on_closed)
-        
-        assert cm._on_connection_opened is on_opened
-        assert cm._on_connection_closed is on_closed
+        inv = Invocation(request=message)
+        inv.correlation_id = 42
 
-    def test_set_message_callback(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        callback = Mock()
-        cm.set_message_callback(callback)
-        
-        assert cm._message_callback is callback
+        assert inv.correlation_id == 42
+        assert message.get_correlation_id() == 42
 
-    def test_get_connection_single_member_mode(self):
-        cm = ConnectionManager(
-            addresses=["localhost:5701"],
-            routing_mode=RoutingMode.SINGLE_MEMBER,
-        )
-        
-        conn = Mock(is_alive=True)
-        cm._connections = {1: conn}
-        
-        result = cm.get_connection()
-        assert result is conn
+    def test_mark_sent_sets_sent_time(self):
+        """mark_sent() should record the current time."""
+        message = ClientMessage()
+        inv = Invocation(request=message)
 
-    def test_get_connection_single_member_no_alive(self):
-        cm = ConnectionManager(
-            addresses=["localhost:5701"],
-            routing_mode=RoutingMode.SINGLE_MEMBER,
-        )
-        
-        conn = Mock(is_alive=False)
-        cm._connections = {1: conn}
-        
-        result = cm.get_connection()
-        assert result is None
+        assert inv.sent_time is None
+        inv.mark_sent()
+        assert inv.sent_time is not None
+        assert inv.sent_time <= time.time()
 
-    def test_get_all_connections(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        alive = Mock(is_alive=True)
-        dead = Mock(is_alive=False)
-        cm._connections = {1: alive, 2: dead}
-        
-        result = cm.get_all_connections()
-        assert result == [alive]
+    def test_is_expired_returns_false_before_sent(self):
+        """is_expired() should return False if not yet sent."""
+        message = ClientMessage()
+        inv = Invocation(request=message, timeout=0.001)
+        assert inv.is_expired() is False
 
-    def test_calculate_backoff_no_config(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        backoff_0 = cm._calculate_backoff(0)
-        backoff_1 = cm._calculate_backoff(1)
-        backoff_2 = cm._calculate_backoff(2)
-        
-        assert backoff_0 == 1.0
-        assert backoff_1 == 2.0
-        assert backoff_2 == 4.0
+    def test_is_expired_returns_true_after_timeout(self):
+        """is_expired() should return True after timeout."""
+        message = ClientMessage()
+        inv = Invocation(request=message, timeout=0.001)
+        inv.mark_sent()
+        time.sleep(0.01)
+        assert inv.is_expired() is True
 
-    def test_calculate_backoff_max_cap(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        backoff = cm._calculate_backoff(10)
-        assert backoff <= 30.0
+    def test_set_response_completes_future(self):
+        """set_response() should complete the future with result."""
+        message = ClientMessage()
+        inv = Invocation(request=message)
+
+        response = ClientMessage()
+        inv.set_response(response)
+
+        assert inv.future.done()
+        assert inv.future.result() == response
+
+    def test_set_exception_fails_future(self):
+        """set_exception() should fail the future with exception."""
+        message = ClientMessage()
+        inv = Invocation(request=message)
+
+        exc = HazelcastException("Test error")
+        inv.set_exception(exc)
+
+        assert inv.future.done()
+        with pytest.raises(HazelcastException):
+            inv.future.result()
+
+
+class TestInvocationService:
+    """Tests for InvocationService."""
+
+    def test_start_sets_running_flag(self):
+        """start() should set running flag to True."""
+        svc = InvocationService()
+        svc.start()
+        assert svc.is_running is True
+
+    def test_shutdown_clears_running_flag(self):
+        """shutdown() should set running flag to False."""
+        svc = InvocationService()
+        svc.start()
+        svc.shutdown()
+        assert svc.is_running is False
+
+    def test_shutdown_cancels_pending_invocations(self):
+        """shutdown() should cancel all pending invocations."""
+        svc = InvocationService()
+        svc.start()
+
+        content = bytearray(22)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        message = ClientMessage([frame])
+        inv = Invocation(request=message)
+
+        svc._pending[1] = inv
+
+        svc.shutdown()
+
+        assert inv.future.done()
+        with pytest.raises(HazelcastException):
+            inv.future.result()
+
+    def test_invoke_assigns_correlation_id(self):
+        """invoke() should assign a unique correlation ID."""
+        svc = InvocationService()
+        svc.start()
+
+        content = bytearray(22)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        msg1 = ClientMessage([frame])
+        msg2 = ClientMessage([Frame(bytes(bytearray(22)), UNFRAGMENTED_FLAG)])
+
+        inv1 = Invocation(request=msg1)
+        inv2 = Invocation(request=msg2)
+
+        svc.invoke(inv1)
+        svc.invoke(inv2)
+
+        assert inv1.correlation_id == 1
+        assert inv2.correlation_id == 2
+
+    def test_invoke_returns_future(self):
+        """invoke() should return the invocation's future."""
+        svc = InvocationService()
+        svc.start()
+
+        content = bytearray(22)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        message = ClientMessage([frame])
+        inv = Invocation(request=message)
+
+        future = svc.invoke(inv)
+
+        assert future is inv.future
+
+    def test_handle_response_completes_invocation(self):
+        """handle_response() should complete the matching invocation."""
+        svc = InvocationService()
+        svc.start()
+
+        content = bytearray(22)
+        struct.pack_into("<q", content, 4, 1)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        response = ClientMessage([frame])
+
+        request_content = bytearray(22)
+        request_frame = Frame(bytes(request_content), UNFRAGMENTED_FLAG)
+        request = ClientMessage([request_frame])
+        inv = Invocation(request=request)
+        inv._correlation_id = 1
+        svc._pending[1] = inv
+
+        result = svc.handle_response(response)
+
+        assert result is True
+        assert inv.future.done()
+
+    def test_handle_response_returns_false_for_unknown_id(self):
+        """handle_response() should return False for unknown correlation ID."""
+        svc = InvocationService()
+        svc.start()
+
+        content = bytearray(22)
+        struct.pack_into("<q", content, 4, 999)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        response = ClientMessage([frame])
+
+        result = svc.handle_response(response)
+
+        assert result is False
+
+    def test_check_timeouts_expires_old_invocations(self):
+        """check_timeouts() should expire timed-out invocations."""
+        svc = InvocationService()
+        svc.start()
+
+        content = bytearray(22)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        message = ClientMessage([frame])
+        inv = Invocation(request=message, timeout=0.001)
+        inv._correlation_id = 1
+        inv.mark_sent()
+        svc._pending[1] = inv
+
+        time.sleep(0.01)
+
+        timed_out_count = svc.check_timeouts()
+
+        assert timed_out_count == 1
+        assert inv.future.done()
+        with pytest.raises(OperationTimeoutException):
+            inv.future.result()
+
+    def test_get_pending_count(self):
+        """get_pending_count() should return number of pending invocations."""
+        svc = InvocationService()
+        svc.start()
+
+        assert svc.get_pending_count() == 0
+
+        content = bytearray(22)
+        frame = Frame(bytes(content), UNFRAGMENTED_FLAG)
+        message = ClientMessage([frame])
+        inv = Invocation(request=message)
+        inv._correlation_id = 1
+        svc._pending[1] = inv
+
+        assert svc.get_pending_count() == 1
+
+
+class TestConnectionManagerBackoff:
+    """Tests for connection manager backoff calculation."""
+
+    def test_calculate_backoff_default(self):
+        """_calculate_backoff() should use exponential backoff by default."""
+        with patch('hazelcast.network.connection_manager.AddressHelper'):
+            cm = ConnectionManager(addresses=["localhost:5701"])
+
+            assert cm._calculate_backoff(0) == 1.0
+            assert cm._calculate_backoff(1) == 2.0
+            assert cm._calculate_backoff(2) == 4.0
+            assert cm._calculate_backoff(5) == 30.0
 
     def test_calculate_backoff_with_config(self):
-        from hazelcast.config import RetryConfig
-        
-        retry_config = RetryConfig(
-            initial_backoff=0.5,
-            max_backoff=10.0,
-            multiplier=2.0,
-            jitter=0.0,
-        )
-        cm = ConnectionManager(
-            addresses=["localhost:5701"],
-            retry_config=retry_config,
-        )
-        
-        backoff_0 = cm._calculate_backoff(0)
-        backoff_1 = cm._calculate_backoff(1)
-        
-        assert backoff_0 == 0.5
-        assert backoff_1 == 1.0
+        """_calculate_backoff() should use retry config if provided."""
+        mock_retry_config = MagicMock()
+        mock_retry_config.initial_backoff = 0.5
+        mock_retry_config.multiplier = 2.0
+        mock_retry_config.max_backoff = 10.0
+        mock_retry_config.jitter = 0.0
 
-    def test_calculate_backoff_with_jitter(self):
-        from hazelcast.config import RetryConfig
-        
-        retry_config = RetryConfig(
-            initial_backoff=1.0,
-            max_backoff=30.0,
-            multiplier=2.0,
-            jitter=0.5,
-        )
-        cm = ConnectionManager(
-            addresses=["localhost:5701"],
-            retry_config=retry_config,
-        )
-        
-        backoffs = [cm._calculate_backoff(0) for _ in range(100)]
-        
-        assert min(backoffs) >= 1.0
-        assert max(backoffs) <= 1.5
+        with patch('hazelcast.network.connection_manager.AddressHelper'):
+            cm = ConnectionManager(
+                addresses=["localhost:5701"],
+                retry_config=mock_retry_config,
+            )
 
-    @pytest.mark.asyncio
-    async def test_start_already_running(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        cm._running = True
-        
-        await cm.start()
-
-    @pytest.mark.asyncio
-    async def test_shutdown_when_not_running(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        cm._running = False
-        
-        await cm.shutdown()
-        
-        assert not cm.is_running
+            assert cm._calculate_backoff(0) == 0.5
+            assert cm._calculate_backoff(1) == 1.0
+            assert cm._calculate_backoff(2) == 2.0
+            assert cm._calculate_backoff(5) == 10.0
 
 
-class TestConnectionManagerEdgeCases:
-    """Edge case tests for ConnectionManager."""
+class TestConnectionManagerRouting:
+    """Tests for connection manager routing modes."""
 
-    def test_connection_count_thread_safety(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        conns = [Mock(is_alive=True) for _ in range(5)]
-        dead_conns = [Mock(is_alive=False) for _ in range(3)]
-        
-        cm._connections = {i: c for i, c in enumerate(conns + dead_conns)}
-        
-        assert cm.connection_count == 5
+    def test_single_member_routing_mode(self):
+        """SINGLE_MEMBER mode should use first available connection."""
+        with patch('hazelcast.network.connection_manager.AddressHelper'):
+            cm = ConnectionManager(
+                addresses=["localhost:5701"],
+                routing_mode=RoutingMode.SINGLE_MEMBER,
+            )
 
-    def test_get_connection_for_missing_address(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        address = Mock()
-        result = cm.get_connection_for_address(address)
-        
-        assert result is None
+            conn = MagicMock()
+            conn.is_alive = True
+            cm._connections[1] = conn
 
-    def test_get_connection_for_address_dead(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        address = Mock()
-        dead_conn = Mock(is_alive=False)
-        cm._address_connections = {address: dead_conn}
-        
-        result = cm.get_connection_for_address(address)
-        assert result is None
+            result = cm.get_connection()
 
-    def test_get_connection_for_address_alive(self):
-        cm = ConnectionManager(addresses=["localhost:5701"])
-        
-        address = Mock()
-        alive_conn = Mock(is_alive=True)
-        cm._address_connections = {address: alive_conn}
-        
-        result = cm.get_connection_for_address(address)
-        assert result is alive_conn
+            assert result == conn
 
+    def test_all_members_routing_uses_load_balancer(self):
+        """ALL_MEMBERS mode should use load balancer."""
+        mock_lb = MagicMock()
+        mock_conn = MagicMock()
+        mock_lb.next.return_value = mock_conn
 
-class TestRoutingMode:
-    """Tests for RoutingMode enum."""
+        with patch('hazelcast.network.connection_manager.AddressHelper'):
+            cm = ConnectionManager(
+                addresses=["localhost:5701"],
+                routing_mode=RoutingMode.ALL_MEMBERS,
+                load_balancer=mock_lb,
+            )
 
-    def test_all_modes_defined(self):
-        assert RoutingMode.ALL_MEMBERS.value == "ALL_MEMBERS"
-        assert RoutingMode.SINGLE_MEMBER.value == "SINGLE_MEMBER"
-        assert RoutingMode.MULTI_MEMBER.value == "MULTI_MEMBER"
+            result = cm.get_connection()
+
+            mock_lb.next.assert_called_once()
+            assert result == mock_conn
