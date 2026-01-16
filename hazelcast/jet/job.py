@@ -9,7 +9,27 @@ import time
 
 
 class JobStatus(Enum):
-    """Status of a Jet job."""
+    """Status of a Jet job.
+
+    Represents the lifecycle state of a Jet job. Jobs transition
+    through these states from submission to completion or failure.
+
+    Attributes:
+        NOT_RUNNING: Job has not started yet.
+        STARTING: Job is initializing.
+        RUNNING: Job is actively processing data.
+        SUSPENDED: Job is paused and can be resumed.
+        SUSPENDING: Job is in the process of suspending.
+        RESUMING: Job is resuming from suspended state.
+        COMPLETING: Job is finishing up.
+        FAILED: Job failed due to an error.
+        COMPLETED: Job finished successfully.
+
+    Example:
+        >>> job = jet.submit(pipeline)
+        >>> while job.status not in (JobStatus.COMPLETED, JobStatus.FAILED):
+        ...     time.sleep(1)
+    """
 
     NOT_RUNNING = "NOT_RUNNING"
     STARTING = "STARTING"
@@ -23,7 +43,21 @@ class JobStatus(Enum):
 
 
 class ProcessingGuarantee(Enum):
-    """Processing guarantee for streaming jobs."""
+    """Processing guarantee for streaming jobs.
+
+    Defines the level of fault tolerance for streaming jobs.
+
+    Attributes:
+        NONE: No guarantee. Data may be lost or duplicated on failure.
+        AT_LEAST_ONCE: Each item is processed at least once.
+            May result in duplicates after recovery.
+        EXACTLY_ONCE: Each item is processed exactly once.
+            Requires transactional sinks for end-to-end guarantee.
+
+    Example:
+        >>> config = JobConfig()
+        >>> config.processing_guarantee = ProcessingGuarantee.EXACTLY_ONCE
+    """
 
     NONE = "NONE"
     AT_LEAST_ONCE = "AT_LEAST_ONCE"
@@ -32,6 +66,9 @@ class ProcessingGuarantee(Enum):
 
 class JobConfig:
     """Configuration for a Jet job.
+
+    Provides configuration options for job execution including
+    fault tolerance, scaling, and metrics settings.
 
     Attributes:
         name: Optional job name for identification.
@@ -44,6 +81,20 @@ class JobConfig:
         metrics_enabled: Whether to collect job metrics.
         store_metrics_after_job_completion: Whether to retain metrics after completion.
         suspend_on_failure: Whether to suspend job on failure instead of failing.
+
+    Example:
+        Basic configuration::
+
+            config = JobConfig(name="my-job")
+            config.processing_guarantee = ProcessingGuarantee.AT_LEAST_ONCE
+            config.snapshot_interval_millis = 5000
+            job = jet.submit(pipeline, config)
+
+        With arguments::
+
+            config = JobConfig(name="etl-job")
+            config.set_argument("source_path", "/data/input")
+            config.set_argument("batch_size", 1000)
     """
 
     def __init__(
@@ -221,9 +272,26 @@ class JobConfig:
 
 
 class JobMetrics:
-    """Metrics collected from a running or completed job."""
+    """Metrics collected from a running or completed job.
+
+    Provides access to job execution metrics including throughput
+    and snapshot statistics.
+
+    Attributes:
+        timestamp: When the metrics were collected.
+        items_in: Total items received by the job.
+        items_out: Total items emitted by the job.
+        snapshot_count: Number of snapshots taken.
+        last_snapshot_time: Time of the most recent snapshot.
+
+    Example:
+        >>> metrics = job.metrics
+        >>> print(f"Processed: {metrics.items_in} in, {metrics.items_out} out")
+        >>> print(f"Snapshots: {metrics.snapshot_count}")
+    """
 
     def __init__(self):
+        """Initialize empty job metrics."""
         self._metrics: Dict[str, Any] = {}
         self._timestamp = datetime.now()
         self._items_in: int = 0
@@ -310,6 +378,32 @@ class Job:
         config: Job configuration.
         status: Current job status.
         submission_time: When the job was submitted.
+        completion_time: When the job completed (or None).
+        failure_reason: Reason for failure (or None).
+        metrics: Job execution metrics.
+
+    Example:
+        Submitting and monitoring a job::
+
+            job = jet.submit(pipeline, config)
+            print(f"Job ID: {job.id}")
+
+            # Wait for completion
+            try:
+                job.join(timeout=60)
+                print("Job completed successfully")
+            except HazelcastException as e:
+                print(f"Job failed: {e}")
+
+        Suspending and resuming::
+
+            job.suspend()
+            # ... later ...
+            job.resume()
+
+        Cancelling with snapshot::
+
+            job.cancel_and_export_snapshot("my-snapshot")
     """
 
     _VALID_TRANSITIONS = {
@@ -451,7 +545,16 @@ class Job:
     def suspend(self) -> None:
         """Suspend the job.
 
-        Suspends a running job. The job can be resumed later.
+        Suspends a running job. The job state is preserved and can be
+        resumed later with resume().
+
+        Raises:
+            IllegalStateException: If the job is not in a suspendable state.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> job.suspend()
+            >>> print(f"Job status: {job.status}")  # SUSPENDED
         """
         self.suspend_async().result()
 
@@ -459,7 +562,14 @@ class Job:
         """Suspend the job asynchronously.
 
         Returns:
-            Future that completes when the job is suspended.
+            Future: A Future that completes when the job is suspended.
+
+        Raises:
+            IllegalStateException: If the job is not in a suspendable state.
+
+        Example:
+            >>> future = job.suspend_async()
+            >>> future.result()
         """
         future: Future = Future()
         if self._transition_status(JobStatus.SUSPENDING):

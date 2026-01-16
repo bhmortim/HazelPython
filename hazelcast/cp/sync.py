@@ -32,20 +32,35 @@ class FencedLock(Proxy):
     it again without blocking. Each acquisition must be matched with
     a corresponding release.
 
-    Example:
-        >>> lock = client.get_fenced_lock("my-lock")
-        >>> fence = lock.lock()
-        >>> try:
-        ...     # Critical section
-        ...     print(f"Lock acquired with fence: {fence}")
-        ... finally:
-        ...     lock.unlock()
+    Attributes:
+        name: The name of this FencedLock instance.
 
-        Context manager usage::
+    Note:
+        Requires the CP Subsystem to be enabled on the Hazelcast cluster
+        with at least 3 members for fault tolerance.
+
+    Example:
+        Basic lock usage::
+
+            lock = client.get_fenced_lock("my-lock")
+            fence = lock.lock()
+            try:
+                # Critical section
+                print(f"Lock acquired with fence: {fence}")
+            finally:
+                lock.unlock()
+
+        Context manager usage (recommended)::
 
             with lock as fence:
-                # Critical section
+                # Critical section - auto-releases on exit
                 pass
+
+        Using fencing token for zombie detection::
+
+            fence = lock.lock()
+            # Pass fence to external systems
+            external_service.write(data, fence_token=fence)
     """
 
     def __init__(
@@ -87,11 +102,25 @@ class FencedLock(Proxy):
     def lock(self) -> int:
         """Acquire the lock, blocking until available.
 
+        Blocks the current thread until the lock becomes available. If the
+        lock is already held by the current thread, the lock count is
+        incremented (reentrant behavior).
+
         Returns:
-            The fencing token for this lock acquisition.
+            int: The fencing token for this lock acquisition. The token is
+                monotonically increasing and unique per acquisition.
 
         Raises:
             IllegalStateException: If the lock is destroyed.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> fence = lock.lock()
+            >>> try:
+            ...     # Critical section
+            ...     process_with_fence(fence)
+            ... finally:
+            ...     lock.unlock()
         """
         return self.lock_async().result()
 
@@ -99,7 +128,11 @@ class FencedLock(Proxy):
         """Acquire the lock asynchronously.
 
         Returns:
-            A Future that will contain the fencing token.
+            Future: A Future that will contain the fencing token as int.
+
+        Example:
+            >>> future = lock.lock_async()
+            >>> fence = future.result()
         """
         thread_id = self._get_thread_id()
         session_id = self._get_session_id()
@@ -126,11 +159,30 @@ class FencedLock(Proxy):
     def try_lock(self, timeout: float = 0) -> int:
         """Try to acquire the lock with an optional timeout.
 
+        Attempts to acquire the lock, waiting up to the specified timeout
+        if the lock is not immediately available.
+
         Args:
-            timeout: Maximum time to wait in seconds. 0 means no waiting.
+            timeout: Maximum time to wait in seconds. 0 means no waiting
+                (returns immediately).
 
         Returns:
-            The fencing token if acquired, INVALID_FENCE (0) otherwise.
+            int: The fencing token if acquired, INVALID_FENCE (0) if the lock
+                could not be acquired within the timeout.
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> fence = lock.try_lock(timeout=5.0)
+            >>> if fence != INVALID_FENCE:
+            ...     try:
+            ...         # Critical section
+            ...         pass
+            ...     finally:
+            ...         lock.unlock()
+            ... else:
+            ...     print("Could not acquire lock")
         """
         return self.try_lock_async(timeout).result()
 
@@ -138,10 +190,14 @@ class FencedLock(Proxy):
         """Try to acquire the lock asynchronously.
 
         Args:
-            timeout: Maximum time to wait in seconds.
+            timeout: Maximum time to wait in seconds. 0 means no waiting.
 
         Returns:
-            A Future that will contain the fencing token or INVALID_FENCE.
+            Future: A Future that will contain the fencing token or INVALID_FENCE (0).
+
+        Example:
+            >>> future = lock.try_lock_async(timeout=5.0)
+            >>> fence = future.result()
         """
         thread_id = self._get_thread_id()
         session_id = self._get_session_id()
@@ -171,8 +227,20 @@ class FencedLock(Proxy):
     def unlock(self) -> None:
         """Release the lock.
 
+        Decrements the lock count. If the count reaches zero, the lock is
+        released and other threads can acquire it.
+
         Raises:
-            IllegalStateException: If the current thread doesn't hold the lock.
+            IllegalStateException: If the current thread does not hold the lock.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> lock.lock()
+            >>> try:
+            ...     # Critical section
+            ...     pass
+            ... finally:
+            ...     lock.unlock()
         """
         self.unlock_async().result()
 
@@ -180,10 +248,14 @@ class FencedLock(Proxy):
         """Release the lock asynchronously.
 
         Returns:
-            A Future that completes when the lock is released.
+            Future: A Future that completes when the lock is released.
 
         Raises:
-            IllegalStateException: If the current thread doesn't hold the lock.
+            IllegalStateException: If the current thread does not hold the lock.
+
+        Example:
+            >>> future = lock.unlock_async()
+            >>> future.result()
         """
         thread_id = self._get_thread_id()
         session_id = self._get_session_id()
@@ -219,7 +291,14 @@ class FencedLock(Proxy):
         """Check if the lock is currently held by any thread.
 
         Returns:
-            True if the lock is held, False otherwise.
+            bool: True if the lock is held by any thread, False otherwise.
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> if lock.is_locked():
+            ...     print("Lock is currently held")
         """
         return self.is_locked_async().result()
 
@@ -227,7 +306,11 @@ class FencedLock(Proxy):
         """Check if the lock is currently held asynchronously.
 
         Returns:
-            A Future that will contain True if the lock is held.
+            Future: A Future that will contain True if the lock is held.
+
+        Example:
+            >>> future = lock.is_locked_async()
+            >>> is_held = future.result()
         """
         request = FencedLockCodec.encode_get_lock_ownership_state_request(
             self._group_id, self._get_object_name()
@@ -242,8 +325,14 @@ class FencedLock(Proxy):
     def is_locked_by_current_thread(self) -> bool:
         """Check if the lock is held by the current thread.
 
+        This is a local check that does not involve network communication.
+
         Returns:
-            True if the current thread holds the lock.
+            bool: True if the current thread holds the lock.
+
+        Example:
+            >>> if lock.is_locked_by_current_thread():
+            ...     lock.unlock()
         """
         with self._lock:
             return (
@@ -254,8 +343,18 @@ class FencedLock(Proxy):
     def get_lock_count(self) -> int:
         """Get the number of times the lock has been acquired.
 
+        For reentrant locks, this returns the number of times the lock
+        has been acquired without being released.
+
         Returns:
-            The reentrant lock count.
+            int: The reentrant lock count, or 0 if not locked.
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> count = lock.get_lock_count()
+            >>> print(f"Lock held {count} times")
         """
         return self.get_lock_count_async().result()
 
@@ -263,7 +362,11 @@ class FencedLock(Proxy):
         """Get the reentrant lock count asynchronously.
 
         Returns:
-            A Future that will contain the lock count.
+            Future: A Future that will contain the lock count as int.
+
+        Example:
+            >>> future = lock.get_lock_count_async()
+            >>> count = future.result()
         """
         request = FencedLockCodec.encode_get_lock_ownership_state_request(
             self._group_id, self._get_object_name()
@@ -278,8 +381,16 @@ class FencedLock(Proxy):
     def get_fence(self) -> int:
         """Get the current fencing token.
 
+        Returns the fencing token from the most recent lock acquisition
+        by the current thread. This is a local operation.
+
         Returns:
-            The fencing token, or INVALID_FENCE if not locked.
+            int: The fencing token, or INVALID_FENCE (0) if not locked.
+
+        Example:
+            >>> fence = lock.get_fence()
+            >>> if fence != INVALID_FENCE:
+            ...     use_fence(fence)
         """
         with self._lock:
             return self._fence
@@ -288,12 +399,20 @@ class FencedLock(Proxy):
         """Context manager entry - acquires the lock.
 
         Returns:
-            The fencing token.
+            int: The fencing token.
+
+        Example:
+            >>> with lock as fence:
+            ...     # Critical section
+            ...     print(f"Fence: {fence}")
         """
         return self.lock()
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Context manager exit - releases the lock."""
+        """Context manager exit - releases the lock.
+
+        The lock is released even if an exception occurred in the with block.
+        """
         self.unlock()
 
 
@@ -306,13 +425,32 @@ class Semaphore(Proxy):
     The semaphore is initialized with a number of permits. The permit
     count can be dynamically increased or decreased.
 
+    Attributes:
+        name: The name of this Semaphore instance.
+
+    Note:
+        Requires the CP Subsystem to be enabled on the Hazelcast cluster
+        with at least 3 members for fault tolerance.
+
     Example:
-        >>> sem = client.get_semaphore("my-semaphore")
-        >>> sem.init(5)  # Initialize with 5 permits
-        >>> sem.acquire()  # Acquire 1 permit
-        >>> sem.acquire(2)  # Acquire 2 permits
-        >>> print(sem.available_permits())  # 2
-        >>> sem.release(3)  # Release 3 permits
+        Basic semaphore usage::
+
+            sem = client.get_semaphore("my-semaphore")
+            sem.init(5)  # Initialize with 5 permits
+            sem.acquire()  # Acquire 1 permit
+            sem.acquire(2)  # Acquire 2 permits
+            print(sem.available_permits())  # 2
+            sem.release(3)  # Release 3 permits
+
+        Rate limiting::
+
+            rate_limiter = client.get_semaphore("api-rate-limit")
+            rate_limiter.init(100)  # 100 requests per interval
+            if rate_limiter.try_acquire():
+                try:
+                    process_request()
+                finally:
+                    rate_limiter.release()
     """
 
     def __init__(
@@ -351,12 +489,23 @@ class Semaphore(Proxy):
         """Initialize the semaphore with the given number of permits.
 
         This operation is idempotent - it only initializes if not already done.
+        Subsequent calls after successful initialization return False.
 
         Args:
             permits: The initial number of permits. Must be non-negative.
 
         Returns:
-            True if initialization was successful, False if already initialized.
+            bool: True if initialization was successful, False if already initialized.
+
+        Raises:
+            IllegalStateException: If permits is negative.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> if sem.init(10):
+            ...     print("Semaphore initialized with 10 permits")
+            ... else:
+            ...     print("Semaphore was already initialized")
         """
         return self.init_async(permits).result()
 
@@ -364,10 +513,17 @@ class Semaphore(Proxy):
         """Initialize the semaphore asynchronously.
 
         Args:
-            permits: The initial number of permits.
+            permits: The initial number of permits. Must be non-negative.
 
         Returns:
-            A Future that will contain True if initialization was successful.
+            Future: A Future that will contain True if initialization was successful.
+
+        Raises:
+            IllegalStateException: If permits is negative.
+
+        Example:
+            >>> future = sem.init_async(10)
+            >>> was_init = future.result()
         """
         if permits < 0:
             future: Future = Future()
@@ -384,8 +540,19 @@ class Semaphore(Proxy):
     def acquire(self, permits: int = 1) -> None:
         """Acquire permits, blocking until available.
 
+        Blocks until the requested number of permits become available.
+
         Args:
             permits: The number of permits to acquire. Default is 1.
+                Must be positive.
+
+        Raises:
+            IllegalStateException: If permits is less than 1.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> sem.acquire()  # Acquire 1 permit
+            >>> sem.acquire(3)  # Acquire 3 permits
         """
         self.acquire_async(permits).result()
 
@@ -393,10 +560,17 @@ class Semaphore(Proxy):
         """Acquire permits asynchronously.
 
         Args:
-            permits: The number of permits to acquire.
+            permits: The number of permits to acquire. Must be positive.
 
         Returns:
-            A Future that completes when permits are acquired.
+            Future: A Future that completes when permits are acquired.
+
+        Raises:
+            IllegalStateException: If permits is less than 1.
+
+        Example:
+            >>> future = sem.acquire_async(2)
+            >>> future.result()  # Wait for acquisition
         """
         if permits < 1:
             future: Future = Future()
@@ -423,12 +597,31 @@ class Semaphore(Proxy):
     def try_acquire(self, permits: int = 1, timeout: float = 0) -> bool:
         """Try to acquire permits with an optional timeout.
 
+        Attempts to acquire the specified number of permits, waiting up to
+        the timeout if permits are not immediately available.
+
         Args:
             permits: The number of permits to acquire. Default is 1.
-            timeout: Maximum time to wait in seconds. 0 means no waiting.
+                Must be positive.
+            timeout: Maximum time to wait in seconds. 0 means no waiting
+                (returns immediately if permits not available).
 
         Returns:
-            True if permits were acquired, False otherwise.
+            bool: True if permits were acquired, False if timeout expired.
+
+        Raises:
+            IllegalStateException: If permits is less than 1.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> if sem.try_acquire(2, timeout=5.0):
+            ...     try:
+            ...         # Use resources
+            ...         pass
+            ...     finally:
+            ...         sem.release(2)
+            ... else:
+            ...     print("Could not acquire permits")
         """
         return self.try_acquire_async(permits, timeout).result()
 
@@ -436,11 +629,18 @@ class Semaphore(Proxy):
         """Try to acquire permits asynchronously.
 
         Args:
-            permits: The number of permits to acquire.
-            timeout: Maximum time to wait in seconds.
+            permits: The number of permits to acquire. Must be positive.
+            timeout: Maximum time to wait in seconds. 0 means no waiting.
 
         Returns:
-            A Future that will contain True if permits were acquired.
+            Future: A Future that will contain True if permits were acquired.
+
+        Raises:
+            IllegalStateException: If permits is less than 1.
+
+        Example:
+            >>> future = sem.try_acquire_async(2, timeout=5.0)
+            >>> success = future.result()
         """
         if permits < 1:
             future: Future = Future()
@@ -468,8 +668,20 @@ class Semaphore(Proxy):
     def release(self, permits: int = 1) -> None:
         """Release permits back to the semaphore.
 
+        Releases the specified number of permits, making them available
+        to other threads waiting to acquire.
+
         Args:
             permits: The number of permits to release. Default is 1.
+                Must be positive.
+
+        Raises:
+            IllegalStateException: If permits is less than 1.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> sem.release()  # Release 1 permit
+            >>> sem.release(3)  # Release 3 permits
         """
         self.release_async(permits).result()
 
@@ -477,10 +689,17 @@ class Semaphore(Proxy):
         """Release permits asynchronously.
 
         Args:
-            permits: The number of permits to release.
+            permits: The number of permits to release. Must be positive.
 
         Returns:
-            A Future that completes when permits are released.
+            Future: A Future that completes when permits are released.
+
+        Raises:
+            IllegalStateException: If permits is less than 1.
+
+        Example:
+            >>> future = sem.release_async(2)
+            >>> future.result()
         """
         if permits < 1:
             future: Future = Future()
@@ -507,7 +726,14 @@ class Semaphore(Proxy):
         """Get the number of available permits.
 
         Returns:
-            The number of permits currently available.
+            int: The number of permits currently available.
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> available = sem.available_permits()
+            >>> print(f"{available} permits available")
         """
         return self.available_permits_async().result()
 
@@ -515,7 +741,11 @@ class Semaphore(Proxy):
         """Get available permits asynchronously.
 
         Returns:
-            A Future that will contain the available permit count.
+            Future: A Future that will contain the available permit count as int.
+
+        Example:
+            >>> future = sem.available_permits_async()
+            >>> count = future.result()
         """
         request = SemaphoreCodec.encode_available_permits_request(
             self._group_id, self._get_object_name()
@@ -525,8 +755,18 @@ class Semaphore(Proxy):
     def drain_permits(self) -> int:
         """Acquire and return all immediately available permits.
 
+        Acquires all permits that are immediately available without blocking.
+        This is useful for resetting the semaphore.
+
         Returns:
-            The number of permits acquired.
+            int: The number of permits acquired (could be 0).
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> drained = sem.drain_permits()
+            >>> print(f"Drained {drained} permits")
         """
         return self.drain_permits_async().result()
 
@@ -534,7 +774,11 @@ class Semaphore(Proxy):
         """Drain all available permits asynchronously.
 
         Returns:
-            A Future that will contain the number of permits acquired.
+            Future: A Future that will contain the number of permits acquired.
+
+        Example:
+            >>> future = sem.drain_permits_async()
+            >>> count = future.result()
         """
         thread_id = self._get_thread_id()
         session_id = self._get_session_id()
@@ -552,8 +796,18 @@ class Semaphore(Proxy):
     def reduce_permits(self, reduction: int) -> None:
         """Reduce the number of available permits.
 
+        Reduces the available permits by the specified amount. Can make
+        the permit count negative.
+
         Args:
-            reduction: The number of permits to reduce by.
+            reduction: The number of permits to reduce by. Must be non-negative.
+
+        Raises:
+            IllegalStateException: If reduction is negative.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> sem.reduce_permits(5)  # Reduce by 5
         """
         self.reduce_permits_async(reduction).result()
 
@@ -561,10 +815,17 @@ class Semaphore(Proxy):
         """Reduce permits asynchronously.
 
         Args:
-            reduction: The number of permits to reduce by.
+            reduction: The number of permits to reduce by. Must be non-negative.
 
         Returns:
-            A Future that completes when the operation is done.
+            Future: A Future that completes when the operation is done.
+
+        Raises:
+            IllegalStateException: If reduction is negative.
+
+        Example:
+            >>> future = sem.reduce_permits_async(5)
+            >>> future.result()
         """
         if reduction < 0:
             future: Future = Future()
@@ -590,8 +851,17 @@ class Semaphore(Proxy):
     def increase_permits(self, increase: int) -> None:
         """Increase the number of available permits.
 
+        Adds the specified number of permits. This may release waiting threads.
+
         Args:
-            increase: The number of permits to add.
+            increase: The number of permits to add. Must be non-negative.
+
+        Raises:
+            IllegalStateException: If increase is negative.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> sem.increase_permits(10)  # Add 10 permits
         """
         self.increase_permits_async(increase).result()
 
@@ -599,10 +869,17 @@ class Semaphore(Proxy):
         """Increase permits asynchronously.
 
         Args:
-            increase: The number of permits to add.
+            increase: The number of permits to add. Must be non-negative.
 
         Returns:
-            A Future that completes when the operation is done.
+            Future: A Future that completes when the operation is done.
+
+        Raises:
+            IllegalStateException: If increase is negative.
+
+        Example:
+            >>> future = sem.increase_permits_async(10)
+            >>> future.result()
         """
         if increase < 0:
             future: Future = Future()
@@ -636,15 +913,31 @@ class CountDownLatch(Proxy):
     block until the count reaches zero due to invocations of the
     count_down method, after which all waiting threads are released.
 
-    This is a one-shot phenomenon - the count cannot be reset.
+    This is a one-shot phenomenon - the count cannot be reset after
+    reaching zero without creating a new latch.
+
+    Attributes:
+        name: The name of this CountDownLatch instance.
+
+    Note:
+        Requires the CP Subsystem to be enabled on the Hazelcast cluster
+        with at least 3 members for fault tolerance.
 
     Example:
-        >>> latch = client.get_count_down_latch("my-latch")
-        >>> latch.try_set_count(3)
-        >>> # In worker threads:
-        >>> latch.count_down()
-        >>> # In waiting thread:
-        >>> latch.await(timeout=60)
+        Coordinating worker completion::
+
+            latch = client.get_count_down_latch("batch-complete")
+            latch.try_set_count(3)  # Wait for 3 workers
+
+            # In worker threads:
+            # ... do work ...
+            latch.count_down()
+
+            # In coordinator thread:
+            if latch.await_(timeout=60):
+                print("All workers completed")
+            else:
+                print("Timeout waiting for workers")
     """
 
     def __init__(
@@ -671,14 +964,25 @@ class CountDownLatch(Proxy):
     def try_set_count(self, count: int) -> bool:
         """Set the count if it hasn't been set yet.
 
-        This operation can only be performed once. Subsequent calls
-        will return False.
+        This operation can only be performed once per latch lifecycle.
+        Subsequent calls will return False until the latch counts down
+        to zero and is reset.
 
         Args:
             count: The count value. Must be positive.
 
         Returns:
-            True if the count was set, False if already set.
+            bool: True if the count was set, False if already set.
+
+        Raises:
+            IllegalStateException: If count is less than 1.
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> if latch.try_set_count(5):
+            ...     print("Latch initialized to count 5")
+            ... else:
+            ...     print("Latch already initialized")
         """
         return self.try_set_count_async(count).result()
 
@@ -689,7 +993,14 @@ class CountDownLatch(Proxy):
             count: The count value. Must be positive.
 
         Returns:
-            A Future that will contain True if the count was set.
+            Future: A Future that will contain True if the count was set.
+
+        Raises:
+            IllegalStateException: If count is less than 1.
+
+        Example:
+            >>> future = latch.try_set_count_async(5)
+            >>> was_set = future.result()
         """
         if count < 1:
             future: Future = Future()
@@ -707,7 +1018,14 @@ class CountDownLatch(Proxy):
         """Get the current count.
 
         Returns:
-            The current count value.
+            int: The current count value, or 0 if the latch has been released.
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> remaining = latch.get_count()
+            >>> print(f"{remaining} more count_down() calls needed")
         """
         return self.get_count_async().result()
 
@@ -715,7 +1033,11 @@ class CountDownLatch(Proxy):
         """Get the current count asynchronously.
 
         Returns:
-            A Future that will contain the current count.
+            Future: A Future that will contain the current count as int.
+
+        Example:
+            >>> future = latch.get_count_async()
+            >>> count = future.result()
         """
         request = CountDownLatchCodec.encode_get_count_request(
             self._group_id, self._get_object_name()
@@ -726,6 +1048,14 @@ class CountDownLatch(Proxy):
         """Decrement the count by one.
 
         If the count reaches zero, all waiting threads are released.
+        If the count is already zero, this operation has no effect.
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> # Worker signals completion
+            >>> latch.count_down()
         """
         self.count_down_async().result()
 
@@ -733,7 +1063,11 @@ class CountDownLatch(Proxy):
         """Decrement the count asynchronously.
 
         Returns:
-            A Future that completes when the operation is done.
+            Future: A Future that completes when the operation is done.
+
+        Example:
+            >>> future = latch.count_down_async()
+            >>> future.result()
         """
         invocation_uid = int(time.time() * 1000000) % (2**63)
         request = CountDownLatchCodec.encode_count_down_request(
@@ -744,26 +1078,47 @@ class CountDownLatch(Proxy):
     def await_(self, timeout: float = -1) -> bool:
         """Wait for the count to reach zero.
 
+        Blocks until the count reaches zero or the timeout expires.
+
         Args:
             timeout: Maximum time to wait in seconds.
-                     -1 means wait indefinitely.
+                -1 means wait indefinitely.
 
         Returns:
-            True if the count reached zero, False if timed out.
+            bool: True if the count reached zero, False if timed out.
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> # Wait up to 60 seconds for all workers
+            >>> if latch.await_(timeout=60):
+            ...     print("All workers done")
+            ... else:
+            ...     print("Timeout!")
+
+        Note:
+            The method is named ``await_`` with a trailing underscore because
+            ``await`` is a reserved keyword in Python. The ``wait`` alias is
+            also available.
         """
         return self.await_async(timeout).result()
 
-    # Alias for Python keyword conflict
     wait = await_
 
     def await_async(self, timeout: float = -1) -> Future:
         """Wait for the count to reach zero asynchronously.
 
         Args:
-            timeout: Maximum time to wait in seconds.
+            timeout: Maximum time to wait in seconds. -1 means wait indefinitely.
 
         Returns:
-            A Future that will contain True if count reached zero.
+            Future: A Future that will contain True if count reached zero,
+                False if timeout expired.
+
+        Example:
+            >>> future = latch.await_async(timeout=60)
+            >>> completed = future.result()
         """
         invocation_uid = int(time.time() * 1000000) % (2**63)
         timeout_ms = int(timeout * 1000) if timeout >= 0 else -1
@@ -777,10 +1132,18 @@ class CountDownLatch(Proxy):
         """Get the current round number.
 
         The round is incremented each time the latch is reset after
-        reaching zero.
+        reaching zero. This can be used to detect if the latch has
+        been reused.
 
         Returns:
-            The current round number.
+            int: The current round number (starts at 0).
+
+        Raises:
+            HazelcastException: If the operation fails.
+
+        Example:
+            >>> round_num = latch.get_round()
+            >>> print(f"Latch is in round {round_num}")
         """
         return self.get_round_async().result()
 
@@ -788,7 +1151,11 @@ class CountDownLatch(Proxy):
         """Get the round number asynchronously.
 
         Returns:
-            A Future that will contain the round number.
+            Future: A Future that will contain the round number as int.
+
+        Example:
+            >>> future = latch.get_round_async()
+            >>> round_num = future.result()
         """
         request = CountDownLatchCodec.encode_get_round_request(
             self._group_id, self._get_object_name()

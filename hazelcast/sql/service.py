@@ -25,7 +25,19 @@ if TYPE_CHECKING:
 class SqlExplainResult:
     """Result of an EXPLAIN query.
 
-    Contains the query execution plan and related metadata.
+    Contains the query execution plan and related metadata for
+    understanding how Hazelcast will execute a query.
+
+    Attributes:
+        plan: The textual representation of the execution plan.
+        plan_nodes: Structured list of plan nodes (if available).
+        query: The original query that was explained.
+
+    Example:
+        >>> explain = sql.explain("SELECT * FROM users WHERE age > 25")
+        >>> print(explain.plan)
+        >>> for node in explain.plan_nodes:
+        ...     print(node)
     """
 
     def __init__(
@@ -34,23 +46,43 @@ class SqlExplainResult:
         plan_nodes: Optional[List[dict]] = None,
         query: str = "",
     ):
+        """Initialize an explain result.
+
+        Args:
+            plan: The textual execution plan.
+            plan_nodes: Optional list of structured plan node dictionaries.
+            query: The original SQL query.
+        """
         self._plan = plan
         self._plan_nodes = plan_nodes or []
         self._query = query
 
     @property
     def plan(self) -> str:
-        """Get the textual execution plan."""
+        """Get the textual execution plan.
+
+        Returns:
+            str: Human-readable execution plan.
+        """
         return self._plan
 
     @property
     def plan_nodes(self) -> List[dict]:
-        """Get the structured plan nodes."""
+        """Get the structured plan nodes.
+
+        Returns:
+            List[dict]: List of plan node dictionaries with details
+                about each step in the execution plan.
+        """
         return self._plan_nodes
 
     @property
     def query(self) -> str:
-        """Get the original query."""
+        """Get the original query.
+
+        Returns:
+            str: The SQL query that was explained.
+        """
         return self._query
 
     def __str__(self) -> str:
@@ -61,7 +93,30 @@ class SqlExplainResult:
 
 
 class SqlServiceError(HazelcastException):
-    """Exception for SQL-related errors."""
+    """Exception for SQL-related errors.
+
+    Contains detailed error information including error codes and
+    suggestions for fixing common issues.
+
+    Attributes:
+        SQL_ERROR_CODE_CANCELLED: Query was cancelled.
+        SQL_ERROR_CODE_TIMEOUT: Query timed out.
+        SQL_ERROR_CODE_PARSING: SQL parsing error.
+        SQL_ERROR_CODE_GENERIC: Generic SQL error.
+        SQL_ERROR_CODE_DATA: Data-related error.
+        SQL_ERROR_CODE_MAP_DESTROYED: Underlying map was destroyed.
+        SQL_ERROR_CODE_PARTITION_DISTRIBUTION: Partition distribution error.
+        SQL_ERROR_CODE_MAP_LOADING: Map is still loading.
+        SQL_ERROR_CODE_RESTARTABLE: Query can be retried.
+
+    Example:
+        >>> try:
+        ...     result = sql.execute("SELECT * FROM nonexistent")
+        ... except SqlServiceError as e:
+        ...     print(f"Error code: {e.code}")
+        ...     if e.suggestion:
+        ...         print(f"Suggestion: {e.suggestion}")
+    """
 
     SQL_ERROR_CODE_CANCELLED = -1
     SQL_ERROR_CODE_TIMEOUT = -2
@@ -80,6 +135,14 @@ class SqlServiceError(HazelcastException):
         originating_member_id: Optional[str] = None,
         suggestion: Optional[str] = None,
     ):
+        """Initialize an SQL service error.
+
+        Args:
+            message: The error message.
+            code: The SQL error code.
+            originating_member_id: UUID of the member where error occurred.
+            suggestion: Optional suggestion for fixing the error.
+        """
         super().__init__(message)
         self._code = code
         self._originating_member_id = originating_member_id
@@ -87,17 +150,29 @@ class SqlServiceError(HazelcastException):
 
     @property
     def code(self) -> int:
-        """Get the error code."""
+        """Get the error code.
+
+        Returns:
+            int: One of the SQL_ERROR_CODE_* constants.
+        """
         return self._code
 
     @property
     def originating_member_id(self) -> Optional[str]:
-        """Get the ID of the member where the error originated."""
+        """Get the ID of the member where the error originated.
+
+        Returns:
+            Optional[str]: The member UUID, or None if unknown.
+        """
         return self._originating_member_id
 
     @property
     def suggestion(self) -> Optional[str]:
-        """Get a suggestion for fixing the error."""
+        """Get a suggestion for fixing the error.
+
+        Returns:
+            Optional[str]: A helpful suggestion, or None if not available.
+        """
         return self._suggestion
 
     def __str__(self) -> str:
@@ -115,6 +190,34 @@ class SqlService:
     Provides methods to execute SQL queries, both synchronously
     and asynchronously, with support for parameterized queries,
     EXPLAIN plans, and streaming results with backpressure.
+
+    Example:
+        Basic query::
+
+            sql = client.get_sql()
+            result = sql.execute("SELECT * FROM users WHERE age > ?", 25)
+            for row in result:
+                print(row.to_dict())
+
+        With statement options::
+
+            result = sql.execute(
+                "SELECT * FROM users",
+                timeout=30.0,
+                cursor_buffer_size=1000,
+            )
+
+        Using SqlStatement::
+
+            stmt = SqlStatement("SELECT * FROM users WHERE dept = ?")
+            stmt.add_parameter("engineering")
+            stmt.timeout = 60.0
+            result = sql.execute_statement(stmt)
+
+        Explain query plan::
+
+            explain = sql.explain("SELECT * FROM users ORDER BY age")
+            print(explain.plan)
     """
 
     _EXPECTED_RESULT_TYPE_MAP = {
@@ -169,16 +272,27 @@ class SqlService:
         self._default_cursor_buffer_size = default_cursor_buffer_size
 
     def start(self) -> None:
-        """Start the SQL service."""
+        """Start the SQL service.
+
+        Called internally by the client during startup.
+        """
         self._running = True
 
     def shutdown(self) -> None:
-        """Shutdown the SQL service."""
+        """Shutdown the SQL service.
+
+        Cancels all active queries and releases resources.
+        Called internally during client shutdown.
+        """
         self._running = False
 
     @property
     def is_running(self) -> bool:
-        """Check if the service is running."""
+        """Check if the service is running.
+
+        Returns:
+            bool: True if the service is running and can execute queries.
+        """
         return self._running
 
     def explain(
@@ -189,17 +303,26 @@ class SqlService:
     ) -> SqlExplainResult:
         """Get the execution plan for an SQL query.
 
+        Returns the query execution plan without actually executing the query.
+        Useful for understanding how Hazelcast will process a query.
+
         Args:
             sql: The SQL query string.
             *params: Positional parameters for the query.
-            schema: Default schema name.
+            schema: Default schema name for resolving table names.
 
         Returns:
-            SqlExplainResult containing the query plan.
+            SqlExplainResult: Contains the query plan and metadata.
 
         Raises:
             SqlServiceError: If the explain fails.
             IllegalStateException: If the service is not running.
+
+        Example:
+            >>> explain = sql.explain(
+            ...     "SELECT * FROM users WHERE age > ?", 25
+            ... )
+            >>> print(explain.plan)
         """
         if not self._running:
             raise IllegalStateException("SQL service is not running")
@@ -269,20 +392,33 @@ class SqlService:
         """Execute an SQL query.
 
         Args:
-            sql: The SQL query string.
-            *params: Positional parameters for the query.
-            timeout: Query timeout in seconds. -1 for infinite.
-            cursor_buffer_size: Number of rows to buffer.
-            schema: Default schema name.
-            expected_result_type: Expected result type.
+            sql: The SQL query string. Use ``?`` for parameter placeholders.
+            *params: Positional parameters for the query, in order.
+            timeout: Query timeout in seconds. -1 for infinite timeout.
+            cursor_buffer_size: Number of rows to buffer per fetch.
+            schema: Default schema name for resolving table names.
+            expected_result_type: Expected result type for validation.
             convert_types: If True, convert values to Python types.
 
         Returns:
-            SqlResult for iterating over results.
+            SqlResult: For iterating over rows (SELECT) or getting update count (DML).
 
         Raises:
             SqlServiceError: If the query execution fails.
             IllegalStateException: If the service is not running.
+
+        Example:
+            >>> # SELECT query
+            >>> result = sql.execute("SELECT * FROM users WHERE age > ?", 25)
+            >>> for row in result:
+            ...     print(row["name"])
+            ...
+            >>> # DML query
+            >>> result = sql.execute(
+            ...     "UPDATE users SET status = ? WHERE id = ?",
+            ...     "active", 123
+            ... )
+            >>> print(f"Updated {result.update_count} rows")
         """
         statement = SqlStatement(sql)
         statement.set_parameters(*params)

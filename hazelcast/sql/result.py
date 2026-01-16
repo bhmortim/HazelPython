@@ -13,7 +13,34 @@ if TYPE_CHECKING:
 
 
 class SqlColumnType(Enum):
-    """SQL column data types."""
+    """SQL column data types.
+
+    Represents the data type of a column in an SQL result set.
+    Each type corresponds to a standard SQL type and maps to
+    a specific Python type.
+
+    Attributes:
+        VARCHAR: Variable-length string (Python ``str``).
+        BOOLEAN: Boolean value (Python ``bool``).
+        TINYINT: 8-bit signed integer (Python ``int``).
+        SMALLINT: 16-bit signed integer (Python ``int``).
+        INTEGER: 32-bit signed integer (Python ``int``).
+        BIGINT: 64-bit signed integer (Python ``int``).
+        DECIMAL: Arbitrary precision decimal (Python ``Decimal``).
+        REAL: 32-bit floating point (Python ``float``).
+        DOUBLE: 64-bit floating point (Python ``float``).
+        DATE: Date without time (Python ``date``).
+        TIME: Time without date (Python ``time``).
+        TIMESTAMP: Timestamp without timezone (Python ``datetime``).
+        TIMESTAMP_WITH_TIME_ZONE: Timestamp with timezone (Python ``datetime``).
+        OBJECT: Arbitrary serializable object (Python ``object``).
+        NULL: Null type (Python ``None``).
+        JSON: JSON data (Python ``dict``, ``list``, or ``str``).
+
+    Example:
+        >>> for col in result.metadata.columns:
+        ...     print(f"{col.name}: {col.type.value}")
+    """
 
     VARCHAR = "VARCHAR"
     BOOLEAN = "BOOLEAN"
@@ -120,7 +147,19 @@ def convert_sql_value(value: Any, column_type: SqlColumnType) -> Any:
 
 
 class SqlColumnMetadata:
-    """Metadata for a single SQL column."""
+    """Metadata for a single SQL column.
+
+    Contains information about a column's name, type, and nullability.
+
+    Attributes:
+        name: The column name.
+        type: The SQL data type of the column.
+        nullable: Whether the column can contain NULL values.
+
+    Example:
+        >>> col = result.metadata.get_column(0)
+        >>> print(f"Column: {col.name}, Type: {col.type.value}")
+    """
 
     def __init__(
         self,
@@ -128,23 +167,42 @@ class SqlColumnMetadata:
         column_type: SqlColumnType,
         nullable: bool = True,
     ):
+        """Initialize column metadata.
+
+        Args:
+            name: The column name.
+            column_type: The SQL data type.
+            nullable: Whether the column allows NULL values.
+        """
         self._name = name
         self._type = column_type
         self._nullable = nullable
 
     @property
     def name(self) -> str:
-        """Get the column name."""
+        """Get the column name.
+
+        Returns:
+            str: The column name as defined in the query or table schema.
+        """
         return self._name
 
     @property
     def type(self) -> SqlColumnType:
-        """Get the column type."""
+        """Get the column type.
+
+        Returns:
+            SqlColumnType: The SQL data type of this column.
+        """
         return self._type
 
     @property
     def nullable(self) -> bool:
-        """Check if the column is nullable."""
+        """Check if the column is nullable.
+
+        Returns:
+            bool: True if the column can contain NULL values.
+        """
         return self._nullable
 
     def __repr__(self) -> str:
@@ -157,9 +215,25 @@ class SqlColumnMetadata:
 
 
 class SqlRowMetadata:
-    """Metadata for SQL result rows."""
+    """Metadata for SQL result rows.
+
+    Provides access to column information for an SQL result set.
+
+    Example:
+        >>> metadata = result.metadata
+        >>> print(f"Columns: {metadata.column_count}")
+        >>> for name in metadata.get_column_names():
+        ...     idx = metadata.find_column(name)
+        ...     col = metadata.get_column(idx)
+        ...     print(f"  {name}: {col.type.value}")
+    """
 
     def __init__(self, columns: List[SqlColumnMetadata]):
+        """Initialize row metadata.
+
+        Args:
+            columns: List of column metadata objects.
+        """
         self._columns = columns
         self._name_to_index: Dict[str, int] = {
             col.name: i for i, col in enumerate(columns)
@@ -167,12 +241,20 @@ class SqlRowMetadata:
 
     @property
     def columns(self) -> List[SqlColumnMetadata]:
-        """Get all column metadata."""
+        """Get all column metadata.
+
+        Returns:
+            List[SqlColumnMetadata]: A copy of the column metadata list.
+        """
         return list(self._columns)
 
     @property
     def column_count(self) -> int:
-        """Get the number of columns."""
+        """Get the number of columns.
+
+        Returns:
+            int: The number of columns in each row.
+        """
         return len(self._columns)
 
     def get_column(self, index: int) -> SqlColumnMetadata:
@@ -182,10 +264,14 @@ class SqlRowMetadata:
             index: The column index (0-based).
 
         Returns:
-            Column metadata.
+            SqlColumnMetadata: The metadata for the specified column.
 
         Raises:
             IndexError: If index is out of range.
+
+        Example:
+            >>> col = metadata.get_column(0)
+            >>> print(col.name)
         """
         return self._columns[index]
 
@@ -193,10 +279,15 @@ class SqlRowMetadata:
         """Find column index by name.
 
         Args:
-            name: The column name.
+            name: The column name (case-sensitive).
 
         Returns:
-            Column index, or -1 if not found.
+            int: Column index (0-based), or -1 if not found.
+
+        Example:
+            >>> idx = metadata.find_column("user_id")
+            >>> if idx >= 0:
+            ...     value = row.get_object(idx)
         """
         return self._name_to_index.get(name, -1)
 
@@ -204,7 +295,11 @@ class SqlRowMetadata:
         """Get all column names in order.
 
         Returns:
-            List of column names.
+            List[str]: List of column names.
+
+        Example:
+            >>> names = metadata.get_column_names()
+            >>> print(", ".join(names))
         """
         return [col.name for col in self._columns]
 
@@ -212,7 +307,10 @@ class SqlRowMetadata:
         """Get all column types in order.
 
         Returns:
-            List of column types.
+            List[SqlColumnType]: List of column types.
+
+        Example:
+            >>> types = metadata.get_column_types()
         """
         return [col.type for col in self._columns]
 
@@ -226,7 +324,28 @@ class SqlRowMetadata:
 
 
 class SqlRow:
-    """A single row in an SQL result set."""
+    """A single row in an SQL result set.
+
+    Provides access to column values by index or name. Supports
+    iteration, indexing, and conversion to dict/tuple formats.
+
+    Example:
+        Accessing values::
+
+            for row in result:
+                # By index
+                id_val = row[0]
+                # By name
+                name_val = row["name"]
+                # Using methods
+                age = row.get_object(2)
+                status = row.get_object_by_name("status")
+
+        Converting to other formats::
+
+            row_dict = row.to_dict()
+            row_tuple = row.to_tuple()
+    """
 
     def __init__(
         self,
@@ -234,6 +353,14 @@ class SqlRow:
         metadata: SqlRowMetadata,
         convert_types: bool = False,
     ):
+        """Initialize an SQL row.
+
+        Args:
+            values: List of column values.
+            metadata: Row metadata describing the columns.
+            convert_types: If True, convert values to Python types based
+                on column metadata.
+        """
         self._metadata = metadata
         if convert_types:
             self._values = self._convert_values(values)
@@ -253,7 +380,11 @@ class SqlRow:
 
     @property
     def metadata(self) -> SqlRowMetadata:
-        """Get the row metadata."""
+        """Get the row metadata.
+
+        Returns:
+            SqlRowMetadata: The metadata describing this row's columns.
+        """
         return self._metadata
 
     def get_object(self, index: int) -> Any:
@@ -263,10 +394,13 @@ class SqlRow:
             index: The column index (0-based).
 
         Returns:
-            The column value.
+            Any: The column value, or None if the value is NULL.
 
         Raises:
             IndexError: If index is out of range.
+
+        Example:
+            >>> first_col = row.get_object(0)
         """
         return self._values[index]
 
@@ -274,13 +408,16 @@ class SqlRow:
         """Get a value by column name.
 
         Args:
-            name: The column name.
+            name: The column name (case-sensitive).
 
         Returns:
-            The column value.
+            Any: The column value, or None if the value is NULL.
 
         Raises:
             KeyError: If column name is not found.
+
+        Example:
+            >>> user_id = row.get_object_by_name("user_id")
         """
         index = self._metadata.find_column(name)
         if index < 0:
@@ -291,10 +428,15 @@ class SqlRow:
         """Convert the row to a dictionary.
 
         Args:
-            convert_types: If True, convert values to Python types.
+            convert_types: If True, convert values to Python types based
+                on column metadata.
 
         Returns:
-            Dictionary mapping column names to values.
+            Dict[str, Any]: Dictionary mapping column names to values.
+
+        Example:
+            >>> row_data = row.to_dict()
+            >>> print(row_data["name"])
         """
         columns = self._metadata.columns
         result = {}
@@ -309,7 +451,11 @@ class SqlRow:
         """Convert the row to a tuple of values.
 
         Returns:
-            Tuple containing all column values in order.
+            tuple: Tuple containing all column values in order.
+
+        Example:
+            >>> values = row.to_tuple()
+            >>> id, name, age = values
         """
         return tuple(self._values)
 
@@ -317,7 +463,10 @@ class SqlRow:
         """Convert the row to a list of values.
 
         Returns:
-            List containing all column values in order.
+            List[Any]: List containing all column values in order.
+
+        Example:
+            >>> values = row.to_list()
         """
         return list(self._values)
 
@@ -347,8 +496,23 @@ class SqlRow:
 class SqlPage:
     """A page of SQL result rows.
 
-    Represents a batch of rows fetched from the server,
-    useful for paginated result processing.
+    Represents a batch of rows fetched from the server, useful for
+    paginated result processing with control over memory usage.
+
+    Attributes:
+        rows: The rows in this page.
+        metadata: The row metadata.
+        is_last: Whether this is the last page.
+        page_number: The page number (0-based).
+        row_count: The number of rows in this page.
+
+    Example:
+        >>> for page in result.pages():
+        ...     print(f"Page {page.page_number}: {page.row_count} rows")
+        ...     for row in page:
+        ...         process(row)
+        ...     if page.is_last:
+        ...         break
     """
 
     def __init__(
@@ -358,6 +522,14 @@ class SqlPage:
         is_last: bool = False,
         page_number: int = 0,
     ):
+        """Initialize an SQL page.
+
+        Args:
+            rows: List of rows in this page.
+            metadata: Row metadata (optional).
+            is_last: Whether this is the last page.
+            page_number: The page number (0-based).
+        """
         self._rows = rows
         self._metadata = metadata
         self._is_last = is_last
@@ -365,27 +537,47 @@ class SqlPage:
 
     @property
     def rows(self) -> List[SqlRow]:
-        """Get the rows in this page."""
+        """Get the rows in this page.
+
+        Returns:
+            List[SqlRow]: The list of rows.
+        """
         return self._rows
 
     @property
     def metadata(self) -> Optional[SqlRowMetadata]:
-        """Get the row metadata."""
+        """Get the row metadata.
+
+        Returns:
+            Optional[SqlRowMetadata]: The metadata, or None if not available.
+        """
         return self._metadata
 
     @property
     def is_last(self) -> bool:
-        """Check if this is the last page."""
+        """Check if this is the last page.
+
+        Returns:
+            bool: True if no more pages are available.
+        """
         return self._is_last
 
     @property
     def page_number(self) -> int:
-        """Get the page number (0-based)."""
+        """Get the page number (0-based).
+
+        Returns:
+            int: The page number.
+        """
         return self._page_number
 
     @property
     def row_count(self) -> int:
-        """Get the number of rows in this page."""
+        """Get the number of rows in this page.
+
+        Returns:
+            int: The row count.
+        """
         return len(self._rows)
 
     def to_dicts(self, convert_types: bool = False) -> List[Dict[str, Any]]:
@@ -395,7 +587,12 @@ class SqlPage:
             convert_types: If True, convert values to Python types.
 
         Returns:
-            List of dictionaries.
+            List[Dict[str, Any]]: List of dictionaries, one per row.
+
+        Example:
+            >>> records = page.to_dicts()
+            >>> for rec in records:
+            ...     print(rec["name"])
         """
         return [row.to_dict(convert_types) for row in self._rows]
 
@@ -403,7 +600,10 @@ class SqlPage:
         """Convert all rows to tuples.
 
         Returns:
-            List of tuples.
+            List[tuple]: List of tuples, one per row.
+
+        Example:
+            >>> tuples = page.to_tuples()
         """
         return [row.to_tuple() for row in self._rows]
 
@@ -426,11 +626,45 @@ class SqlPage:
 class SqlResult:
     """Result of an SQL query execution.
 
-    Supports iteration over rows for SELECT queries,
-    or provides update count for DML queries.
+    Supports iteration over rows for SELECT queries, or provides
+    update count for DML queries. Provides both synchronous and
+    asynchronous iteration with backpressure support for streaming
+    results.
 
-    Provides both synchronous and asynchronous iteration,
-    with backpressure support for streaming results.
+    The result must be closed when done to release server-side resources.
+    Use as a context manager for automatic cleanup.
+
+    Attributes:
+        query_id: Unique identifier for this query.
+        metadata: Row metadata (for SELECT queries).
+        update_count: Number of affected rows (for DML queries, -1 for SELECT).
+        is_row_set: True if this result contains rows.
+        is_closed: True if the result has been closed.
+
+    Example:
+        Iterating over rows::
+
+            result = sql.execute("SELECT * FROM users")
+            for row in result:
+                print(row["name"])
+            result.close()
+
+        Context manager (recommended)::
+
+            with sql.execute("SELECT * FROM users") as result:
+                for row in result:
+                    print(row["name"])
+
+        Async iteration::
+
+            async with sql.execute_async("SELECT * FROM users") as result:
+                async for row in result:
+                    print(row["name"])
+
+        Getting update count::
+
+            result = sql.execute("DELETE FROM users WHERE status = ?", "inactive")
+            print(f"Deleted {result.update_count} rows")
     """
 
     def __init__(
