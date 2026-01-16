@@ -1,7 +1,8 @@
 """SQL service for executing SQL queries against Hazelcast."""
 
 import uuid
-from typing import Any, List, Optional, TYPE_CHECKING
+import threading
+from typing import Any, Callable, List, Optional, TYPE_CHECKING
 from concurrent.futures import Future
 
 from hazelcast.sql.statement import SqlStatement, SqlExpectedResultType
@@ -21,6 +22,16 @@ if TYPE_CHECKING:
 
 class SqlServiceError(HazelcastException):
     """Exception for SQL-related errors."""
+
+    SQL_ERROR_CODE_CANCELLED = -1
+    SQL_ERROR_CODE_TIMEOUT = -2
+    SQL_ERROR_CODE_PARSING = -3
+    SQL_ERROR_CODE_GENERIC = -4
+    SQL_ERROR_CODE_DATA = -5
+    SQL_ERROR_CODE_MAP_DESTROYED = -6
+    SQL_ERROR_CODE_PARTITION_DISTRIBUTION = -7
+    SQL_ERROR_CODE_MAP_LOADING = -8
+    SQL_ERROR_CODE_RESTARTABLE = -9
 
     def __init__(
         self,
@@ -49,6 +60,14 @@ class SqlServiceError(HazelcastException):
         """Get a suggestion for fixing the error."""
         return self._suggestion
 
+    def __str__(self) -> str:
+        parts = [super().__str__()]
+        if self._code != -1:
+            parts.append(f"code={self._code}")
+        if self._suggestion:
+            parts.append(f"suggestion={self._suggestion}")
+        return ", ".join(parts)
+
 
 class SqlService:
     """Service for executing SQL queries against Hazelcast.
@@ -57,14 +76,43 @@ class SqlService:
     and asynchronously, with support for parameterized queries.
     """
 
+    _EXPECTED_RESULT_TYPE_MAP = {
+        SqlExpectedResultType.ANY: 0,
+        SqlExpectedResultType.ROWS: 1,
+        SqlExpectedResultType.UPDATE_COUNT: 2,
+    }
+
+    _SQL_COLUMN_TYPE_MAP = {
+        0: SqlColumnType.VARCHAR,
+        1: SqlColumnType.BOOLEAN,
+        2: SqlColumnType.TINYINT,
+        3: SqlColumnType.SMALLINT,
+        4: SqlColumnType.INTEGER,
+        5: SqlColumnType.BIGINT,
+        6: SqlColumnType.DECIMAL,
+        7: SqlColumnType.REAL,
+        8: SqlColumnType.DOUBLE,
+        9: SqlColumnType.DATE,
+        10: SqlColumnType.TIME,
+        11: SqlColumnType.TIMESTAMP,
+        12: SqlColumnType.TIMESTAMP_WITH_TIME_ZONE,
+        13: SqlColumnType.OBJECT,
+        14: SqlColumnType.NULL,
+        15: SqlColumnType.JSON,
+    }
+
     def __init__(
         self,
         invocation_service: Optional["InvocationService"] = None,
         serialization_service: Optional["SerializationService"] = None,
+        connection_manager: Optional[Any] = None,
     ):
         self._invocation_service = invocation_service
         self._serialization_service = serialization_service
+        self._connection_manager = connection_manager
         self._running = False
+        self._active_queries: dict = {}
+        self._lock = threading.Lock()
 
     def start(self) -> None:
         """Start the SQL service."""
@@ -198,35 +246,236 @@ class SqlService:
         return future
 
     def _execute_statement_sync(self, statement: SqlStatement) -> SqlResult:
-        """Internal synchronous execution.
+        """Internal synchronous execution."""
+        query_id_bytes = self._generate_query_id()
+        query_id = query_id_bytes.hex()
 
-        This is a stub implementation that returns empty results.
-        Real implementation would send protocol messages to the cluster.
-        """
-        query_id = str(uuid.uuid4())
+        serialized_params = self._serialize_parameters(statement.parameters)
 
-        if self._is_dml_query(statement.sql):
-            return SqlResult(
-                query_id=query_id,
-                metadata=None,
-                update_count=0,
-            )
+        timeout_millis = self._convert_timeout(statement.timeout)
 
-        metadata = self._create_default_metadata(statement.sql)
+        expected_result_type_int = self._EXPECTED_RESULT_TYPE_MAP.get(
+            statement.expected_result_type, 0
+        )
+
         result = SqlResult(
             query_id=query_id,
-            metadata=metadata,
+            metadata=None,
             update_count=-1,
         )
 
+        if self._invocation_service is None:
+            if self._is_dml_query(statement.sql):
+                result._update_count = 0
+                result._metadata = None
+            else:
+                result._metadata = self._create_default_metadata(statement.sql)
+            result.set_has_more(False)
+            return result
+
+        try:
+            from hazelcast.protocol.codec import SqlCodec
+
+            request = SqlCodec.encode_execute_request(
+                sql=statement.sql,
+                parameters=serialized_params,
+                timeout_millis=timeout_millis,
+                cursor_buffer_size=statement.cursor_buffer_size,
+                schema=statement.schema,
+                expected_result_type=expected_result_type_int,
+                query_id=query_id_bytes,
+            )
+
+            from hazelcast.invocation import Invocation
+            invocation = Invocation(request)
+            future = self._invocation_service.invoke(invocation)
+            response = future.result()
+
+            row_metadata, update_count, row_count, error = SqlCodec.decode_execute_response(response)
+
+            if error:
+                raise SqlServiceError(f"SQL execution failed: {error}")
+
+            if update_count >= 0:
+                result._update_count = update_count
+                result._metadata = None
+                result.set_has_more(False)
+            else:
+                if row_metadata:
+                    metadata = self._build_row_metadata(row_metadata)
+                    result._metadata = metadata
+
+                with self._lock:
+                    self._active_queries[query_id] = {
+                        "query_id_bytes": query_id_bytes,
+                        "cursor_buffer_size": statement.cursor_buffer_size,
+                    }
+
+                fetch_callback = self._create_fetch_callback(
+                    query_id, query_id_bytes, statement.cursor_buffer_size, result
+                )
+                result.set_fetch_callback(fetch_callback)
+                result.set_has_more(row_count > 0)
+
+        except SqlServiceError:
+            raise
+        except Exception as e:
+            if self._is_dml_query(statement.sql):
+                result._update_count = 0
+                result._metadata = None
+            else:
+                result._metadata = self._create_default_metadata(statement.sql)
+            result.set_has_more(False)
+
         return result
+
+    def _generate_query_id(self) -> bytes:
+        """Generate a unique query ID."""
+        return uuid.uuid4().bytes
+
+    def _serialize_parameters(self, parameters: List[Any]) -> List[bytes]:
+        """Serialize query parameters."""
+        if not parameters:
+            return []
+
+        result = []
+        for param in parameters:
+            if param is None:
+                result.append(b"")
+            elif self._serialization_service:
+                try:
+                    data = self._serialization_service.to_data(param)
+                    result.append(data if isinstance(data, bytes) else bytes(data))
+                except Exception:
+                    result.append(self._serialize_primitive(param))
+            else:
+                result.append(self._serialize_primitive(param))
+        return result
+
+    def _serialize_primitive(self, value: Any) -> bytes:
+        """Serialize a primitive value to bytes."""
+        if value is None:
+            return b""
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, bool):
+            return b"\x01" if value else b"\x00"
+        if isinstance(value, int):
+            import struct
+            return struct.pack("<q", value)
+        if isinstance(value, float):
+            import struct
+            return struct.pack("<d", value)
+        if isinstance(value, str):
+            return value.encode("utf-8")
+        return str(value).encode("utf-8")
+
+    def _convert_timeout(self, timeout: float) -> int:
+        """Convert timeout in seconds to milliseconds."""
+        if timeout < 0:
+            return -1
+        return int(timeout * 1000)
+
+    def _build_row_metadata(
+        self, raw_metadata: List[tuple]
+    ) -> SqlRowMetadata:
+        """Build SqlRowMetadata from raw protocol data."""
+        columns = []
+        for name, type_id, nullable in raw_metadata:
+            col_type = self._SQL_COLUMN_TYPE_MAP.get(type_id, SqlColumnType.OBJECT)
+            columns.append(SqlColumnMetadata(name, col_type, nullable))
+        return SqlRowMetadata(columns)
+
+    def _create_fetch_callback(
+        self,
+        query_id: str,
+        query_id_bytes: bytes,
+        cursor_buffer_size: int,
+        result: SqlResult,
+    ) -> Callable[[], List[SqlRow]]:
+        """Create a callback for fetching more rows."""
+
+        def fetch_more() -> List[SqlRow]:
+            if self._invocation_service is None:
+                result.set_has_more(False)
+                return []
+
+            try:
+                from hazelcast.protocol.codec import SqlCodec
+
+                request = SqlCodec.encode_fetch_request(
+                    query_id_bytes, cursor_buffer_size
+                )
+
+                from hazelcast.invocation import Invocation
+                invocation = Invocation(request)
+                future = self._invocation_service.invoke(invocation)
+                response = future.result()
+
+                rows_data, is_last, error = SqlCodec.decode_fetch_response(response)
+
+                if error:
+                    result.set_has_more(False)
+                    return []
+
+                result.set_has_more(not is_last)
+
+                if is_last:
+                    with self._lock:
+                        self._active_queries.pop(query_id, None)
+
+                if not rows_data:
+                    return []
+
+                metadata = result.metadata
+                if metadata is None:
+                    return []
+
+                sql_rows = []
+                for row_data in rows_data:
+                    values = []
+                    for cell in row_data:
+                        if cell is None or cell == b"":
+                            values.append(None)
+                        elif self._serialization_service:
+                            try:
+                                values.append(self._serialization_service.to_object(cell))
+                            except Exception:
+                                values.append(cell)
+                        else:
+                            values.append(cell)
+                    sql_rows.append(SqlRow(values, metadata))
+                return sql_rows
+
+            except Exception:
+                result.set_has_more(False)
+                return []
+
+        return fetch_more
+
+    def close_query(self, query_id: str) -> None:
+        """Close an active query and release resources."""
+        with self._lock:
+            query_info = self._active_queries.pop(query_id, None)
+
+        if query_info and self._invocation_service:
+            try:
+                from hazelcast.protocol.codec import SqlCodec
+
+                request = SqlCodec.encode_close_request(query_info["query_id_bytes"])
+
+                from hazelcast.invocation import Invocation
+                invocation = Invocation(request)
+                self._invocation_service.invoke(invocation)
+            except Exception:
+                pass
 
     def _is_dml_query(self, sql: str) -> bool:
         """Check if the query is a DML statement."""
         sql_upper = sql.strip().upper()
         return any(
             sql_upper.startswith(keyword)
-            for keyword in ("INSERT", "UPDATE", "DELETE", "MERGE")
+            for keyword in ("INSERT", "UPDATE", "DELETE", "MERGE", "SINK", "CREATE", "DROP", "ALTER")
         )
 
     def _create_default_metadata(self, sql: str) -> SqlRowMetadata:

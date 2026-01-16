@@ -4100,6 +4100,201 @@ class CountDownLatchCodec:
         return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
 
 
+# SQL protocol constants
+SQL_EXECUTE = 0x210100
+SQL_FETCH = 0x210300
+SQL_CLOSE = 0x210400
+
+SQL_ERROR_CODE_CANCELLED = -1
+SQL_ERROR_CODE_TIMEOUT = -2
+SQL_ERROR_CODE_PARSING = -3
+SQL_ERROR_CODE_GENERIC = -4
+
+
+class SqlCodec:
+    """Codec for SQL protocol messages."""
+
+    @staticmethod
+    def encode_execute_request(
+        sql: str,
+        parameters: List[bytes],
+        timeout_millis: int,
+        cursor_buffer_size: int,
+        schema: Optional[str],
+        expected_result_type: int,
+        query_id: bytes,
+        skip_update_statistics: bool = False,
+    ) -> "ClientMessage":
+        """Encode a SQL.execute request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE + INT_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, SQL_EXECUTE)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, timeout_millis)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, cursor_buffer_size)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, expected_result_type)
+        offset += INT_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if skip_update_statistics else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, sql)
+        _encode_data_list(msg, parameters)
+        if schema is not None:
+            StringCodec.encode(msg, schema)
+        else:
+            msg.add_frame(NULL_FRAME)
+        msg.add_frame(Frame(query_id))
+        return msg
+
+    @staticmethod
+    def decode_execute_response(
+        msg: "ClientMessage",
+    ) -> Tuple[Optional[List[Tuple[str, int, bool]]], Optional[int], int, Optional[bytes]]:
+        """Decode a SQL.execute response.
+
+        Returns:
+            Tuple of (row_metadata, update_count, row_page_count, error).
+            row_metadata is list of (name, type, nullable) tuples.
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return None, -1, 0, None
+
+        offset = RESPONSE_HEADER_SIZE
+        update_count = struct.unpack_from("<q", frame.content, offset)[0]
+
+        row_metadata = SqlCodec._decode_row_metadata(msg)
+        row_page = SqlCodec._decode_row_page(msg)
+
+        return row_metadata, update_count, len(row_page) if row_page else 0, None
+
+    @staticmethod
+    def _decode_row_metadata(
+        msg: "ClientMessage",
+    ) -> Optional[List[Tuple[str, int, bool]]]:
+        """Decode row metadata from response."""
+        frame = msg.peek_next_frame()
+        if frame is None or frame.is_null_frame:
+            msg.skip_frame()
+            return None
+
+        result = []
+        msg.next_frame()
+
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.next_frame()
+                break
+
+            name_frame = msg.next_frame()
+            if name_frame is None:
+                break
+            name = name_frame.content.decode("utf-8")
+
+            type_frame = msg.next_frame()
+            if type_frame is None:
+                break
+            col_type = struct.unpack_from("<i", type_frame.content, 0)[0] if len(type_frame.content) >= INT_SIZE else 0
+
+            nullable_frame = msg.next_frame()
+            nullable = True
+            if nullable_frame is not None and len(nullable_frame.content) >= BOOLEAN_SIZE:
+                nullable = struct.unpack_from("<B", nullable_frame.content, 0)[0] != 0
+
+            result.append((name, col_type, nullable))
+
+        return result if result else None
+
+    @staticmethod
+    def _decode_row_page(msg: "ClientMessage") -> List[List[bytes]]:
+        """Decode a page of rows from response."""
+        frame = msg.peek_next_frame()
+        if frame is None or frame.is_null_frame:
+            msg.skip_frame()
+            return []
+
+        rows = []
+        msg.next_frame()
+
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.next_frame()
+                break
+
+            row = []
+            msg.next_frame()
+            while msg.has_next_frame():
+                cell_frame = msg.peek_next_frame()
+                if cell_frame is None or cell_frame.is_end_data_structure_frame:
+                    msg.next_frame()
+                    break
+                cell = msg.next_frame()
+                if cell is not None:
+                    row.append(cell.content if not cell.is_null_frame else None)
+            rows.append(row)
+
+        return rows
+
+    @staticmethod
+    def encode_fetch_request(
+        query_id: bytes,
+        cursor_buffer_size: int,
+    ) -> "ClientMessage":
+        """Encode a SQL.fetch request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, SQL_FETCH)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, cursor_buffer_size)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        msg.add_frame(Frame(query_id))
+        return msg
+
+    @staticmethod
+    def decode_fetch_response(msg: "ClientMessage") -> Tuple[List[List[bytes]], bool, Optional[bytes]]:
+        """Decode a SQL.fetch response.
+
+        Returns:
+            Tuple of (rows, is_last, error).
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return [], True, None
+
+        rows = SqlCodec._decode_row_page(msg)
+
+        is_last_frame = msg.next_frame()
+        is_last = True
+        if is_last_frame is not None and len(is_last_frame.content) >= BOOLEAN_SIZE:
+            is_last = struct.unpack_from("<B", is_last_frame.content, 0)[0] != 0
+
+        return rows, is_last, None
+
+    @staticmethod
+    def encode_close_request(query_id: bytes) -> "ClientMessage":
+        """Encode a SQL.close request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, SQL_CLOSE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        msg.add_frame(Frame(query_id))
+        return msg
+
+
 class ReplicatedMapCodec:
     """Codec for ReplicatedMap protocol messages."""
 

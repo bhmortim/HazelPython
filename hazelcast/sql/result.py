@@ -197,6 +197,7 @@ class SqlResult:
         metadata: Optional[SqlRowMetadata] = None,
         update_count: int = -1,
         is_infinite: bool = False,
+        close_callback: Optional[Callable[[], None]] = None,
     ):
         self._query_id = query_id
         self._metadata = metadata
@@ -207,7 +208,10 @@ class SqlResult:
         self._closed = False
         self._lock = threading.Lock()
         self._fetch_callback: Optional[Callable[[], List[SqlRow]]] = None
+        self._close_callback: Optional[Callable[[], None]] = close_callback
         self._has_more = True
+        self._iteration_started = False
+        self._exhausted = False
 
     @property
     def query_id(self) -> Optional[str]:
@@ -267,25 +271,37 @@ class SqlResult:
         if self._closed:
             raise StopIteration
 
+        if not self.is_row_set:
+            raise StopIteration
+
+        self._iteration_started = True
+
         with self._lock:
             if self._row_index < len(self._rows):
                 row = self._rows[self._row_index]
                 self._row_index += 1
                 return row
 
-            if not self._has_more:
+            if self._exhausted or not self._has_more:
                 raise StopIteration
 
         if self._fetch_callback and self._has_more:
-            new_rows = self._fetch_callback()
-            if new_rows:
-                with self._lock:
-                    self._rows.extend(new_rows)
-                    if self._row_index < len(self._rows):
-                        row = self._rows[self._row_index]
-                        self._row_index += 1
-                        return row
+            try:
+                new_rows = self._fetch_callback()
+                if new_rows:
+                    with self._lock:
+                        self._rows.extend(new_rows)
+                        if self._row_index < len(self._rows):
+                            row = self._rows[self._row_index]
+                            self._row_index += 1
+                            return row
+                else:
+                    self._exhausted = True
+            except Exception:
+                self._exhausted = True
+                raise StopIteration
 
+        self._exhausted = True
         raise StopIteration
 
     def get_all(self) -> List[SqlRow]:
@@ -298,9 +314,17 @@ class SqlResult:
 
     def close(self) -> None:
         """Close this result and release resources."""
+        if self._closed:
+            return
         self._closed = True
+        self._exhausted = True
         with self._lock:
             self._rows.clear()
+        if self._close_callback:
+            try:
+                self._close_callback()
+            except Exception:
+                pass
 
     async def close_async(self) -> None:
         """Close this result asynchronously."""
@@ -317,6 +341,19 @@ class SqlResult:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close_async()
+
+    def rows_as_dicts(self) -> List[Dict[str, Any]]:
+        """Get all rows as a list of dictionaries.
+
+        Returns:
+            List of dictionaries mapping column names to values.
+        """
+        return [row.to_dict() for row in self.get_all()]
+
+    def __len__(self) -> int:
+        """Return the number of rows fetched so far."""
+        with self._lock:
+            return len(self._rows)
 
     def __repr__(self) -> str:
         if self.is_row_set:
