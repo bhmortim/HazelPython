@@ -17,6 +17,103 @@ A comprehensive Python client for [Hazelcast](https://hazelcast.com/) in-memory 
 - **Metrics**: Comprehensive client metrics for monitoring
 - **Logging**: Hierarchical logging with configurable levels
 
+## Feature Parity with Java Client
+
+| Feature | Java Client | Python Client | Notes |
+|---------|-------------|---------------|-------|
+| **Data Structures** | | | |
+| IMap | ✅ | ✅ | Full support including Near Cache |
+| IQueue | ✅ | ✅ | |
+| ISet | ✅ | ✅ | |
+| IList | ✅ | ✅ | |
+| MultiMap | ✅ | ✅ | |
+| ReplicatedMap | ✅ | ✅ | |
+| Ringbuffer | ✅ | ✅ | |
+| ITopic | ✅ | ✅ | |
+| ReliableTopic | ✅ | ✅ | |
+| IExecutorService | ✅ | ✅ | |
+| DurableExecutorService | ✅ | ✅ | |
+| ScheduledExecutorService | ✅ | ✅ | |
+| FlakeIdGenerator | ✅ | ✅ | |
+| PNCounter | ✅ | ✅ | |
+| CardinalityEstimator | ✅ | ✅ | |
+| **CP Subsystem** | | | |
+| AtomicLong | ✅ | ✅ | |
+| AtomicReference | ✅ | ✅ | |
+| FencedLock | ✅ | ✅ | |
+| Semaphore | ✅ | ✅ | |
+| CountDownLatch | ✅ | ✅ | |
+| CPMap | ✅ | ✅ | |
+| **Query & Processing** | | | |
+| SQL | ✅ | ✅ | |
+| Predicates | ✅ | ✅ | |
+| Aggregators | ✅ | ✅ | |
+| Projections | ✅ | ✅ | |
+| Entry Processors | ✅ | ✅ | |
+| **Jet** | | | |
+| Pipeline API | ✅ | ✅ | |
+| Job Management | ✅ | ✅ | |
+| **Caching** | | | |
+| Near Cache | ✅ | ✅ | LRU, LFU, TTL, invalidation |
+| JCache (JSR-107) | ✅ | ✅ | |
+| **Transactions** | | | |
+| Local Transactions | ✅ | ✅ | ONE_PHASE and TWO_PHASE |
+| XA Transactions | ✅ | ❌ | Not supported |
+| **Networking** | | | |
+| Smart Routing | ✅ | ✅ | |
+| Unisocket | ✅ | ✅ | |
+| TLS/SSL | ✅ | ✅ | |
+| **Discovery** | | | |
+| AWS | ✅ | ✅ | EC2 and ECS |
+| Azure | ✅ | ✅ | |
+| GCP | ✅ | ✅ | |
+| Kubernetes | ✅ | ✅ | |
+| Hazelcast Cloud | ✅ | ✅ | Viridian |
+| Multicast | ✅ | ✅ | |
+| **Listeners** | | | |
+| Lifecycle | ✅ | ✅ | |
+| Membership | ✅ | ✅ | |
+| Distributed Object | ✅ | ✅ | |
+| Entry/Item/Message | ✅ | ✅ | |
+| **Serialization** | | | |
+| Compact | ✅ | ✅ | |
+| Portable | ✅ | ✅ | |
+| IdentifiedDataSerializable | ✅ | ✅ | |
+| JSON | ✅ | ✅ | HazelcastJsonValue |
+| Custom | ✅ | ✅ | |
+| **Other** | | | |
+| Failover | ✅ | ✅ | Multi-cluster |
+| Metrics | ✅ | ✅ | |
+| Management Center | ✅ | ✅ | Statistics publishing |
+| Split-Brain Protection | ✅ | ✅ | Configuration only |
+| WAN Replication | ✅ | ✅ | Client operations |
+| Map Store/Loader | ✅ | ✅ | Client-side callbacks |
+| Event Journal | ✅ | ✅ | |
+| Query Cache | ✅ | ✅ | |
+
+## Documentation
+
+Full documentation is available at:
+
+- [Getting Started Guide](docs/getting_started.rst)
+- [Configuration Reference](docs/configuration.rst)
+- [Data Structures Guide](docs/data_structures.rst)
+- [CP Subsystem Guide](docs/cp_subsystem.rst)
+- [SQL and Jet Guide](docs/sql_jet.rst)
+- [Transactions Guide](docs/transactions.rst)
+- [Near Cache Guide](docs/near_cache.rst)
+- [Serialization Guide](docs/serialization.rst)
+- [API Reference](docs/api/index.rst)
+
+Build the documentation locally:
+
+```bash
+cd docs
+pip install -r requirements.txt
+make html
+# Open docs/_build/html/index.html
+```
+
 ## Installation
 
 ```bash
@@ -460,6 +557,8 @@ See the `examples/` directory for complete working examples:
 - `near_cache.py` - Near cache configuration and usage
 - `cp_structures.py` - CP subsystem data structures
 - `jet_pipeline.py` - Jet pipeline building and job management
+- `transactions.py` - ACID transactions across data structures
+- `listeners.py` - Event listeners (lifecycle, membership, entry, item, message)
 - `failover.py` - Multi-cluster failover configuration
 
 ## License
