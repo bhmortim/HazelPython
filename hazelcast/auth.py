@@ -11,6 +11,7 @@ class CredentialsType(Enum):
     USERNAME_PASSWORD = "USERNAME_PASSWORD"
     TOKEN = "TOKEN"
     KERBEROS = "KERBEROS"
+    LDAP = "LDAP"
     CUSTOM = "CUSTOM"
 
 
@@ -122,6 +123,61 @@ class KerberosCredentials(Credentials):
 
     def __repr__(self) -> str:
         return f"KerberosCredentials(service_principal={self._service_principal!r})"
+
+
+class LdapCredentials(Credentials):
+    """LDAP-based credentials for directory service authentication."""
+
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        base_dn: Optional[str] = None,
+        user_filter: Optional[str] = None,
+        url: Optional[str] = None,
+    ):
+        self._username = username
+        self._password = password
+        self._base_dn = base_dn
+        self._user_filter = user_filter
+        self._url = url
+
+    @property
+    def credentials_type(self) -> CredentialsType:
+        return CredentialsType.LDAP
+
+    @property
+    def username(self) -> str:
+        return self._username
+
+    @property
+    def password(self) -> str:
+        return self._password
+
+    @property
+    def base_dn(self) -> Optional[str]:
+        return self._base_dn
+
+    @property
+    def user_filter(self) -> Optional[str]:
+        return self._user_filter
+
+    @property
+    def url(self) -> Optional[str]:
+        return self._url
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": self.credentials_type.value,
+            "username": self._username,
+            "password": self._password,
+            "base_dn": self._base_dn,
+            "user_filter": self._user_filter,
+            "url": self._url,
+        }
+
+    def __repr__(self) -> str:
+        return f"LdapCredentials(username={self._username!r}, base_dn={self._base_dn!r})"
 
 
 class CustomCredentials(Credentials):

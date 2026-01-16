@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import os
 
 from hazelcast.exceptions import ConfigurationException
+from hazelcast.network.ssl_config import TlsConfig
 
 
 class ReconnectMode(Enum):
@@ -222,17 +223,19 @@ class ConnectionStrategyConfig:
 
 
 class SecurityConfig:
-    """Security configuration for authentication."""
+    """Security configuration for authentication and TLS."""
 
     def __init__(
         self,
         username: Optional[str] = None,
         password: Optional[str] = None,
         token: Optional[str] = None,
+        tls: Optional[TlsConfig] = None,
     ):
         self._username = username
         self._password = password
         self._token = token
+        self._tls = tls or TlsConfig()
 
     @property
     def username(self) -> Optional[str]:
@@ -262,17 +265,33 @@ class SecurityConfig:
         self._token = value
 
     @property
+    def tls(self) -> TlsConfig:
+        """Get the TLS configuration."""
+        return self._tls
+
+    @tls.setter
+    def tls(self, value: TlsConfig) -> None:
+        self._tls = value
+
+    @property
     def is_configured(self) -> bool:
         """Check if any security credentials are configured."""
         return bool(self._username or self._token)
 
+    @property
+    def tls_enabled(self) -> bool:
+        """Check if TLS is enabled."""
+        return self._tls.enabled
+
     @classmethod
     def from_dict(cls, data: dict) -> "SecurityConfig":
         """Create SecurityConfig from a dictionary."""
+        tls_data = data.get("tls", {})
         return cls(
             username=data.get("username"),
             password=data.get("password"),
             token=data.get("token"),
+            tls=TlsConfig.from_dict(tls_data) if tls_data else TlsConfig(),
         )
 
 
