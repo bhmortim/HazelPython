@@ -3,9 +3,12 @@
 import struct
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from hazelcast.serialization.api import ObjectDataInput, ObjectDataOutput, Serializer
+
+if TYPE_CHECKING:
+    from hazelcast.serialization.json import HazelcastJsonValue
 
 
 NONE_TYPE_ID = 0
@@ -32,6 +35,7 @@ DATETIME_TYPE_ID = -20
 DATE_TYPE_ID = -21
 TIME_TYPE_ID = -22
 BIG_DECIMAL_TYPE_ID = -23
+JSON_TYPE_ID = -130
 
 
 class NoneSerializer(Serializer[None]):
@@ -512,6 +516,8 @@ class BigDecimalSerializer(Serializer[Decimal]):
 
 def get_builtin_serializers() -> Dict[int, Serializer]:
     """Get all built-in serializers indexed by type ID."""
+    from hazelcast.serialization.json import HazelcastJsonValueSerializer
+
     serializers = [
         NoneSerializer(),
         BoolSerializer(),
@@ -537,12 +543,15 @@ def get_builtin_serializers() -> Dict[int, Serializer]:
         DateSerializer(),
         TimeSerializer(),
         BigDecimalSerializer(),
+        HazelcastJsonValueSerializer(),
     ]
     return {s.type_id: s for s in serializers}
 
 
 def get_type_serializer_mapping() -> Dict[type, Serializer]:
     """Get mapping from Python types to serializers."""
+    from hazelcast.serialization.json import HazelcastJsonValue, HazelcastJsonValueSerializer
+
     return {
         type(None): NoneSerializer(),
         bool: BoolSerializer(),
@@ -558,4 +567,5 @@ def get_type_serializer_mapping() -> Dict[type, Serializer]:
         date: DateSerializer(),
         time: TimeSerializer(),
         Decimal: BigDecimalSerializer(),
+        HazelcastJsonValue: HazelcastJsonValueSerializer(),
     }
