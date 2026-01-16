@@ -34,6 +34,8 @@ from hazelcast.proxy.base import DistributedObject, Proxy, ProxyContext
 
 if TYPE_CHECKING:
     from hazelcast.proxy.map import Map
+    from hazelcast.proxy.cache import Cache
+    from hazelcast.cache_manager import CacheManager
     from hazelcast.proxy.executor import IExecutorService
     from hazelcast.proxy.queue import Queue
     from hazelcast.proxy.collections import Set, List as HzList
@@ -51,6 +53,7 @@ if TYPE_CHECKING:
     from hazelcast.transaction import TransactionContext, TransactionOptions
 
 
+SERVICE_NAME_CACHE = "hz:impl:cacheService"
 SERVICE_NAME_MAP = "hz:impl:mapService"
 SERVICE_NAME_EXECUTOR = "hz:impl:executorService"
 SERVICE_NAME_CARDINALITY_ESTIMATOR = "hz:impl:cardinalityEstimatorService"
@@ -175,6 +178,7 @@ class HazelcastClient:
 
         self._sql_service = None
         self._jet_service = None
+        self._cache_manager = None
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread: Optional[threading.Thread] = None
@@ -587,6 +591,55 @@ class HazelcastClient:
         """
         with self._proxies_lock:
             return [p for p in self._proxies.values() if not p.is_destroyed]
+
+    def get_cache(self, name: str) -> "Cache":
+        """Get or create a distributed Cache (JCache JSR-107).
+
+        Returns a proxy to a JCache-compliant distributed cache. The cache
+        is created on the cluster if it doesn't exist.
+
+        Args:
+            name: Name of the distributed cache.
+
+        Returns:
+            Cache instance for cache operations.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> cache = client.get_cache("my-cache")
+            >>> cache.put("key", "value")
+            >>> value = cache.get("key")
+        """
+        from hazelcast.proxy.cache import Cache
+        return self._get_or_create_proxy(SERVICE_NAME_CACHE, name, Cache)
+
+    def get_cache_manager(self) -> "CacheManager":
+        """Get the CacheManager for managing JCache instances.
+
+        Returns the CacheManager for creating, retrieving, and destroying
+        JCache instances.
+
+        Returns:
+            CacheManager instance.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> manager = client.get_cache_manager()
+            >>> cache = manager.get_or_create_cache("my-cache")
+        """
+        self._check_running()
+
+        if self._cache_manager is None:
+            from hazelcast.cache_manager import CacheManager
+            self._cache_manager = CacheManager(
+                uri=self._config.cluster_name,
+                context=self._proxy_context,
+            )
+        return self._cache_manager
 
     def get_map(self, name: str) -> "Map":
         """Get or create a distributed Map.

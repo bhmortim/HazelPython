@@ -4719,6 +4719,539 @@ class ExecutorServiceCodec:
         return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
 
 
+# Cache (JCache JSR-107) protocol constants
+CACHE_GET = 0x130100
+CACHE_CONTAINS_KEY = 0x130200
+CACHE_PUT = 0x130300
+CACHE_PUT_IF_ABSENT = 0x130400
+CACHE_REMOVE = 0x130500
+CACHE_REMOVE_IF_SAME = 0x130600
+CACHE_REPLACE = 0x130700
+CACHE_REPLACE_IF_SAME = 0x130800
+CACHE_GET_AND_PUT = 0x130900
+CACHE_GET_AND_REMOVE = 0x130A00
+CACHE_GET_AND_REPLACE = 0x130B00
+CACHE_GET_ALL = 0x130C00
+CACHE_PUT_ALL = 0x130D00
+CACHE_CLEAR = 0x130E00
+CACHE_SIZE = 0x131100
+CACHE_ITERATE = 0x131500
+CACHE_ENTRY_PROCESSOR = 0x131800
+CACHE_REMOVE_ALL = 0x131900
+CACHE_REMOVE_ALL_KEYS = 0x131A00
+CACHE_CREATE_CONFIG = 0x131B00
+CACHE_GET_CONFIG = 0x131C00
+CACHE_DESTROY = 0x131D00
+
+
+class CacheCodec:
+    """Codec for Cache (JCache) protocol messages."""
+
+    @staticmethod
+    def encode_get_request(name: str, key: bytes, expiry_policy: Optional[bytes] = None) -> "ClientMessage":
+        """Encode a Cache.get request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_GET)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_get_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Cache.get response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_contains_key_request(name: str, key: bytes) -> "ClientMessage":
+        """Encode a Cache.containsKey request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_CONTAINS_KEY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_contains_key_response(msg: "ClientMessage") -> bool:
+        """Decode a Cache.containsKey response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_put_request(
+        name: str, key: bytes, value: bytes, expiry_policy: Optional[bytes] = None, get: bool = False
+    ) -> "ClientMessage":
+        """Encode a Cache.put request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_PUT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<B", buffer, REQUEST_HEADER_SIZE, 1 if get else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_put_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Cache.put response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_put_if_absent_request(
+        name: str, key: bytes, value: bytes, expiry_policy: Optional[bytes] = None
+    ) -> "ClientMessage":
+        """Encode a Cache.putIfAbsent request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_PUT_IF_ABSENT)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_put_if_absent_response(msg: "ClientMessage") -> bool:
+        """Decode a Cache.putIfAbsent response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_remove_request(name: str, key: bytes) -> "ClientMessage":
+        """Encode a Cache.remove request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_REMOVE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_remove_response(msg: "ClientMessage") -> bool:
+        """Decode a Cache.remove response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_remove_if_same_request(name: str, key: bytes, value: bytes) -> "ClientMessage":
+        """Encode a Cache.remove(key, value) request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_REMOVE_IF_SAME)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        return msg
+
+    @staticmethod
+    def decode_remove_if_same_response(msg: "ClientMessage") -> bool:
+        """Decode a Cache.remove(key, value) response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_replace_request(
+        name: str, key: bytes, value: bytes, expiry_policy: Optional[bytes] = None
+    ) -> "ClientMessage":
+        """Encode a Cache.replace request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_REPLACE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_replace_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Cache.replace response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_replace_if_same_request(
+        name: str, key: bytes, old_value: bytes, new_value: bytes, expiry_policy: Optional[bytes] = None
+    ) -> "ClientMessage":
+        """Encode a Cache.replace(key, oldValue, newValue) request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_REPLACE_IF_SAME)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(old_value))
+        msg.add_frame(Frame(new_value))
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_replace_if_same_response(msg: "ClientMessage") -> bool:
+        """Decode a Cache.replace(key, oldValue, newValue) response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_get_and_put_request(
+        name: str, key: bytes, value: bytes, expiry_policy: Optional[bytes] = None
+    ) -> "ClientMessage":
+        """Encode a Cache.getAndPut request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_GET_AND_PUT)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_get_and_put_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Cache.getAndPut response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_get_and_remove_request(name: str, key: bytes) -> "ClientMessage":
+        """Encode a Cache.getAndRemove request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_GET_AND_REMOVE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        return msg
+
+    @staticmethod
+    def decode_get_and_remove_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Cache.getAndRemove response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_get_and_replace_request(
+        name: str, key: bytes, value: bytes, expiry_policy: Optional[bytes] = None
+    ) -> "ClientMessage":
+        """Encode a Cache.getAndReplace request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_GET_AND_REPLACE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(value))
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_get_and_replace_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Cache.getAndReplace response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_get_all_request(
+        name: str, keys: List[bytes], expiry_policy: Optional[bytes] = None
+    ) -> "ClientMessage":
+        """Encode a Cache.getAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_GET_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        _encode_data_list(msg, keys)
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_get_all_response(msg: "ClientMessage") -> List[Tuple[bytes, bytes]]:
+        """Decode a Cache.getAll response."""
+        msg.next_frame()
+        return _decode_entry_list(msg)
+
+    @staticmethod
+    def encode_put_all_request(
+        name: str, entries: List[Tuple[bytes, bytes]], expiry_policy: Optional[bytes] = None
+    ) -> "ClientMessage":
+        """Encode a Cache.putAll request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_PUT_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        _encode_entry_list(msg, entries)
+        if expiry_policy is not None:
+            msg.add_frame(Frame(expiry_policy))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def encode_clear_request(name: str) -> "ClientMessage":
+        """Encode a Cache.clear request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_CLEAR)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_size_request(name: str) -> "ClientMessage":
+        """Encode a Cache.size request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_SIZE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_size_response(msg: "ClientMessage") -> int:
+        """Decode a Cache.size response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return 0
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_remove_all_request(name: str) -> "ClientMessage":
+        """Encode a Cache.removeAll request (no keys specified)."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_REMOVE_ALL)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_remove_all_keys_request(name: str, keys: List[bytes]) -> "ClientMessage":
+        """Encode a Cache.removeAll(keys) request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_REMOVE_ALL_KEYS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        _encode_data_list(msg, keys)
+        return msg
+
+    @staticmethod
+    def encode_entry_processor_request(
+        name: str, key: bytes, processor: bytes, arguments: List[bytes]
+    ) -> "ClientMessage":
+        """Encode a Cache.invoke (entry processor) request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_ENTRY_PROCESSOR)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(key))
+        msg.add_frame(Frame(processor))
+        _encode_data_list(msg, arguments)
+        return msg
+
+    @staticmethod
+    def decode_entry_processor_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Cache.invoke response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_create_config_request(
+        name: str,
+        key_type: Optional[str],
+        value_type: Optional[str],
+        statistics_enabled: bool,
+        management_enabled: bool,
+        read_through: bool,
+        write_through: bool,
+        store_by_value: bool,
+    ) -> "ClientMessage":
+        """Encode a Cache.createConfig request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + 5 * BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_CREATE_CONFIG)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if statistics_enabled else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if management_enabled else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if read_through else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if write_through else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if store_by_value else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        if key_type:
+            StringCodec.encode(msg, key_type)
+        else:
+            msg.add_frame(NULL_FRAME)
+        if value_type:
+            StringCodec.encode(msg, value_type)
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def encode_destroy_request(name: str) -> "ClientMessage":
+        """Encode a Cache.destroy request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_DESTROY)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+
 # Transactional protocol constants
 TXN_MAP_PUT = 0x0E0100
 TXN_MAP_GET = 0x0E0200
