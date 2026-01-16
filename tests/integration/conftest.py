@@ -264,3 +264,85 @@ def connected_client(client_config):
     client.start()
     yield client
     client.shutdown()
+
+
+@pytest.fixture
+def connected_cluster_client(cluster_client_config):
+    """Fixture providing a connected client to the cluster."""
+    from hazelcast.client import HazelcastClient
+
+    client = HazelcastClient(cluster_client_config)
+    client.start()
+    yield client
+    client.shutdown()
+
+
+@pytest.fixture
+def near_cache_client_config(hazelcast_container: HazelcastContainer):
+    """Create a ClientConfig with near cache enabled."""
+    from hazelcast.config import ClientConfig, NearCacheConfig, EvictionPolicy
+
+    config = ClientConfig()
+    config.cluster_name = hazelcast_container.cluster_name
+    config.cluster_members = [hazelcast_container.address]
+    config.connection_timeout = 10.0
+
+    near_cache = NearCacheConfig(
+        name="near-cached-map",
+        max_size=1000,
+        time_to_live_seconds=60,
+        eviction_policy=EvictionPolicy.LRU,
+    )
+    config.add_near_cache(near_cache)
+    return config
+
+
+@pytest.fixture
+def unique_name():
+    """Generate a unique name for test resources."""
+    import uuid
+    return f"test-{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def test_map(connected_client, unique_name):
+    """Fixture providing a test IMap."""
+    map_proxy = connected_client.get_map(unique_name)
+    yield map_proxy
+    try:
+        map_proxy.clear()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def test_queue(connected_client, unique_name):
+    """Fixture providing a test IQueue."""
+    queue = connected_client.get_queue(unique_name)
+    yield queue
+    try:
+        queue.clear()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def test_set(connected_client, unique_name):
+    """Fixture providing a test ISet."""
+    test_set = connected_client.get_set(unique_name)
+    yield test_set
+    try:
+        test_set.clear()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def test_list(connected_client, unique_name):
+    """Fixture providing a test IList."""
+    test_list = connected_client.get_list(unique_name)
+    yield test_list
+    try:
+        test_list.clear()
+    except Exception:
+        pass

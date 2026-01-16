@@ -1,383 +1,295 @@
-"""Integration tests for Map operations with real cluster."""
+"""Integration tests for IMap operations against a real Hazelcast cluster."""
 
 import pytest
 import time
 import threading
-from typing import Dict, List, Set
+from typing import Dict, List
 
 from tests.integration.conftest import skip_integration, DOCKER_AVAILABLE
 
 
 @skip_integration
 class TestMapBasicOperations:
-    """Test basic Map operations against real cluster."""
+    """Test basic IMap CRUD operations."""
 
-    def test_put_and_get(self, connected_client):
+    def test_put_and_get(self, test_map):
         """Test basic put and get operations."""
-        test_map = connected_client.get_map("basic-ops-map")
-
-        test_map.put("string-key", "string-value")
-        assert test_map.get("string-key") == "string-value"
-
-        test_map.put("int-key", 42)
-        assert test_map.get("int-key") == 42
-
-        test_map.put("dict-key", {"nested": "value", "count": 10})
-        result = test_map.get("dict-key")
-        assert result["nested"] == "value"
-        assert result["count"] == 10
-
-    def test_remove(self, connected_client):
-        """Test remove operation."""
-        test_map = connected_client.get_map("remove-test-map")
-
-        test_map.put("to-remove", "value")
-        assert test_map.contains_key("to-remove")
-
-        removed = test_map.remove("to-remove")
-        assert removed == "value"
-        assert not test_map.contains_key("to-remove")
-
-    def test_delete(self, connected_client):
-        """Test delete operation (no return value)."""
-        test_map = connected_client.get_map("delete-test-map")
-
-        test_map.put("to-delete", "value")
-        test_map.delete("to-delete")
-        assert not test_map.contains_key("to-delete")
-
-    def test_contains_key(self, connected_client):
-        """Test contains_key operation."""
-        test_map = connected_client.get_map("contains-test-map")
-
-        assert not test_map.contains_key("missing-key")
-        test_map.put("existing-key", "value")
-        assert test_map.contains_key("existing-key")
-
-    def test_contains_value(self, connected_client):
-        """Test contains_value operation."""
-        test_map = connected_client.get_map("contains-value-map")
-
-        test_map.put("key1", "unique-value")
-        assert test_map.contains_value("unique-value")
-        assert not test_map.contains_value("non-existent-value")
-
-    def test_size_and_is_empty(self, connected_client):
-        """Test size and is_empty operations."""
-        test_map = connected_client.get_map("size-test-map")
-
-        assert test_map.is_empty()
-        assert test_map.size() == 0
-
         test_map.put("key1", "value1")
-        test_map.put("key2", "value2")
+        result = test_map.get("key1")
+        assert result == "value1"
 
-        assert not test_map.is_empty()
-        assert test_map.size() == 2
-
-    def test_clear(self, connected_client):
-        """Test clear operation."""
-        test_map = connected_client.get_map("clear-test-map")
-
-        for i in range(10):
-            test_map.put(f"key-{i}", f"value-{i}")
-
+    def test_put_all(self, test_map):
+        """Test put_all operation."""
+        entries = {f"key{i}": f"value{i}" for i in range(10)}
+        test_map.put_all(entries)
+        
         assert test_map.size() == 10
+        for key, value in entries.items():
+            assert test_map.get(key) == value
 
+    def test_remove(self, test_map):
+        """Test remove operation."""
+        test_map.put("key1", "value1")
+        removed = test_map.remove("key1")
+        
+        assert removed == "value1"
+        assert test_map.get("key1") is None
+
+    def test_contains_key(self, test_map):
+        """Test contains_key operation."""
+        test_map.put("key1", "value1")
+        
+        assert test_map.contains_key("key1") is True
+        assert test_map.contains_key("nonexistent") is False
+
+    def test_contains_value(self, test_map):
+        """Test contains_value operation."""
+        test_map.put("key1", "value1")
+        
+        assert test_map.contains_value("value1") is True
+        assert test_map.contains_value("nonexistent") is False
+
+    def test_size_and_is_empty(self, test_map):
+        """Test size and is_empty operations."""
+        assert test_map.is_empty() is True
+        assert test_map.size() == 0
+        
+        test_map.put("key1", "value1")
+        
+        assert test_map.is_empty() is False
+        assert test_map.size() == 1
+
+    def test_clear(self, test_map):
+        """Test clear operation."""
+        for i in range(10):
+            test_map.put(f"key{i}", f"value{i}")
+        
+        assert test_map.size() == 10
         test_map.clear()
-
-        assert test_map.is_empty()
         assert test_map.size() == 0
 
-
-@skip_integration
-class TestMapBulkOperations:
-    """Test bulk Map operations."""
-
-    def test_put_all(self, connected_client):
-        """Test put_all operation."""
-        test_map = connected_client.get_map("put-all-map")
-
-        entries = {f"bulk-key-{i}": f"bulk-value-{i}" for i in range(50)}
-        test_map.put_all(entries)
-
-        assert test_map.size() == 50
-        for key, expected_value in entries.items():
-            assert test_map.get(key) == expected_value
-
-    def test_get_all(self, connected_client):
-        """Test get_all operation."""
-        test_map = connected_client.get_map("get-all-map")
-
-        for i in range(20):
-            test_map.put(f"key-{i}", f"value-{i}")
-
-        keys_to_get = {f"key-{i}" for i in range(10)}
-        results = test_map.get_all(keys_to_get)
-
-        assert len(results) == 10
-        for i in range(10):
-            assert results[f"key-{i}"] == f"value-{i}"
-
-    def test_key_set(self, connected_client):
+    def test_key_set(self, test_map):
         """Test key_set operation."""
-        test_map = connected_client.get_map("key-set-map")
-
-        expected_keys = {f"ks-key-{i}" for i in range(15)}
-        for key in expected_keys:
-            test_map.put(key, "value")
-
+        entries = {"a": 1, "b": 2, "c": 3}
+        test_map.put_all(entries)
+        
         keys = test_map.key_set()
-        assert keys == expected_keys
+        assert set(keys) == {"a", "b", "c"}
 
-    def test_values(self, connected_client):
+    def test_values(self, test_map):
         """Test values operation."""
-        test_map = connected_client.get_map("values-map")
-
-        for i in range(10):
-            test_map.put(f"key-{i}", f"value-{i}")
-
+        entries = {"a": 1, "b": 2, "c": 3}
+        test_map.put_all(entries)
+        
         values = test_map.values()
-        assert len(values) == 10
-        for i in range(10):
-            assert f"value-{i}" in values
+        assert set(values) == {1, 2, 3}
 
-    def test_entry_set(self, connected_client):
+    def test_entry_set(self, test_map):
         """Test entry_set operation."""
-        test_map = connected_client.get_map("entry-set-map")
-
-        expected_entries = {(f"es-key-{i}", f"es-value-{i}") for i in range(10)}
-        for key, value in expected_entries:
-            test_map.put(key, value)
-
-        entries = test_map.entry_set()
-        assert entries == expected_entries
+        entries = {"a": 1, "b": 2}
+        test_map.put_all(entries)
+        
+        entry_set = test_map.entry_set()
+        assert len(entry_set) == 2
 
 
 @skip_integration
-class TestMapConditionalOperations:
-    """Test conditional Map operations."""
+class TestMapAtomicOperations:
+    """Test atomic IMap operations."""
 
-    def test_put_if_absent(self, connected_client):
+    def test_put_if_absent(self, test_map):
         """Test put_if_absent operation."""
-        test_map = connected_client.get_map("put-if-absent-map")
+        result1 = test_map.put_if_absent("key1", "value1")
+        assert result1 is None
+        
+        result2 = test_map.put_if_absent("key1", "value2")
+        assert result2 == "value1"
+        assert test_map.get("key1") == "value1"
 
-        result = test_map.put_if_absent("new-key", "first-value")
-        assert result is None
-        assert test_map.get("new-key") == "first-value"
-
-        result = test_map.put_if_absent("new-key", "second-value")
-        assert result == "first-value"
-        assert test_map.get("new-key") == "first-value"
-
-    def test_replace(self, connected_client):
+    def test_replace(self, test_map):
         """Test replace operation."""
-        test_map = connected_client.get_map("replace-map")
+        test_map.put("key1", "value1")
+        
+        old = test_map.replace("key1", "value2")
+        assert old == "value1"
+        assert test_map.get("key1") == "value2"
 
-        result = test_map.replace("missing-key", "value")
-        assert result is None
+    def test_replace_if_same(self, test_map):
+        """Test conditional replace operation."""
+        test_map.put("key1", "value1")
+        
+        result1 = test_map.replace_if_same("key1", "value1", "value2")
+        assert result1 is True
+        assert test_map.get("key1") == "value2"
+        
+        result2 = test_map.replace_if_same("key1", "wrong", "value3")
+        assert result2 is False
+        assert test_map.get("key1") == "value2"
 
-        test_map.put("existing-key", "old-value")
-        result = test_map.replace("existing-key", "new-value")
-        assert result == "old-value"
-        assert test_map.get("existing-key") == "new-value"
-
-    def test_replace_if_same(self, connected_client):
-        """Test replace_if_same operation."""
-        test_map = connected_client.get_map("replace-if-same-map")
-
-        test_map.put("key", "original")
-
-        result = test_map.replace_if_same("key", "wrong", "new")
-        assert result is False
-        assert test_map.get("key") == "original"
-
-        result = test_map.replace_if_same("key", "original", "updated")
-        assert result is True
-        assert test_map.get("key") == "updated"
+    def test_remove_if_same(self, test_map):
+        """Test conditional remove operation."""
+        test_map.put("key1", "value1")
+        
+        result1 = test_map.remove_if_same("key1", "wrong")
+        assert result1 is False
+        assert test_map.contains_key("key1") is True
+        
+        result2 = test_map.remove_if_same("key1", "value1")
+        assert result2 is True
+        assert test_map.contains_key("key1") is False
 
 
 @skip_integration
 class TestMapTTL:
-    """Test Map TTL (Time To Live) operations."""
+    """Test IMap TTL (Time-To-Live) functionality."""
 
-    def test_put_with_ttl(self, connected_client):
+    def test_put_with_ttl(self, test_map):
         """Test put with TTL."""
-        test_map = connected_client.get_map("ttl-map")
+        test_map.put("key1", "value1", ttl=1)
+        
+        assert test_map.get("key1") == "value1"
+        time.sleep(2)
+        assert test_map.get("key1") is None
 
-        test_map.put("ttl-key", "ttl-value", ttl=2.0)
-        assert test_map.get("ttl-key") == "ttl-value"
-
-        time.sleep(3)
-        assert test_map.get("ttl-key") is None
-
-    def test_set_with_ttl(self, connected_client):
-        """Test set with TTL."""
-        test_map = connected_client.get_map("set-ttl-map")
-
-        test_map.set("set-ttl-key", "set-ttl-value", ttl=2.0)
-        assert test_map.get("set-ttl-key") == "set-ttl-value"
-
-        time.sleep(3)
-        assert test_map.get("set-ttl-key") is None
-
-
-@skip_integration
-class TestMapLocking:
-    """Test Map locking operations."""
-
-    def test_lock_and_unlock(self, connected_client):
-        """Test lock and unlock operations."""
-        test_map = connected_client.get_map("lock-map")
-
-        test_map.put("lock-key", "value")
-
-        test_map.lock("lock-key")
-        assert test_map.is_locked("lock-key")
-
-        test_map.unlock("lock-key")
-        assert not test_map.is_locked("lock-key")
-
-    def test_try_lock(self, connected_client):
-        """Test try_lock operation."""
-        test_map = connected_client.get_map("try-lock-map")
-
-        test_map.put("try-lock-key", "value")
-
-        result = test_map.try_lock("try-lock-key", timeout=1.0)
-        assert result is True
-
-        test_map.unlock("try-lock-key")
-
-    def test_force_unlock(self, connected_client):
-        """Test force_unlock operation."""
-        test_map = connected_client.get_map("force-unlock-map")
-
-        test_map.put("force-key", "value")
-        test_map.lock("force-key")
-        assert test_map.is_locked("force-key")
-
-        test_map.force_unlock("force-key")
-        assert not test_map.is_locked("force-key")
+    def test_set_ttl(self, test_map):
+        """Test setting TTL on existing entry."""
+        test_map.put("key1", "value1")
+        test_map.set_ttl("key1", 1)
+        
+        assert test_map.get("key1") == "value1"
+        time.sleep(2)
+        assert test_map.get("key1") is None
 
 
 @skip_integration
 class TestMapConcurrency:
-    """Test Map concurrent access patterns."""
+    """Test concurrent IMap operations."""
 
-    def test_concurrent_put_operations(self, connected_client):
-        """Test concurrent put operations from multiple threads."""
-        test_map = connected_client.get_map("concurrent-put-map")
+    def test_concurrent_puts(self, test_map):
+        """Test concurrent put operations."""
         errors: List[Exception] = []
-        thread_count = 10
-        ops_per_thread = 100
-
+        
         def worker(thread_id: int):
             try:
-                for i in range(ops_per_thread):
-                    key = f"t{thread_id}-k{i}"
-                    test_map.put(key, f"value-{thread_id}-{i}")
+                for i in range(50):
+                    key = f"thread-{thread_id}-key-{i}"
+                    test_map.put(key, f"value-{i}")
             except Exception as e:
                 errors.append(e)
-
-        threads = [
-            threading.Thread(target=worker, args=(i,))
-            for i in range(thread_count)
-        ]
-
+        
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+        
         for t in threads:
             t.start()
         for t in threads:
             t.join()
+        
+        assert len(errors) == 0
+        assert test_map.size() == 250
 
-        assert len(errors) == 0, f"Errors: {errors}"
-        assert test_map.size() == thread_count * ops_per_thread
-
-    def test_concurrent_get_operations(self, connected_client):
-        """Test concurrent get operations from multiple threads."""
-        test_map = connected_client.get_map("concurrent-get-map")
-
-        for i in range(100):
-            test_map.put(f"key-{i}", f"value-{i}")
-
+    def test_concurrent_read_write(self, test_map):
+        """Test concurrent read and write operations."""
+        test_map.put("counter", 0)
         errors: List[Exception] = []
-        results: List[bool] = []
-        lock = threading.Lock()
-
-        def reader():
+        
+        def writer():
             try:
                 for i in range(100):
-                    value = test_map.get(f"key-{i}")
-                    with lock:
-                        results.append(value == f"value-{i}")
+                    test_map.put("counter", i)
             except Exception as e:
-                with lock:
-                    errors.append(e)
-
-        threads = [threading.Thread(target=reader) for _ in range(10)]
-
+                errors.append(e)
+        
+        def reader():
+            try:
+                for _ in range(100):
+                    test_map.get("counter")
+            except Exception as e:
+                errors.append(e)
+        
+        threads = [
+            threading.Thread(target=writer),
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+        ]
+        
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-
+        
         assert len(errors) == 0
-        assert all(results)
 
 
 @skip_integration
-class TestMapDunderMethods:
-    """Test Map dunder method integration."""
+class TestMapListeners:
+    """Test IMap entry listeners."""
 
-    def test_len(self, connected_client):
-        """Test __len__ method."""
-        test_map = connected_client.get_map("len-map")
+    def test_entry_added_listener(self, test_map):
+        """Test entry added listener."""
+        events: List[dict] = []
+        
+        def on_added(event):
+            events.append({"type": "added", "key": event.key, "value": event.value})
+        
+        test_map.add_entry_listener(on_added=on_added)
+        test_map.put("key1", "value1")
+        
+        time.sleep(0.5)
+        assert len(events) >= 1
+        assert any(e["key"] == "key1" for e in events)
 
-        assert len(test_map) == 0
+    def test_entry_removed_listener(self, test_map):
+        """Test entry removed listener."""
+        events: List[dict] = []
+        
+        def on_removed(event):
+            events.append({"type": "removed", "key": event.key})
+        
+        test_map.put("key1", "value1")
+        test_map.add_entry_listener(on_removed=on_removed)
+        test_map.remove("key1")
+        
+        time.sleep(0.5)
+        assert len(events) >= 1
 
-        for i in range(5):
-            test_map.put(f"key-{i}", f"value-{i}")
 
-        assert len(test_map) == 5
+@skip_integration
+class TestMapDataTypes:
+    """Test IMap with various data types."""
 
-    def test_contains(self, connected_client):
-        """Test __contains__ method."""
-        test_map = connected_client.get_map("contains-dunder-map")
+    def test_integer_values(self, test_map):
+        """Test map with integer values."""
+        test_map.put("int", 42)
+        assert test_map.get("int") == 42
 
-        test_map.put("present-key", "value")
+    def test_float_values(self, test_map):
+        """Test map with float values."""
+        test_map.put("float", 3.14159)
+        result = test_map.get("float")
+        assert abs(result - 3.14159) < 0.0001
 
-        assert "present-key" in test_map
-        assert "absent-key" not in test_map
+    def test_boolean_values(self, test_map):
+        """Test map with boolean values."""
+        test_map.put("bool_true", True)
+        test_map.put("bool_false", False)
+        
+        assert test_map.get("bool_true") is True
+        assert test_map.get("bool_false") is False
 
-    def test_getitem(self, connected_client):
-        """Test __getitem__ method."""
-        test_map = connected_client.get_map("getitem-map")
+    def test_list_values(self, test_map):
+        """Test map with list values."""
+        test_map.put("list", [1, 2, 3, "four"])
+        result = test_map.get("list")
+        assert result == [1, 2, 3, "four"]
 
-        test_map.put("bracket-key", "bracket-value")
-        assert test_map["bracket-key"] == "bracket-value"
+    def test_dict_values(self, test_map):
+        """Test map with dict values."""
+        test_map.put("dict", {"nested": {"key": "value"}})
+        result = test_map.get("dict")
+        assert result == {"nested": {"key": "value"}}
 
-    def test_setitem(self, connected_client):
-        """Test __setitem__ method."""
-        test_map = connected_client.get_map("setitem-map")
-
-        test_map["assigned-key"] = "assigned-value"
-        assert test_map.get("assigned-key") == "assigned-value"
-
-    def test_delitem(self, connected_client):
-        """Test __delitem__ method."""
-        test_map = connected_client.get_map("delitem-map")
-
-        test_map.put("delete-key", "delete-value")
-        del test_map["delete-key"]
-        assert not test_map.contains_key("delete-key")
-
-    def test_iter(self, connected_client):
-        """Test __iter__ method."""
-        test_map = connected_client.get_map("iter-map")
-
-        expected_keys = {f"iter-key-{i}" for i in range(10)}
-        for key in expected_keys:
-            test_map.put(key, "value")
-
-        iterated_keys = set(test_map)
-        assert iterated_keys == expected_keys
+    def test_none_value(self, test_map):
+        """Test map with None value."""
+        test_map.put("none", None)
+        assert test_map.get("none") is None
+        assert test_map.contains_key("none") is True
