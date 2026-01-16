@@ -930,17 +930,38 @@ class RetryConfig:
 
 
 class NetworkConfig:
-    """Network configuration for connecting to the cluster."""
+    """Network configuration for connecting to the cluster.
+
+    Attributes:
+        addresses: List of cluster member addresses.
+        connection_timeout: Connection timeout in seconds.
+        smart_routing: Whether to route operations to data owners.
+        tcp_no_delay: Disable Nagle's algorithm for lower latency.
+        socket_keep_alive: Enable TCP keep-alive probes.
+        socket_send_buffer_size: TCP send buffer size in bytes (None for OS default).
+        socket_receive_buffer_size: TCP receive buffer size in bytes (None for OS default).
+        socket_linger_seconds: Socket linger time in seconds (None to disable linger).
+    """
 
     def __init__(
         self,
         addresses: List[str] = None,
         connection_timeout: float = 5.0,
         smart_routing: bool = True,
+        tcp_no_delay: bool = True,
+        socket_keep_alive: bool = True,
+        socket_send_buffer_size: Optional[int] = None,
+        socket_receive_buffer_size: Optional[int] = None,
+        socket_linger_seconds: Optional[int] = None,
     ):
         self._addresses = addresses or ["localhost:5701"]
         self._connection_timeout = connection_timeout
         self._smart_routing = smart_routing
+        self._tcp_no_delay = tcp_no_delay
+        self._socket_keep_alive = socket_keep_alive
+        self._socket_send_buffer_size = socket_send_buffer_size
+        self._socket_receive_buffer_size = socket_receive_buffer_size
+        self._socket_linger_seconds = socket_linger_seconds
         self._validate()
 
     def _validate(self) -> None:
@@ -948,6 +969,12 @@ class NetworkConfig:
             raise ConfigurationException("At least one cluster address is required")
         if self._connection_timeout <= 0:
             raise ConfigurationException("connection_timeout must be positive")
+        if self._socket_send_buffer_size is not None and self._socket_send_buffer_size <= 0:
+            raise ConfigurationException("socket_send_buffer_size must be positive")
+        if self._socket_receive_buffer_size is not None and self._socket_receive_buffer_size <= 0:
+            raise ConfigurationException("socket_receive_buffer_size must be positive")
+        if self._socket_linger_seconds is not None and self._socket_linger_seconds < 0:
+            raise ConfigurationException("socket_linger_seconds cannot be negative")
 
     @property
     def addresses(self) -> List[str]:
@@ -978,6 +1005,54 @@ class NetworkConfig:
     def smart_routing(self, value: bool) -> None:
         self._smart_routing = value
 
+    @property
+    def tcp_no_delay(self) -> bool:
+        """Get whether TCP_NODELAY is enabled."""
+        return self._tcp_no_delay
+
+    @tcp_no_delay.setter
+    def tcp_no_delay(self, value: bool) -> None:
+        self._tcp_no_delay = value
+
+    @property
+    def socket_keep_alive(self) -> bool:
+        """Get whether SO_KEEPALIVE is enabled."""
+        return self._socket_keep_alive
+
+    @socket_keep_alive.setter
+    def socket_keep_alive(self, value: bool) -> None:
+        self._socket_keep_alive = value
+
+    @property
+    def socket_send_buffer_size(self) -> Optional[int]:
+        """Get the socket send buffer size in bytes."""
+        return self._socket_send_buffer_size
+
+    @socket_send_buffer_size.setter
+    def socket_send_buffer_size(self, value: Optional[int]) -> None:
+        self._socket_send_buffer_size = value
+        self._validate()
+
+    @property
+    def socket_receive_buffer_size(self) -> Optional[int]:
+        """Get the socket receive buffer size in bytes."""
+        return self._socket_receive_buffer_size
+
+    @socket_receive_buffer_size.setter
+    def socket_receive_buffer_size(self, value: Optional[int]) -> None:
+        self._socket_receive_buffer_size = value
+        self._validate()
+
+    @property
+    def socket_linger_seconds(self) -> Optional[int]:
+        """Get the socket linger time in seconds."""
+        return self._socket_linger_seconds
+
+    @socket_linger_seconds.setter
+    def socket_linger_seconds(self, value: Optional[int]) -> None:
+        self._socket_linger_seconds = value
+        self._validate()
+
     @classmethod
     def from_dict(cls, data: dict) -> "NetworkConfig":
         """Create NetworkConfig from a dictionary."""
@@ -985,6 +1060,11 @@ class NetworkConfig:
             addresses=data.get("addresses", ["localhost:5701"]),
             connection_timeout=data.get("connection_timeout", 5.0),
             smart_routing=data.get("smart_routing", True),
+            tcp_no_delay=data.get("tcp_no_delay", True),
+            socket_keep_alive=data.get("socket_keep_alive", True),
+            socket_send_buffer_size=data.get("socket_send_buffer_size"),
+            socket_receive_buffer_size=data.get("socket_receive_buffer_size"),
+            socket_linger_seconds=data.get("socket_linger_seconds"),
         )
 
 

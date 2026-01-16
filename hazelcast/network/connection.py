@@ -47,12 +47,22 @@ class Connection:
         connection_timeout: float = 5.0,
         ssl_config: Optional["SSLConfig"] = None,
         socket_interceptor: Optional["SocketInterceptor"] = None,
+        tcp_no_delay: bool = True,
+        socket_keep_alive: bool = True,
+        socket_send_buffer_size: Optional[int] = None,
+        socket_receive_buffer_size: Optional[int] = None,
+        socket_linger_seconds: Optional[int] = None,
     ):
         self._address = address
         self._connection_id = connection_id
         self._connection_timeout = connection_timeout
         self._ssl_config = ssl_config
         self._socket_interceptor = socket_interceptor
+        self._tcp_no_delay = tcp_no_delay
+        self._socket_keep_alive = socket_keep_alive
+        self._socket_send_buffer_size = socket_send_buffer_size
+        self._socket_receive_buffer_size = socket_receive_buffer_size
+        self._socket_linger_seconds = socket_linger_seconds
 
         self._state = ConnectionState.CREATED
         self._reader: Optional[asyncio.StreamReader] = None
@@ -150,6 +160,7 @@ class Connection:
 
             sock = self._writer.get_extra_info("socket")
             if sock:
+                self._apply_socket_options(sock)
                 self._remote_address = sock.getpeername()
                 self._local_address = sock.getsockname()
 
@@ -184,6 +195,34 @@ class Connection:
             raise HazelcastException(
                 f"Failed to connect to {self._address}: {e}"
             )
+
+    def _apply_socket_options(self, sock: socket.socket) -> None:
+        """Apply configured socket options to the socket."""
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, int(self._tcp_no_delay))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, int(self._socket_keep_alive))
+
+            if self._socket_send_buffer_size is not None:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self._socket_send_buffer_size)
+
+            if self._socket_receive_buffer_size is not None:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self._socket_receive_buffer_size)
+
+            if self._socket_linger_seconds is not None:
+                sock.setsockopt(
+                    socket.SOL_SOCKET,
+                    socket.SO_LINGER,
+                    struct.pack("ii", 1, self._socket_linger_seconds),
+                )
+
+            _logger.debug(
+                "Connection %d: applied socket options (tcp_no_delay=%s, keep_alive=%s)",
+                self._connection_id,
+                self._tcp_no_delay,
+                self._socket_keep_alive,
+            )
+        except OSError as e:
+            _logger.warning("Connection %d: failed to set socket options: %s", self._connection_id, e)
 
     def start_reading(self) -> None:
         """Start the background read task."""
