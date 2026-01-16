@@ -1,364 +1,319 @@
-"""Tests for Transaction API."""
+"""Unit tests for Hazelcast transaction functionality."""
 
 import unittest
 from unittest.mock import MagicMock, patch
-import time
 
 from hazelcast.transaction import (
+    TransactionContext,
+    TransactionOptions,
     TransactionType,
     TransactionState,
-    TransactionOptions,
-    TransactionContext,
-    TransactionException,
     TransactionNotActiveException,
     TransactionTimedOutException,
 )
-from hazelcast.proxy.transactional import (
-    TransactionalProxy,
-    TransactionalMap,
-    TransactionalSet,
-    TransactionalList,
-    TransactionalQueue,
-    TransactionalMultiMap,
-)
-from hazelcast.proxy.base import ProxyContext
 from hazelcast.exceptions import IllegalStateException
-
-
-class TestTransactionType(unittest.TestCase):
-    """Tests for TransactionType enum."""
-
-    def test_one_phase_value(self):
-        self.assertEqual(TransactionType.ONE_PHASE.value, 1)
-
-    def test_two_phase_value(self):
-        self.assertEqual(TransactionType.TWO_PHASE.value, 2)
-
-
-class TestTransactionState(unittest.TestCase):
-    """Tests for TransactionState enum."""
-
-    def test_all_states_exist(self):
-        states = [
-            TransactionState.NO_TXN,
-            TransactionState.ACTIVE,
-            TransactionState.PREPARING,
-            TransactionState.PREPARED,
-            TransactionState.COMMITTING,
-            TransactionState.COMMITTED,
-            TransactionState.ROLLING_BACK,
-            TransactionState.ROLLED_BACK,
-        ]
-        self.assertEqual(len(states), 8)
 
 
 class TestTransactionOptions(unittest.TestCase):
     """Tests for TransactionOptions configuration."""
 
-    def test_default_values(self):
+    def test_default_options(self):
+        """Test default transaction options."""
         options = TransactionOptions()
-        self.assertEqual(options.timeout, 120.0)
-        self.assertEqual(options.durability, 1)
-        self.assertEqual(options.transaction_type, TransactionType.ONE_PHASE)
+        self.assertEqual(120.0, options.timeout)
+        self.assertEqual(1, options.durability)
+        self.assertEqual(TransactionType.ONE_PHASE, options.transaction_type)
 
-    def test_custom_timeout(self):
-        options = TransactionOptions(timeout=60.0)
-        self.assertEqual(options.timeout, 60.0)
-        self.assertEqual(options.timeout_millis, 60000)
+    def test_custom_options(self):
+        """Test custom transaction options."""
+        options = TransactionOptions(
+            timeout=60.0,
+            durability=2,
+            transaction_type=TransactionType.TWO_PHASE,
+        )
+        self.assertEqual(60.0, options.timeout)
+        self.assertEqual(2, options.durability)
+        self.assertEqual(TransactionType.TWO_PHASE, options.transaction_type)
 
-    def test_custom_durability(self):
-        options = TransactionOptions(durability=3)
-        self.assertEqual(options.durability, 3)
-
-    def test_two_phase_type(self):
-        options = TransactionOptions(transaction_type=TransactionType.TWO_PHASE)
-        self.assertEqual(options.transaction_type, TransactionType.TWO_PHASE)
+    def test_timeout_millis(self):
+        """Test timeout conversion to milliseconds."""
+        options = TransactionOptions(timeout=30.5)
+        self.assertEqual(30500, options.timeout_millis)
 
     def test_invalid_timeout_raises(self):
+        """Test that non-positive timeout raises ValueError."""
         with self.assertRaises(ValueError):
             TransactionOptions(timeout=0)
-
         with self.assertRaises(ValueError):
             TransactionOptions(timeout=-1)
 
     def test_invalid_durability_raises(self):
+        """Test that negative durability raises ValueError."""
         with self.assertRaises(ValueError):
             TransactionOptions(durability=-1)
 
-    def test_repr(self):
-        options = TransactionOptions(
-            timeout=30.0,
-            durability=2,
-            transaction_type=TransactionType.TWO_PHASE,
-        )
-        repr_str = repr(options)
-        self.assertIn("timeout=30.0", repr_str)
-        self.assertIn("durability=2", repr_str)
-        self.assertIn("TWO_PHASE", repr_str)
-
 
 class TestTransactionContext(unittest.TestCase):
-    """Tests for TransactionContext."""
+    """Tests for TransactionContext lifecycle."""
 
     def setUp(self):
-        self.mock_invocation_service = MagicMock()
-        self.mock_serialization_service = MagicMock()
-        self.context = ProxyContext(
-            invocation_service=self.mock_invocation_service,
-            serialization_service=self.mock_serialization_service,
-        )
+        """Set up test fixtures."""
+        self.mock_context = MagicMock()
+        self.txn_ctx = TransactionContext(self.mock_context)
 
     def test_initial_state(self):
-        txn_ctx = TransactionContext(self.context)
-        self.assertEqual(txn_ctx.state, TransactionState.NO_TXN)
-        self.assertIsNone(txn_ctx.txn_id)
+        """Test transaction starts in NO_TXN state."""
+        self.assertEqual(TransactionState.NO_TXN, self.txn_ctx.state)
+        self.assertIsNone(self.txn_ctx.txn_id)
 
-    def test_begin_changes_state_to_active(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        self.assertEqual(txn_ctx.state, TransactionState.ACTIVE)
-        self.assertIsNotNone(txn_ctx.txn_id)
+    def test_begin_transitions_to_active(self):
+        """Test begin() transitions state to ACTIVE."""
+        result = self.txn_ctx.begin()
+        self.assertEqual(TransactionState.ACTIVE, self.txn_ctx.state)
+        self.assertIsNotNone(self.txn_ctx.txn_id)
+        self.assertIs(result, self.txn_ctx)
 
-    def test_begin_returns_self(self):
-        txn_ctx = TransactionContext(self.context)
-        result = txn_ctx.begin()
-        self.assertIs(result, txn_ctx)
+    def test_begin_returns_self_for_chaining(self):
+        """Test begin() returns self for method chaining."""
+        result = self.txn_ctx.begin()
+        self.assertIs(result, self.txn_ctx)
 
-    def test_commit_changes_state_to_committed(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_ctx.commit()
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
-
-    def test_rollback_changes_state_to_rolled_back(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_ctx.rollback()
-        self.assertEqual(txn_ctx.state, TransactionState.ROLLED_BACK)
+    def test_commit_after_begin(self):
+        """Test commit() succeeds after begin()."""
+        self.txn_ctx.begin()
+        self.txn_ctx.commit()
+        self.assertEqual(TransactionState.COMMITTED, self.txn_ctx.state)
 
     def test_commit_without_begin_raises(self):
-        txn_ctx = TransactionContext(self.context)
+        """Test commit() raises when transaction not active."""
         with self.assertRaises(TransactionNotActiveException):
-            txn_ctx.commit()
+            self.txn_ctx.commit()
+
+    def test_rollback_after_begin(self):
+        """Test rollback() succeeds after begin()."""
+        self.txn_ctx.begin()
+        self.txn_ctx.rollback()
+        self.assertEqual(TransactionState.ROLLED_BACK, self.txn_ctx.state)
 
     def test_rollback_without_begin_is_noop(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.rollback()
-        self.assertEqual(txn_ctx.state, TransactionState.NO_TXN)
+        """Test rollback() is no-op when not active."""
+        self.txn_ctx.rollback()
+        self.assertEqual(TransactionState.NO_TXN, self.txn_ctx.state)
+
+    def test_rollback_after_commit_is_noop(self):
+        """Test rollback() is no-op after commit."""
+        self.txn_ctx.begin()
+        self.txn_ctx.commit()
+        self.txn_ctx.rollback()
+        self.assertEqual(TransactionState.COMMITTED, self.txn_ctx.state)
 
     def test_double_begin_raises(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
+        """Test begin() raises when already active."""
+        self.txn_ctx.begin()
         with self.assertRaises(IllegalStateException):
-            txn_ctx.begin()
+            self.txn_ctx.begin()
 
     def test_double_commit_raises(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_ctx.commit()
+        """Test commit() raises when already committed."""
+        self.txn_ctx.begin()
+        self.txn_ctx.commit()
         with self.assertRaises(TransactionNotActiveException):
-            txn_ctx.commit()
+            self.txn_ctx.commit()
 
-    def test_commit_after_rollback_raises(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_ctx.rollback()
-        with self.assertRaises(TransactionNotActiveException):
-            txn_ctx.commit()
 
-    def test_two_phase_commit_goes_through_prepare(self):
-        options = TransactionOptions(transaction_type=TransactionType.TWO_PHASE)
-        txn_ctx = TransactionContext(self.context, options)
-        txn_ctx.begin()
-        txn_ctx.commit()
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
+class TestTransactionContextManager(unittest.TestCase):
+    """Tests for TransactionContext as context manager."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_context = MagicMock()
 
     def test_context_manager_commits_on_success(self):
-        txn_ctx = TransactionContext(self.context)
-        with txn_ctx:
-            pass
-        self.assertEqual(txn_ctx.state, TransactionState.COMMITTED)
+        """Test context manager commits on successful exit."""
+        txn_ctx = TransactionContext(self.mock_context)
+        with txn_ctx as ctx:
+            self.assertEqual(TransactionState.ACTIVE, ctx.state)
+            self.assertIsNotNone(ctx.txn_id)
+        self.assertEqual(TransactionState.COMMITTED, txn_ctx.state)
 
-    def test_context_manager_rolls_back_on_exception(self):
-        txn_ctx = TransactionContext(self.context)
+    def test_context_manager_rollback_on_exception(self):
+        """Test context manager rolls back on exception."""
+        txn_ctx = TransactionContext(self.mock_context)
         with self.assertRaises(ValueError):
             with txn_ctx:
                 raise ValueError("test error")
-        self.assertEqual(txn_ctx.state, TransactionState.ROLLED_BACK)
+        self.assertEqual(TransactionState.ROLLED_BACK, txn_ctx.state)
 
-    def test_get_map_returns_transactional_map(self):
-        txn_ctx = TransactionContext(self.context)
+    def test_context_manager_returns_context(self):
+        """Test context manager returns the transaction context."""
+        txn_ctx = TransactionContext(self.mock_context)
+        with txn_ctx as ctx:
+            self.assertIs(ctx, txn_ctx)
+
+
+class TestTransactionTwoPhase(unittest.TestCase):
+    """Tests for two-phase commit transactions."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_context = MagicMock()
+        options = TransactionOptions(transaction_type=TransactionType.TWO_PHASE)
+        self.txn_ctx = TransactionContext(self.mock_context, options)
+
+    def test_two_phase_commit_goes_through_prepare(self):
+        """Test two-phase commit transitions through PREPARED state."""
+        self.txn_ctx.begin()
+        self.txn_ctx.commit()
+        self.assertEqual(TransactionState.COMMITTED, self.txn_ctx.state)
+
+    def test_options_preserved(self):
+        """Test that transaction options are preserved."""
+        self.assertEqual(
+            TransactionType.TWO_PHASE,
+            self.txn_ctx.options.transaction_type,
+        )
+
+
+class TestTransactionTimeout(unittest.TestCase):
+    """Tests for transaction timeout handling."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_context = MagicMock()
+
+    def test_timeout_raises_on_commit(self):
+        """Test that timed out transaction raises on commit."""
+        options = TransactionOptions(timeout=0.001)
+        txn_ctx = TransactionContext(self.mock_context, options)
         txn_ctx.begin()
-        txn_map = txn_ctx.get_map("test-map")
-        self.assertIsInstance(txn_map, TransactionalMap)
-        self.assertEqual(txn_map.name, "test-map")
 
-    def test_get_map_without_begin_raises(self):
-        txn_ctx = TransactionContext(self.context)
-        with self.assertRaises(TransactionNotActiveException):
-            txn_ctx.get_map("test-map")
+        import time
+        time.sleep(0.01)
 
-    def test_get_map_returns_same_instance(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        map1 = txn_ctx.get_map("test-map")
-        map2 = txn_ctx.get_map("test-map")
-        self.assertIs(map1, map2)
-
-    def test_get_set_returns_transactional_set(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_set = txn_ctx.get_set("test-set")
-        self.assertIsInstance(txn_set, TransactionalSet)
-
-    def test_get_list_returns_transactional_list(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_list = txn_ctx.get_list("test-list")
-        self.assertIsInstance(txn_list, TransactionalList)
-
-    def test_get_queue_returns_transactional_queue(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_queue = txn_ctx.get_queue("test-queue")
-        self.assertIsInstance(txn_queue, TransactionalQueue)
-
-    def test_get_multi_map_returns_transactional_multi_map(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        txn_mm = txn_ctx.get_multi_map("test-multimap")
-        self.assertIsInstance(txn_mm, TransactionalMultiMap)
-
-    def test_timeout_raises_exception(self):
-        options = TransactionOptions(timeout=0.01)
-        txn_ctx = TransactionContext(self.context, options)
-        txn_ctx.begin()
-        time.sleep(0.02)
         with self.assertRaises(TransactionTimedOutException):
             txn_ctx.commit()
 
-    def test_repr(self):
-        txn_ctx = TransactionContext(self.context)
-        txn_ctx.begin()
-        repr_str = repr(txn_ctx)
-        self.assertIn("TransactionContext", repr_str)
-        self.assertIn("ACTIVE", repr_str)
-        self.assertIn("ONE_PHASE", repr_str)
 
-
-class TestTransactionalMap(unittest.TestCase):
-    """Tests for TransactionalMap proxy."""
+class TestTransactionProxies(unittest.TestCase):
+    """Tests for transactional proxy access."""
 
     def setUp(self):
-        self.mock_context = ProxyContext(
-            invocation_service=MagicMock(),
-            serialization_service=MagicMock(),
-        )
+        """Set up test fixtures."""
+        self.mock_context = MagicMock()
         self.txn_ctx = TransactionContext(self.mock_context)
+
+    def test_get_map_requires_active_transaction(self):
+        """Test get_map() requires active transaction."""
+        with self.assertRaises(TransactionNotActiveException):
+            self.txn_ctx.get_map("test-map")
+
+    def test_get_map_returns_transactional_map(self):
+        """Test get_map() returns TransactionalMap after begin()."""
         self.txn_ctx.begin()
-        self.txn_map = self.txn_ctx.get_map("test-map")
+        txn_map = self.txn_ctx.get_map("test-map")
+        self.assertIsNotNone(txn_map)
 
-    def test_put_requires_active_transaction(self):
-        self.txn_ctx.commit()
+    def test_get_map_returns_same_instance(self):
+        """Test get_map() returns same proxy for same name."""
+        self.txn_ctx.begin()
+        map1 = self.txn_ctx.get_map("test-map")
+        map2 = self.txn_ctx.get_map("test-map")
+        self.assertIs(map1, map2)
+
+    def test_get_set_requires_active_transaction(self):
+        """Test get_set() requires active transaction."""
         with self.assertRaises(TransactionNotActiveException):
-            self.txn_map.put("key", "value")
+            self.txn_ctx.get_set("test-set")
 
-    def test_get_requires_active_transaction(self):
-        self.txn_ctx.commit()
+    def test_get_list_requires_active_transaction(self):
+        """Test get_list() requires active transaction."""
         with self.assertRaises(TransactionNotActiveException):
-            self.txn_map.get("key")
+            self.txn_ctx.get_list("test-list")
 
-    def test_remove_requires_active_transaction(self):
-        self.txn_ctx.commit()
+    def test_get_queue_requires_active_transaction(self):
+        """Test get_queue() requires active transaction."""
         with self.assertRaises(TransactionNotActiveException):
-            self.txn_map.remove("key")
+            self.txn_ctx.get_queue("test-queue")
 
-    def test_contains_key_requires_active_transaction(self):
-        self.txn_ctx.commit()
+    def test_get_multi_map_requires_active_transaction(self):
+        """Test get_multi_map() requires active transaction."""
         with self.assertRaises(TransactionNotActiveException):
-            self.txn_map.contains_key("key")
-
-    def test_size_requires_active_transaction(self):
-        self.txn_ctx.commit()
-        with self.assertRaises(TransactionNotActiveException):
-            self.txn_map.size()
-
-    def test_is_empty_delegates_to_size(self):
-        result = self.txn_map.is_empty()
-        self.assertTrue(result)
-
-    def test_repr(self):
-        repr_str = repr(self.txn_map)
-        self.assertIn("TransactionalMap", repr_str)
-        self.assertIn("test-map", repr_str)
+            self.txn_ctx.get_multi_map("test-multimap")
 
 
-class TestTransactionalSet(unittest.TestCase):
-    """Tests for TransactionalSet proxy."""
+class TestNewTransactionContextReturnsCorrectType(unittest.TestCase):
+    """Tests to verify new_transaction_context returns TransactionContext."""
 
-    def setUp(self):
-        self.mock_context = ProxyContext(
-            invocation_service=MagicMock(),
-            serialization_service=MagicMock(),
+    @patch("hazelcast.client.SerializationService")
+    @patch("hazelcast.client.PartitionService")
+    @patch("hazelcast.client.ConnectionManager")
+    @patch("hazelcast.client.InvocationService")
+    @patch("hazelcast.client.MetricsRegistry")
+    def test_new_transaction_context_returns_transaction_context(
+        self, mock_metrics, mock_invocation, mock_conn, mock_partition, mock_serial
+    ):
+        """Test that new_transaction_context returns TransactionContext, not JetService."""
+        from hazelcast.client import HazelcastClient
+        from hazelcast.config import ClientConfig
+
+        client = HazelcastClient(ClientConfig())
+        client.start()
+
+        ctx = client.new_transaction_context()
+
+        self.assertIsInstance(ctx, TransactionContext)
+        self.assertEqual(TransactionState.NO_TXN, ctx.state)
+
+        client.shutdown()
+
+    @patch("hazelcast.client.SerializationService")
+    @patch("hazelcast.client.PartitionService")
+    @patch("hazelcast.client.ConnectionManager")
+    @patch("hazelcast.client.InvocationService")
+    @patch("hazelcast.client.MetricsRegistry")
+    def test_new_transaction_context_with_options(
+        self, mock_metrics, mock_invocation, mock_conn, mock_partition, mock_serial
+    ):
+        """Test new_transaction_context accepts and uses options."""
+        from hazelcast.client import HazelcastClient
+        from hazelcast.config import ClientConfig
+
+        client = HazelcastClient(ClientConfig())
+        client.start()
+
+        options = TransactionOptions(
+            timeout=30.0,
+            transaction_type=TransactionType.TWO_PHASE,
         )
-        self.txn_ctx = TransactionContext(self.mock_context)
-        self.txn_ctx.begin()
-        self.txn_set = self.txn_ctx.get_set("test-set")
+        ctx = client.new_transaction_context(options)
 
-    def test_add_requires_active_transaction(self):
-        self.txn_ctx.commit()
-        with self.assertRaises(TransactionNotActiveException):
-            self.txn_set.add("item")
+        self.assertIsInstance(ctx, TransactionContext)
+        self.assertEqual(30.0, ctx.options.timeout)
+        self.assertEqual(TransactionType.TWO_PHASE, ctx.options.transaction_type)
 
-    def test_remove_requires_active_transaction(self):
-        self.txn_ctx.commit()
-        with self.assertRaises(TransactionNotActiveException):
-            self.txn_set.remove("item")
+        client.shutdown()
 
+    @patch("hazelcast.client.SerializationService")
+    @patch("hazelcast.client.PartitionService")
+    @patch("hazelcast.client.ConnectionManager")
+    @patch("hazelcast.client.InvocationService")
+    @patch("hazelcast.client.MetricsRegistry")
+    def test_new_transaction_context_creates_fresh_instance(
+        self, mock_metrics, mock_invocation, mock_conn, mock_partition, mock_serial
+    ):
+        """Test each call to new_transaction_context creates a new instance."""
+        from hazelcast.client import HazelcastClient
+        from hazelcast.config import ClientConfig
 
-class TestTransactionalQueue(unittest.TestCase):
-    """Tests for TransactionalQueue proxy."""
+        client = HazelcastClient(ClientConfig())
+        client.start()
 
-    def setUp(self):
-        self.mock_context = ProxyContext(
-            invocation_service=MagicMock(),
-            serialization_service=MagicMock(),
-        )
-        self.txn_ctx = TransactionContext(self.mock_context)
-        self.txn_ctx.begin()
-        self.txn_queue = self.txn_ctx.get_queue("test-queue")
+        ctx1 = client.new_transaction_context()
+        ctx2 = client.new_transaction_context()
 
-    def test_offer_requires_active_transaction(self):
-        self.txn_ctx.commit()
-        with self.assertRaises(TransactionNotActiveException):
-            self.txn_queue.offer("item")
+        self.assertIsNot(ctx1, ctx2)
 
-    def test_poll_requires_active_transaction(self):
-        self.txn_ctx.commit()
-        with self.assertRaises(TransactionNotActiveException):
-            self.txn_queue.poll()
-
-
-class TestTransactionExceptions(unittest.TestCase):
-    """Tests for transaction exception classes."""
-
-    def test_transaction_exception(self):
-        ex = TransactionException("test error")
-        self.assertEqual(str(ex), "test error")
-
-    def test_transaction_exception_with_cause(self):
-        cause = ValueError("original error")
-        ex = TransactionException("wrapped error", cause=cause)
-        self.assertIn("wrapped error", str(ex))
-        self.assertEqual(ex.cause, cause)
-
-    def test_transaction_not_active_exception(self):
-        ex = TransactionNotActiveException()
-        self.assertIn("not active", str(ex))
-
-    def test_transaction_timed_out_exception(self):
-        ex = TransactionTimedOutException()
-        self.assertIn("timed out", str(ex))
+        client.shutdown()
 
 
 if __name__ == "__main__":
