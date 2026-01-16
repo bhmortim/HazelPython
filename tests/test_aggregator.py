@@ -1,6 +1,7 @@
-"""Unit tests for the aggregator module."""
+"""Unit tests for hazelcast/aggregator.py"""
 
 import unittest
+from abc import ABC
 
 from hazelcast.aggregator import (
     Aggregator,
@@ -40,24 +41,38 @@ from hazelcast.aggregator import (
 )
 
 
+class TestAggregatorABC(unittest.TestCase):
+    def test_aggregator_is_abstract(self):
+        self.assertTrue(issubclass(Aggregator, ABC))
+
+    def test_aggregator_cannot_be_instantiated(self):
+        with self.assertRaises(TypeError):
+            Aggregator()
+
+    def test_aggregator_has_to_dict_abstract_method(self):
+        self.assertIn("to_dict", Aggregator.__abstractmethods__)
+
+
 class TestCountAggregator(unittest.TestCase):
-    def test_creation_no_attribute(self):
+    def test_init_without_attribute(self):
         agg = CountAggregator()
         self.assertIsNone(agg.attribute)
 
-    def test_creation_with_attribute(self):
+    def test_init_with_attribute(self):
         agg = CountAggregator("name")
         self.assertEqual(agg.attribute, "name")
 
-    def test_to_dict_no_attribute(self):
+    def test_to_dict_without_attribute(self):
         agg = CountAggregator()
-        self.assertEqual(agg.to_dict(), {"type": "count"})
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "count"})
 
     def test_to_dict_with_attribute(self):
-        agg = CountAggregator("status")
-        self.assertEqual(agg.to_dict(), {"type": "count", "attribute": "status"})
+        agg = CountAggregator("email")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "count", "attribute": "email"})
 
-    def test_repr_no_attribute(self):
+    def test_repr_without_attribute(self):
         agg = CountAggregator()
         self.assertEqual(repr(agg), "CountAggregator()")
 
@@ -67,27 +82,29 @@ class TestCountAggregator(unittest.TestCase):
 
 
 class TestDistinctValuesAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = DistinctValuesAggregator("category")
         self.assertEqual(agg.attribute, "category")
 
     def test_to_dict(self):
-        agg = DistinctValuesAggregator("type")
-        self.assertEqual(agg.to_dict(), {"type": "distinct", "attribute": "type"})
+        agg = DistinctValuesAggregator("status")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "distinct", "attribute": "status"})
 
     def test_repr(self):
-        agg = DistinctValuesAggregator("status")
-        self.assertEqual(repr(agg), "DistinctValuesAggregator('status')")
+        agg = DistinctValuesAggregator("type")
+        self.assertEqual(repr(agg), "DistinctValuesAggregator('type')")
 
 
 class TestSumAggregator(unittest.TestCase):
-    def test_creation(self):
-        agg = SumAggregator("price")
-        self.assertEqual(agg.attribute, "price")
+    def test_init(self):
+        agg = SumAggregator("amount")
+        self.assertEqual(agg.attribute, "amount")
 
     def test_to_dict(self):
-        agg = SumAggregator("amount")
-        self.assertEqual(agg.to_dict(), {"type": "sum", "attribute": "amount"})
+        agg = SumAggregator("price")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "sum", "attribute": "price"})
 
     def test_repr(self):
         agg = SumAggregator("total")
@@ -95,99 +112,104 @@ class TestSumAggregator(unittest.TestCase):
 
 
 class TestAverageAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = AverageAggregator("score")
         self.assertEqual(agg.attribute, "score")
 
     def test_to_dict(self):
         agg = AverageAggregator("rating")
-        self.assertEqual(agg.to_dict(), {"type": "average", "attribute": "rating"})
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "average", "attribute": "rating"})
 
     def test_repr(self):
-        agg = AverageAggregator("grade")
-        self.assertEqual(repr(agg), "AverageAggregator('grade')")
+        agg = AverageAggregator("value")
+        self.assertEqual(repr(agg), "AverageAggregator('value')")
 
 
 class TestMinAggregator(unittest.TestCase):
-    def test_creation(self):
-        agg = MinAggregator("price")
-        self.assertEqual(agg.attribute, "price")
+    def test_init(self):
+        agg = MinAggregator("age")
+        self.assertEqual(agg.attribute, "age")
 
     def test_to_dict(self):
         agg = MinAggregator("timestamp")
-        self.assertEqual(agg.to_dict(), {"type": "min", "attribute": "timestamp"})
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "min", "attribute": "timestamp"})
 
     def test_repr(self):
-        agg = MinAggregator("age")
-        self.assertEqual(repr(agg), "MinAggregator('age')")
+        agg = MinAggregator("price")
+        self.assertEqual(repr(agg), "MinAggregator('price')")
 
 
 class TestMaxAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = MaxAggregator("salary")
         self.assertEqual(agg.attribute, "salary")
 
     def test_to_dict(self):
-        agg = MaxAggregator("value")
-        self.assertEqual(agg.to_dict(), {"type": "max", "attribute": "value"})
+        agg = MaxAggregator("count")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "max", "attribute": "count"})
 
     def test_repr(self):
-        agg = MaxAggregator("count")
-        self.assertEqual(repr(agg), "MaxAggregator('count')")
+        agg = MaxAggregator("level")
+        self.assertEqual(repr(agg), "MaxAggregator('level')")
 
 
 class TestIntegerSumAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = IntegerSumAggregator("quantity")
         self.assertEqual(agg.attribute, "quantity")
 
     def test_to_dict(self):
-        agg = IntegerSumAggregator("items")
-        self.assertEqual(agg.to_dict(), {"type": "integer_sum", "attribute": "items"})
+        agg = IntegerSumAggregator("count")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "integer_sum", "attribute": "count"})
 
     def test_repr(self):
-        agg = IntegerSumAggregator("units")
-        self.assertEqual(repr(agg), "IntegerSumAggregator('units')")
+        agg = IntegerSumAggregator("items")
+        self.assertEqual(repr(agg), "IntegerSumAggregator('items')")
 
 
 class TestIntegerAverageAggregator(unittest.TestCase):
-    def test_creation(self):
-        agg = IntegerAverageAggregator("count")
-        self.assertEqual(agg.attribute, "count")
+    def test_init(self):
+        agg = IntegerAverageAggregator("rating")
+        self.assertEqual(agg.attribute, "rating")
 
     def test_to_dict(self):
-        agg = IntegerAverageAggregator("level")
-        self.assertEqual(
-            agg.to_dict(), {"type": "integer_average", "attribute": "level"}
-        )
+        agg = IntegerAverageAggregator("score")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "integer_average", "attribute": "score"})
 
     def test_repr(self):
-        agg = IntegerAverageAggregator("rank")
-        self.assertEqual(repr(agg), "IntegerAverageAggregator('rank')")
+        agg = IntegerAverageAggregator("level")
+        self.assertEqual(repr(agg), "IntegerAverageAggregator('level')")
 
 
 class TestLongSumAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = LongSumAggregator("bytes")
         self.assertEqual(agg.attribute, "bytes")
 
     def test_to_dict(self):
         agg = LongSumAggregator("size")
-        self.assertEqual(agg.to_dict(), {"type": "long_sum", "attribute": "size"})
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "long_sum", "attribute": "size"})
 
     def test_repr(self):
-        agg = LongSumAggregator("offset")
-        self.assertEqual(repr(agg), "LongSumAggregator('offset')")
+        agg = LongSumAggregator("total")
+        self.assertEqual(repr(agg), "LongSumAggregator('total')")
 
 
 class TestLongAverageAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = LongAverageAggregator("duration")
         self.assertEqual(agg.attribute, "duration")
 
     def test_to_dict(self):
         agg = LongAverageAggregator("latency")
-        self.assertEqual(agg.to_dict(), {"type": "long_average", "attribute": "latency"})
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "long_average", "attribute": "latency"})
 
     def test_repr(self):
         agg = LongAverageAggregator("time")
@@ -195,29 +217,29 @@ class TestLongAverageAggregator(unittest.TestCase):
 
 
 class TestDoubleSumAggregator(unittest.TestCase):
-    def test_creation(self):
-        agg = DoubleSumAggregator("price")
-        self.assertEqual(agg.attribute, "price")
+    def test_init(self):
+        agg = DoubleSumAggregator("amount")
+        self.assertEqual(agg.attribute, "amount")
 
     def test_to_dict(self):
-        agg = DoubleSumAggregator("cost")
-        self.assertEqual(agg.to_dict(), {"type": "double_sum", "attribute": "cost"})
+        agg = DoubleSumAggregator("price")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "double_sum", "attribute": "price"})
 
     def test_repr(self):
-        agg = DoubleSumAggregator("value")
-        self.assertEqual(repr(agg), "DoubleSumAggregator('value')")
+        agg = DoubleSumAggregator("total")
+        self.assertEqual(repr(agg), "DoubleSumAggregator('total')")
 
 
 class TestDoubleAverageAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = DoubleAverageAggregator("rate")
         self.assertEqual(agg.attribute, "rate")
 
     def test_to_dict(self):
         agg = DoubleAverageAggregator("percentage")
-        self.assertEqual(
-            agg.to_dict(), {"type": "double_average", "attribute": "percentage"}
-        )
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "double_average", "attribute": "percentage"})
 
     def test_repr(self):
         agg = DoubleAverageAggregator("ratio")
@@ -225,82 +247,37 @@ class TestDoubleAverageAggregator(unittest.TestCase):
 
 
 class TestFixedPointSumAggregator(unittest.TestCase):
-    def test_creation(self):
-        agg = FixedPointSumAggregator("amount")
-        self.assertEqual(agg.attribute, "amount")
+    def test_init(self):
+        agg = FixedPointSumAggregator("decimal_value")
+        self.assertEqual(agg.attribute, "decimal_value")
 
     def test_to_dict(self):
-        agg = FixedPointSumAggregator("balance")
-        self.assertEqual(
-            agg.to_dict(), {"type": "fixed_point_sum", "attribute": "balance"}
-        )
+        agg = FixedPointSumAggregator("currency")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "fixed_point_sum", "attribute": "currency"})
 
     def test_repr(self):
-        agg = FixedPointSumAggregator("total")
-        self.assertEqual(repr(agg), "FixedPointSumAggregator('total')")
+        agg = FixedPointSumAggregator("balance")
+        self.assertEqual(repr(agg), "FixedPointSumAggregator('balance')")
 
 
 class TestFloatingPointSumAggregator(unittest.TestCase):
-    def test_creation(self):
+    def test_init(self):
         agg = FloatingPointSumAggregator("measurement")
         self.assertEqual(agg.attribute, "measurement")
 
     def test_to_dict(self):
-        agg = FloatingPointSumAggregator("reading")
-        self.assertEqual(
-            agg.to_dict(), {"type": "floating_point_sum", "attribute": "reading"}
-        )
+        agg = FloatingPointSumAggregator("temperature")
+        result = agg.to_dict()
+        self.assertEqual(result, {"type": "floating_point_sum", "attribute": "temperature"})
 
     def test_repr(self):
-        agg = FloatingPointSumAggregator("metric")
-        self.assertEqual(repr(agg), "FloatingPointSumAggregator('metric')")
-
-
-class TestSingleAttributeProjection(unittest.TestCase):
-    def test_creation(self):
-        proj = SingleAttributeProjection("name")
-        self.assertEqual(proj.attribute, "name")
-
-    def test_to_dict(self):
-        proj = SingleAttributeProjection("email")
-        self.assertEqual(
-            proj.to_dict(), {"type": "single_attribute", "attribute": "email"}
-        )
-
-    def test_repr(self):
-        proj = SingleAttributeProjection("id")
-        self.assertEqual(repr(proj), "SingleAttributeProjection('id')")
-
-
-class TestMultiAttributeProjection(unittest.TestCase):
-    def test_creation(self):
-        proj = MultiAttributeProjection("name", "email", "age")
-        self.assertEqual(proj.attributes, ["name", "email", "age"])
-
-    def test_to_dict(self):
-        proj = MultiAttributeProjection("first_name", "last_name")
-        self.assertEqual(
-            proj.to_dict(),
-            {"type": "multi_attribute", "attributes": ["first_name", "last_name"]},
-        )
-
-    def test_repr(self):
-        proj = MultiAttributeProjection("a", "b")
-        self.assertEqual(repr(proj), "MultiAttributeProjection(['a', 'b'])")
-
-
-class TestIdentityProjection(unittest.TestCase):
-    def test_to_dict(self):
-        proj = IdentityProjection()
-        self.assertEqual(proj.to_dict(), {"type": "identity"})
-
-    def test_repr(self):
-        proj = IdentityProjection()
-        self.assertEqual(repr(proj), "IdentityProjection()")
+        agg = FloatingPointSumAggregator("weight")
+        self.assertEqual(repr(agg), "FloatingPointSumAggregator('weight')")
 
 
 class TestAggregatorFactoryFunctions(unittest.TestCase):
-    def test_count_no_attribute(self):
+    def test_count_without_attribute(self):
         agg = count()
         self.assertIsInstance(agg, CountAggregator)
         self.assertIsNone(agg.attribute)
@@ -316,9 +293,9 @@ class TestAggregatorFactoryFunctions(unittest.TestCase):
         self.assertEqual(agg.attribute, "category")
 
     def test_sum_(self):
-        agg = sum_("price")
+        agg = sum_("amount")
         self.assertIsInstance(agg, SumAggregator)
-        self.assertEqual(agg.attribute, "price")
+        self.assertEqual(agg.attribute, "amount")
 
     def test_average(self):
         agg = average("score")
@@ -338,40 +315,61 @@ class TestAggregatorFactoryFunctions(unittest.TestCase):
     def test_integer_sum(self):
         agg = integer_sum("count")
         self.assertIsInstance(agg, IntegerSumAggregator)
+        self.assertEqual(agg.attribute, "count")
 
     def test_integer_average(self):
-        agg = integer_average("level")
+        agg = integer_average("rating")
         self.assertIsInstance(agg, IntegerAverageAggregator)
+        self.assertEqual(agg.attribute, "rating")
 
     def test_long_sum(self):
         agg = long_sum("bytes")
         self.assertIsInstance(agg, LongSumAggregator)
+        self.assertEqual(agg.attribute, "bytes")
 
     def test_long_average(self):
         agg = long_average("duration")
         self.assertIsInstance(agg, LongAverageAggregator)
+        self.assertEqual(agg.attribute, "duration")
 
     def test_double_sum(self):
         agg = double_sum("price")
         self.assertIsInstance(agg, DoubleSumAggregator)
+        self.assertEqual(agg.attribute, "price")
 
     def test_double_average(self):
         agg = double_average("rate")
         self.assertIsInstance(agg, DoubleAverageAggregator)
+        self.assertEqual(agg.attribute, "rate")
 
 
-class TestProjectionFactoryFunctions(unittest.TestCase):
-    def test_single_attribute(self):
+class TestReExportedProjectionClasses(unittest.TestCase):
+    def test_projection_class_exported(self):
+        self.assertTrue(issubclass(Projection, ABC))
+
+    def test_single_attribute_projection_exported(self):
+        proj = SingleAttributeProjection("test")
+        self.assertEqual(proj.attribute, "test")
+
+    def test_multi_attribute_projection_exported(self):
+        proj = MultiAttributeProjection("a", "b")
+        self.assertEqual(proj.attributes, ["a", "b"])
+
+    def test_identity_projection_exported(self):
+        proj = IdentityProjection()
+        self.assertEqual(proj.to_dict(), {"type": "identity"})
+
+
+class TestReExportedProjectionFunctions(unittest.TestCase):
+    def test_single_attribute_function(self):
         proj = single_attribute("name")
         self.assertIsInstance(proj, SingleAttributeProjection)
-        self.assertEqual(proj.attribute, "name")
 
-    def test_multi_attribute(self):
-        proj = multi_attribute("name", "email", "age")
+    def test_multi_attribute_function(self):
+        proj = multi_attribute("a", "b", "c")
         self.assertIsInstance(proj, MultiAttributeProjection)
-        self.assertEqual(proj.attributes, ["name", "email", "age"])
 
-    def test_identity(self):
+    def test_identity_function(self):
         proj = identity()
         self.assertIsInstance(proj, IdentityProjection)
 
