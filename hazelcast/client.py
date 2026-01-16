@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from hazelcast.proxy.cache import Cache
     from hazelcast.cache_manager import CacheManager
     from hazelcast.proxy.executor import IExecutorService
+    from hazelcast.proxy.durable_executor import DurableExecutorService
     from hazelcast.proxy.queue import Queue
     from hazelcast.proxy.collections import Set, List as HzList
     from hazelcast.proxy.multi_map import MultiMap
@@ -85,6 +86,7 @@ SERVICE_NAME_COUNT_DOWN_LATCH = "hz:raft:countDownLatchService"
 SERVICE_NAME_SEMAPHORE = "hz:raft:semaphoreService"
 SERVICE_NAME_FENCED_LOCK = "hz:raft:lockService"
 SERVICE_NAME_CP_MAP = "hz:raft:mapService"
+SERVICE_NAME_DURABLE_EXECUTOR = "hz:impl:durableExecutorService"
 
 
 class ClientState(Enum):
@@ -1123,6 +1125,41 @@ class HazelcastClient:
         from hazelcast.proxy.scheduled_executor import IScheduledExecutorService
         return self._get_or_create_proxy(
             SERVICE_NAME_SCHEDULED_EXECUTOR, name, IScheduledExecutorService
+        )
+
+    def get_durable_executor_service(self, name: str) -> "DurableExecutorService":
+        """Get or create a distributed DurableExecutorService.
+
+        Returns a proxy to a durable executor service that executes tasks
+        and stores their results durably on the cluster. Unlike the regular
+        IExecutorService, results can be retrieved at a later time using
+        the unique task ID, even after client reconnection.
+
+        Args:
+            name: Name of the distributed durable executor service.
+
+        Returns:
+            DurableExecutorService instance for executing tasks with
+            durable result storage.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> executor = client.get_durable_executor_service("my-durable-executor")
+            >>> future = executor.submit(my_task)
+            >>> task_id = future.task_id
+            >>> result = future.result()
+            >>>
+            >>> # Later, retrieve result using task ID
+            >>> result = executor.retrieve_result(task_id).result()
+            >>>
+            >>> # Dispose when done
+            >>> executor.dispose_result(task_id)
+        """
+        from hazelcast.proxy.durable_executor import DurableExecutorService
+        return self._get_or_create_proxy(
+            SERVICE_NAME_DURABLE_EXECUTOR, name, DurableExecutorService
         )
 
     def get_fenced_lock(self, name: str) -> "FencedLock":
