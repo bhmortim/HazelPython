@@ -1,5 +1,6 @@
 """Hazelcast client configuration."""
 
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Dict, List, Optional
 import os
@@ -238,6 +239,387 @@ class DiscoveryConfig:
             config.cloud = data["cloud"]
         if "multicast" in data:
             config.multicast = data["multicast"]
+
+        return config
+
+
+class SplitBrainProtectionOn(Enum):
+    """Specifies on which operations split-brain protection is applied.
+
+    Attributes:
+        READ: Protection applied only to read operations.
+        WRITE: Protection applied only to write operations.
+        READ_WRITE: Protection applied to both read and write operations.
+    """
+    READ = "READ"
+    WRITE = "WRITE"
+    READ_WRITE = "READ_WRITE"
+
+
+class SplitBrainProtectionFunctionType(Enum):
+    """Type of built-in split-brain protection function.
+
+    Attributes:
+        MEMBER_COUNT: Simple member count based quorum.
+        PROBABILISTIC: Probabilistic quorum based on phi accrual failure detector.
+        RECENTLY_ACTIVE: Quorum based on recently active members with heartbeat.
+    """
+    MEMBER_COUNT = "MEMBER_COUNT"
+    PROBABILISTIC = "PROBABILISTIC"
+    RECENTLY_ACTIVE = "RECENTLY_ACTIVE"
+
+
+class SplitBrainProtectionEvent:
+    """Event fired when split-brain protection status changes.
+
+    Attributes:
+        name: The name of the split-brain protection configuration.
+        threshold: The minimum cluster size threshold.
+        current_members: List of current member addresses.
+        is_present: Whether quorum is currently present.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        threshold: int,
+        current_members: List[str],
+        is_present: bool,
+    ):
+        self._name = name
+        self._threshold = threshold
+        self._current_members = list(current_members)
+        self._is_present = is_present
+
+    @property
+    def name(self) -> str:
+        """Get the split-brain protection configuration name."""
+        return self._name
+
+    @property
+    def threshold(self) -> int:
+        """Get the minimum cluster size threshold."""
+        return self._threshold
+
+    @property
+    def current_members(self) -> List[str]:
+        """Get the list of current cluster members."""
+        return self._current_members
+
+    @property
+    def is_present(self) -> bool:
+        """Get whether quorum is present."""
+        return self._is_present
+
+
+class SplitBrainProtectionListener(ABC):
+    """Listener for split-brain protection events.
+
+    Implement this class to receive notifications when quorum status changes.
+
+    Example:
+        Custom listener::
+
+            class MyListener(SplitBrainProtectionListener):
+                def on_present(self, event):
+                    print(f"Quorum present: {event.name}")
+
+                def on_absent(self, event):
+                    print(f"Quorum absent: {event.name}")
+    """
+
+    @abstractmethod
+    def on_present(self, event: SplitBrainProtectionEvent) -> None:
+        """Called when quorum is present (enough members in cluster).
+
+        Args:
+            event: The split-brain protection event with details.
+        """
+        pass
+
+    @abstractmethod
+    def on_absent(self, event: SplitBrainProtectionEvent) -> None:
+        """Called when quorum is absent (not enough members in cluster).
+
+        Args:
+            event: The split-brain protection event with details.
+        """
+        pass
+
+
+class SplitBrainProtectionFunction(ABC):
+    """Custom function for determining split-brain protection presence.
+
+    Implement this class to provide custom quorum logic beyond the
+    built-in member count, probabilistic, or recently active functions.
+
+    Example:
+        Custom function requiring specific members::
+
+            class RequireSpecificMembers(SplitBrainProtectionFunction):
+                def __init__(self, required_members):
+                    self._required = set(required_members)
+
+                def apply(self, members):
+                    return self._required.issubset(set(members))
+    """
+
+    @abstractmethod
+    def apply(self, members: List[str]) -> bool:
+        """Determine if split-brain protection requirements are satisfied.
+
+        Args:
+            members: List of current cluster member addresses.
+
+        Returns:
+            True if quorum is satisfied, False otherwise.
+        """
+        pass
+
+
+class SplitBrainProtectionConfig:
+    """Configuration for split-brain protection (quorum).
+
+    Split-brain protection ensures that operations only proceed when
+    a minimum number of cluster members are present, preventing
+    inconsistent operations during network partitions.
+
+    Attributes:
+        name: The name of this configuration.
+        enabled: Whether split-brain protection is enabled.
+        min_cluster_size: Minimum number of members required.
+        protect_on: Which operations to protect (read, write, or both).
+        function_type: Type of built-in protection function.
+        function: Custom protection function (overrides function_type).
+        listeners: List of listeners for quorum events.
+
+    Example:
+        Basic member count protection::
+
+            config = SplitBrainProtectionConfig(
+                name="my-quorum",
+                min_cluster_size=3,
+                protect_on=SplitBrainProtectionOn.WRITE,
+            )
+
+        With custom function::
+
+            config = SplitBrainProtectionConfig(
+                name="custom-quorum",
+                function=MyCustomFunction(),
+            )
+    """
+
+    def __init__(
+        self,
+        name: str = "default",
+        enabled: bool = True,
+        min_cluster_size: int = 2,
+        protect_on: SplitBrainProtectionOn = SplitBrainProtectionOn.READ_WRITE,
+        function_type: SplitBrainProtectionFunctionType = SplitBrainProtectionFunctionType.MEMBER_COUNT,
+        function: Optional[SplitBrainProtectionFunction] = None,
+    ):
+        self._name = name
+        self._enabled = enabled
+        self._min_cluster_size = min_cluster_size
+        self._protect_on = protect_on
+        self._function_type = function_type
+        self._function = function
+        self._listeners: List[SplitBrainProtectionListener] = []
+        self._probabilistic_suspected_epsilon_millis: int = 10000
+        self._probabilistic_max_sample_size: int = 200
+        self._probabilistic_acceptable_heartbeat_pause_millis: int = 60000
+        self._probabilistic_heartbeat_interval_millis: int = 5000
+        self._recently_active_heartbeat_tolerance_millis: int = 60000
+        self._validate()
+
+    def _validate(self) -> None:
+        if not self._name:
+            raise ConfigurationException("Split-brain protection name cannot be empty")
+        if self._min_cluster_size < 1:
+            raise ConfigurationException("min_cluster_size must be at least 1")
+        if self._probabilistic_suspected_epsilon_millis < 0:
+            raise ConfigurationException(
+                "probabilistic_suspected_epsilon_millis cannot be negative"
+            )
+        if self._probabilistic_max_sample_size < 1:
+            raise ConfigurationException(
+                "probabilistic_max_sample_size must be at least 1"
+            )
+        if self._probabilistic_acceptable_heartbeat_pause_millis < 0:
+            raise ConfigurationException(
+                "probabilistic_acceptable_heartbeat_pause_millis cannot be negative"
+            )
+        if self._probabilistic_heartbeat_interval_millis < 1:
+            raise ConfigurationException(
+                "probabilistic_heartbeat_interval_millis must be positive"
+            )
+        if self._recently_active_heartbeat_tolerance_millis < 0:
+            raise ConfigurationException(
+                "recently_active_heartbeat_tolerance_millis cannot be negative"
+            )
+
+    @property
+    def name(self) -> str:
+        """Get the configuration name."""
+        return self._name
+
+    @property
+    def enabled(self) -> bool:
+        """Get whether split-brain protection is enabled."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    @property
+    def min_cluster_size(self) -> int:
+        """Get the minimum cluster size for quorum."""
+        return self._min_cluster_size
+
+    @min_cluster_size.setter
+    def min_cluster_size(self, value: int) -> None:
+        self._min_cluster_size = value
+        self._validate()
+
+    @property
+    def protect_on(self) -> SplitBrainProtectionOn:
+        """Get which operations are protected."""
+        return self._protect_on
+
+    @protect_on.setter
+    def protect_on(self, value: SplitBrainProtectionOn) -> None:
+        self._protect_on = value
+
+    @property
+    def function_type(self) -> SplitBrainProtectionFunctionType:
+        """Get the built-in function type."""
+        return self._function_type
+
+    @function_type.setter
+    def function_type(self, value: SplitBrainProtectionFunctionType) -> None:
+        self._function_type = value
+
+    @property
+    def function(self) -> Optional[SplitBrainProtectionFunction]:
+        """Get the custom function (if set)."""
+        return self._function
+
+    @function.setter
+    def function(self, value: Optional[SplitBrainProtectionFunction]) -> None:
+        self._function = value
+
+    @property
+    def listeners(self) -> List[SplitBrainProtectionListener]:
+        """Get the list of listeners."""
+        return self._listeners
+
+    def add_listener(
+        self, listener: SplitBrainProtectionListener
+    ) -> "SplitBrainProtectionConfig":
+        """Add a listener for quorum events.
+
+        Args:
+            listener: The listener to add.
+
+        Returns:
+            This config for chaining.
+        """
+        self._listeners.append(listener)
+        return self
+
+    @property
+    def probabilistic_suspected_epsilon_millis(self) -> int:
+        """Get the epsilon for probabilistic function (milliseconds)."""
+        return self._probabilistic_suspected_epsilon_millis
+
+    @probabilistic_suspected_epsilon_millis.setter
+    def probabilistic_suspected_epsilon_millis(self, value: int) -> None:
+        self._probabilistic_suspected_epsilon_millis = value
+        self._validate()
+
+    @property
+    def probabilistic_max_sample_size(self) -> int:
+        """Get the max sample size for probabilistic function."""
+        return self._probabilistic_max_sample_size
+
+    @probabilistic_max_sample_size.setter
+    def probabilistic_max_sample_size(self, value: int) -> None:
+        self._probabilistic_max_sample_size = value
+        self._validate()
+
+    @property
+    def probabilistic_acceptable_heartbeat_pause_millis(self) -> int:
+        """Get the acceptable heartbeat pause for probabilistic function."""
+        return self._probabilistic_acceptable_heartbeat_pause_millis
+
+    @probabilistic_acceptable_heartbeat_pause_millis.setter
+    def probabilistic_acceptable_heartbeat_pause_millis(self, value: int) -> None:
+        self._probabilistic_acceptable_heartbeat_pause_millis = value
+        self._validate()
+
+    @property
+    def probabilistic_heartbeat_interval_millis(self) -> int:
+        """Get the heartbeat interval for probabilistic function."""
+        return self._probabilistic_heartbeat_interval_millis
+
+    @probabilistic_heartbeat_interval_millis.setter
+    def probabilistic_heartbeat_interval_millis(self, value: int) -> None:
+        self._probabilistic_heartbeat_interval_millis = value
+        self._validate()
+
+    @property
+    def recently_active_heartbeat_tolerance_millis(self) -> int:
+        """Get the heartbeat tolerance for recently active function."""
+        return self._recently_active_heartbeat_tolerance_millis
+
+    @recently_active_heartbeat_tolerance_millis.setter
+    def recently_active_heartbeat_tolerance_millis(self, value: int) -> None:
+        self._recently_active_heartbeat_tolerance_millis = value
+        self._validate()
+
+    @classmethod
+    def from_dict(cls, name: str, data: dict) -> "SplitBrainProtectionConfig":
+        """Create SplitBrainProtectionConfig from a dictionary."""
+        protect_on_str = data.get("protect_on", "READ_WRITE")
+        try:
+            protect_on = SplitBrainProtectionOn(protect_on_str.upper())
+        except ValueError:
+            raise ConfigurationException(f"Invalid protect_on: {protect_on_str}")
+
+        function_type_str = data.get("function_type", "MEMBER_COUNT")
+        try:
+            function_type = SplitBrainProtectionFunctionType(function_type_str.upper())
+        except ValueError:
+            raise ConfigurationException(f"Invalid function_type: {function_type_str}")
+
+        config = cls(
+            name=name,
+            enabled=data.get("enabled", True),
+            min_cluster_size=data.get("min_cluster_size", 2),
+            protect_on=protect_on,
+            function_type=function_type,
+        )
+
+        if "probabilistic_suspected_epsilon_millis" in data:
+            config.probabilistic_suspected_epsilon_millis = data[
+                "probabilistic_suspected_epsilon_millis"
+            ]
+        if "probabilistic_max_sample_size" in data:
+            config.probabilistic_max_sample_size = data["probabilistic_max_sample_size"]
+        if "probabilistic_acceptable_heartbeat_pause_millis" in data:
+            config.probabilistic_acceptable_heartbeat_pause_millis = data[
+                "probabilistic_acceptable_heartbeat_pause_millis"
+            ]
+        if "probabilistic_heartbeat_interval_millis" in data:
+            config.probabilistic_heartbeat_interval_millis = data[
+                "probabilistic_heartbeat_interval_millis"
+            ]
+        if "recently_active_heartbeat_tolerance_millis" in data:
+            config.recently_active_heartbeat_tolerance_millis = data[
+                "recently_active_heartbeat_tolerance_millis"
+            ]
 
         return config
 
@@ -1530,6 +1912,7 @@ class ClientConfig:
         self._labels: List[str] = []
         self._discovery: DiscoveryConfig = DiscoveryConfig()
         self._statistics: StatisticsConfig = StatisticsConfig()
+        self._split_brain_protections: Dict[str, SplitBrainProtectionConfig] = {}
 
     @property
     def cluster_name(self) -> str:
@@ -1679,6 +2062,38 @@ class ClientConfig:
         """Set the statistics configuration."""
         self._statistics = value
 
+    @property
+    def split_brain_protections(self) -> Dict[str, SplitBrainProtectionConfig]:
+        """Get split-brain protection configurations."""
+        return self._split_brain_protections
+
+    def add_split_brain_protection(
+        self, config: SplitBrainProtectionConfig
+    ) -> "ClientConfig":
+        """Add a split-brain protection configuration.
+
+        Args:
+            config: The split-brain protection configuration.
+
+        Returns:
+            This config for chaining.
+        """
+        self._split_brain_protections[config.name] = config
+        return self
+
+    def get_split_brain_protection(
+        self, name: str
+    ) -> Optional[SplitBrainProtectionConfig]:
+        """Get a split-brain protection configuration by name.
+
+        Args:
+            name: The name of the configuration.
+
+        Returns:
+            The configuration if found, None otherwise.
+        """
+        return self._split_brain_protections.get(name)
+
     @classmethod
     def from_dict(cls, data: dict) -> "ClientConfig":
         """Create ClientConfig from a dictionary."""
@@ -1716,6 +2131,12 @@ class ClientConfig:
 
         if "statistics" in data:
             config.statistics = StatisticsConfig.from_dict(data["statistics"])
+
+        if "split_brain_protections" in data:
+            for name, sbp_data in data["split_brain_protections"].items():
+                config.add_split_brain_protection(
+                    SplitBrainProtectionConfig.from_dict(name, sbp_data)
+                )
 
         return config
 
