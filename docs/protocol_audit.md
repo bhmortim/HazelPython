@@ -27,7 +27,7 @@ This document compares the Python client protocol implementation against the Jav
 | CP Semaphore | 6 | 6 | 0 | 100% |
 | CP CountDownLatch | 5 | 5 | 0 | 100% |
 | CP Map | 6 | 6 | 0 | 100% |
-| CP Session | 5 | 0 | 5 | 0% |
+| CP Session | 5 | 5 | 0 | 100% |
 | CP Group | 4 | 0 | 4 | 0% |
 | SQL | 4 | 3 | 1 | 75% |
 | Jet | 15+ | 0 | 15+ | 0% |
@@ -151,17 +151,17 @@ Per README, XA transactions are explicitly not supported.
 | 0x140500 | XA_FINALIZE | ❌ Not Supported | XA finalize |
 | 0x140600 | XA_ROLLBACK | ❌ Not Supported | XA rollback |
 
-### CP Session Operations (0x1F00xx) - **MISSING**
+### CP Session Operations (0x1F00xx) - **IMPLEMENTED**
 
 Required for proper CP subsystem functionality.
 
 | Message Type ID | Operation | Python Status | Notes |
 |-----------------|-----------|---------------|-------|
-| 0x1F0100 | CreateSession | ❌ Missing | Create CP session |
-| 0x1F0200 | CloseSession | ❌ Missing | Close CP session |
-| 0x1F0300 | Heartbeat | ❌ Missing | Session heartbeat |
-| 0x1F0400 | GenerateThreadId | ❌ Missing | Generate thread ID |
-| 0x1F0500 | GetSessions | ❌ Missing | Get active sessions |
+| 0x1F0100 | CreateSession | ✅ Implemented | Create CP session |
+| 0x1F0200 | CloseSession | ✅ Implemented | Close CP session |
+| 0x1F0300 | Heartbeat | ✅ Implemented | Session heartbeat |
+| 0x1F0400 | GenerateThreadId | ✅ Implemented | Generate thread ID |
+| 0x1F0500 | GetSessions | ✅ Implemented | Get active sessions |
 
 ### CP Group Operations (0x1E00xx) - **MISSING**
 

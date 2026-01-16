@@ -3492,6 +3492,13 @@ class PNCounterCodec:
         return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
 
 
+# CP Session protocol constants
+CP_SESSION_CREATE = 0x1F0100
+CP_SESSION_CLOSE = 0x1F0200
+CP_SESSION_HEARTBEAT = 0x1F0300
+CP_SESSION_GENERATE_THREAD_ID = 0x1F0400
+CP_SESSION_GET_SESSIONS = 0x1F0500
+
 # CP Subsystem protocol constants
 CP_ATOMIC_LONG_ADD_AND_GET = 0x090200
 CP_ATOMIC_LONG_COMPARE_AND_SET = 0x090300
@@ -6121,6 +6128,173 @@ def _decode_string_list(msg: "ClientMessage") -> List[str]:
             result.append(frame.content.decode("utf-8"))
 
     return result
+
+
+class CPSessionCodec:
+    """Codec for CP Session protocol messages."""
+
+    @staticmethod
+    def encode_create_session_request(
+        group_id: str, endpoint_name: str
+    ) -> "ClientMessage":
+        """Encode a CPSession.createSession request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SESSION_CREATE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        StringCodec.encode(msg, endpoint_name)
+        return msg
+
+    @staticmethod
+    def decode_create_session_response(
+        msg: "ClientMessage",
+    ) -> Tuple[int, int, int]:
+        """Decode a CPSession.createSession response.
+
+        Returns:
+            Tuple of (session_id, ttl_millis, heartbeat_millis).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + 3 * LONG_SIZE:
+            return 0, 0, 0
+
+        offset = RESPONSE_HEADER_SIZE
+        session_id = struct.unpack_from("<q", frame.content, offset)[0]
+        offset += LONG_SIZE
+        ttl_millis = struct.unpack_from("<q", frame.content, offset)[0]
+        offset += LONG_SIZE
+        heartbeat_millis = struct.unpack_from("<q", frame.content, offset)[0]
+
+        return session_id, ttl_millis, heartbeat_millis
+
+    @staticmethod
+    def encode_close_session_request(group_id: str, session_id: int) -> "ClientMessage":
+        """Encode a CPSession.closeSession request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SESSION_CLOSE)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, session_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        return msg
+
+    @staticmethod
+    def decode_close_session_response(msg: "ClientMessage") -> bool:
+        """Decode a CPSession.closeSession response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_heartbeat_request(group_id: str, session_id: int) -> "ClientMessage":
+        """Encode a CPSession.heartbeat request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SESSION_HEARTBEAT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, session_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        return msg
+
+    @staticmethod
+    def encode_generate_thread_id_request(group_id: str) -> "ClientMessage":
+        """Encode a CPSession.generateThreadId request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SESSION_GENERATE_THREAD_ID)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        return msg
+
+    @staticmethod
+    def decode_generate_thread_id_response(msg: "ClientMessage") -> int:
+        """Decode a CPSession.generateThreadId response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_get_sessions_request(group_id: str) -> "ClientMessage":
+        """Encode a CPSession.getSessions request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CP_SESSION_GET_SESSIONS)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, group_id)
+        return msg
+
+    @staticmethod
+    def decode_get_sessions_response(
+        msg: "ClientMessage",
+    ) -> List[Tuple[int, int, str, str]]:
+        """Decode a CPSession.getSessions response.
+
+        Returns:
+            List of (session_id, creation_time, endpoint_name, endpoint_type) tuples.
+        """
+        msg.next_frame()
+        result = []
+
+        frame = msg.peek_next_frame()
+        if frame is None:
+            return result
+
+        msg.next_frame()
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            session_frame = msg.next_frame()
+            if session_frame is None:
+                break
+
+            content = session_frame.content
+            if len(content) < 2 * LONG_SIZE:
+                continue
+
+            offset = 0
+            session_id = struct.unpack_from("<q", content, offset)[0]
+            offset += LONG_SIZE
+            creation_time = struct.unpack_from("<q", content, offset)[0]
+
+            endpoint_name_frame = msg.next_frame()
+            endpoint_name = ""
+            if endpoint_name_frame and not endpoint_name_frame.is_null_frame:
+                endpoint_name = endpoint_name_frame.content.decode("utf-8")
+
+            endpoint_type_frame = msg.next_frame()
+            endpoint_type = ""
+            if endpoint_type_frame and not endpoint_type_frame.is_null_frame:
+                endpoint_type = endpoint_type_frame.content.decode("utf-8")
+
+            result.append((session_id, creation_time, endpoint_name, endpoint_type))
+
+        return result
 
 
 # Cache (JCache JSR-107) protocol constants
