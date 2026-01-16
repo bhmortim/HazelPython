@@ -1,11 +1,12 @@
 """Jet service for pipeline submission and job management."""
 
 from concurrent.futures import Future
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import threading
 
 from hazelcast.jet.pipeline import Pipeline
 from hazelcast.jet.job import Job, JobConfig, JobStatus
+from hazelcast.exceptions import IllegalArgumentException
 from hazelcast.exceptions import HazelcastException, IllegalStateException
 
 if TYPE_CHECKING:
@@ -22,8 +23,10 @@ class JetService:
     def __init__(
         self,
         invocation_service: Optional["InvocationService"] = None,
+        serialization_service: Optional[Any] = None,
     ):
         self._invocation_service = invocation_service
+        self._serialization_service = serialization_service
         self._running = False
         self._jobs: Dict[int, Job] = {}
         self._jobs_by_name: Dict[str, Job] = {}
@@ -81,6 +84,20 @@ class JetService:
         if not self._running:
             future.set_exception(
                 IllegalStateException("Jet service is not running")
+            )
+            return future
+
+        if pipeline is None:
+            future.set_exception(
+                IllegalArgumentException("Pipeline cannot be None")
+            )
+            return future
+
+        if not pipeline.is_complete():
+            future.set_exception(
+                IllegalArgumentException(
+                    "Pipeline must have both source and sink defined"
+                )
             )
             return future
 

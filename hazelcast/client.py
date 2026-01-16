@@ -1052,9 +1052,12 @@ class HazelcastClient:
         if self._jet_service is None:
             from hazelcast.jet.service import JetService
             self._jet_service = JetService(
-                self._invocation_service,
-                self._serialization_service,
+                invocation_service=self._invocation_service,
+                serialization_service=self._serialization_service,
             )
+            if self.running:
+                self._jet_service.start()
+=======
         return self._jet_service
 
     def __enter__(self) -> "HazelcastClient":
