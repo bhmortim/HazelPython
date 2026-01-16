@@ -16,12 +16,28 @@ from hazelcast.exceptions import (
     ClientOfflineException,
     IllegalStateException,
     IllegalArgumentException,
+    TimeoutException,
     OperationTimeoutException,
     TargetDisconnectedException,
     ConfigurationException,
     AuthenticationException,
     StaleSequenceException,
 )
+from hazelcast.sql.service import SqlService
+from hazelcast.sql.result import (
+    SqlResult,
+    SqlRow,
+    SqlRowMetadata,
+    SqlColumnMetadata,
+    SqlColumnType,
+)
+from hazelcast.sql.statement import SqlStatement, SqlExpectedResultType
+from hazelcast.jet.service import JetService
+from hazelcast.jet.pipeline import Pipeline
+from hazelcast.jet.job import Job, JobConfig, JobStatus, ProcessingGuarantee
+from hazelcast.serialization.json import HazelcastJsonValue
+from hazelcast.serialization.compact import CompactSerializer, GenericRecord
+from hazelcast.near_cache import NearCache, NearCacheManager, NearCacheStats
 from hazelcast.proxy import (
     Proxy,
     DistributedObject,
@@ -131,6 +147,7 @@ __all__ = [
     "ClientOfflineException",
     "IllegalStateException",
     "IllegalArgumentException",
+    "TimeoutException",
     "OperationTimeoutException",
     "TargetDisconnectedException",
     "ConfigurationException",
@@ -232,6 +249,30 @@ __all__ = [
     "TransactionalList",
     "TransactionalQueue",
     "TransactionalMultiMap",
+    # SQL
+    "SqlService",
+    "SqlResult",
+    "SqlRow",
+    "SqlRowMetadata",
+    "SqlColumnMetadata",
+    "SqlColumnType",
+    "SqlStatement",
+    "SqlExpectedResultType",
+    # Jet
+    "JetService",
+    "Pipeline",
+    "Job",
+    "JobConfig",
+    "JobStatus",
+    "ProcessingGuarantee",
+    # Serialization
+    "HazelcastJsonValue",
+    "CompactSerializer",
+    "GenericRecord",
+    # Near Cache
+    "NearCache",
+    "NearCacheManager",
+    "NearCacheStats",
 ]
 
 __version__ = "0.1.0"

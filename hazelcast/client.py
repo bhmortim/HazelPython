@@ -1250,9 +1250,12 @@ class HazelcastClient:
         """
         self._check_running()
 
-        from hazelcast.transaction import TransactionContext
-        return TransactionContext(self._proxy_context, options)
-
+        if self._jet_service is None:
+            from hazelcast.jet.service import JetService
+            self._jet_service = JetService(
+                invocation_service=self._invocation_service,
+                serialization_service=self._serialization_service,
+            )
         return self._jet_service
 
     def __enter__(self) -> "HazelcastClient":
@@ -1260,6 +1263,80 @@ class HazelcastClient:
         return self.start()
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+=======
+            )
+        return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
+=======
+        return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
+=======
+    def get_jet(self) -> "JetService":
+        """Get the Jet service for stream processing.
+
+        Returns the Jet service for submitting and managing
+        distributed stream/batch processing pipelines.
+
+        Returns:
+            JetService instance for pipeline submission.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> jet = client.get_jet()
+            >>> pipeline = Pipeline.create()
+            >>> # ... build pipeline ...
+            >>> job = jet.submit(pipeline)
+            >>> print(f"Job status: {job.status}")
+        """
+        self._check_running()
+
+        if self._jet_service is None:
+            from hazelcast.jet.service import JetService
+            self._jet_service = JetService(
+                invocation_service=self._invocation_service,
+                serialization_service=self._serialization_service,
+            )
+        return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
+=======
+        from hazelcast.transaction import TransactionContext
+        return TransactionContext(self._proxy_context, options)
+
+    def get_jet(self) -> "JetService":
+        """Get the Jet service for stream processing.
+
+        Returns the Jet service for submitting and managing
+        distributed stream/batch processing pipelines.
+
+        Returns:
+            JetService instance for pipeline submission.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> jet = client.get_jet()
+            >>> pipeline = Pipeline.create()
+            >>> # ... build pipeline ...
+            >>> job = jet.submit(pipeline)
+            >>> print(f"Job status: {job.status}")
+        """
+        self._check_running()
+
+        if self._jet_service is None:
+            from hazelcast.jet.service import JetService
+            self._jet_service = JetService(
+                invocation_service=self._invocation_service,
+                serialization_service=self._serialization_service,
+            )
+        return self._jet_service
+
+    def __enter__(self) -> "HazelcastClient":
 =======
         if self._jet_service is None:
             from hazelcast.jet.service import JetService
@@ -1342,8 +1419,6 @@ class HazelcastClient:
 
     def __enter__(self) -> "HazelcastClient":
 =======
-        return self._jet_service
-
     def __enter__(self) -> "HazelcastClient":
         """Enter context manager - starts the client."""
         return self.start()
