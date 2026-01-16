@@ -1,10 +1,15 @@
 """Queue distributed data structure proxy."""
 
+import uuid as uuid_module
 from concurrent.futures import Future
 from enum import Enum
-from typing import Any, Callable, Collection, Generic, Iterator, List, Optional, TypeVar
+from typing import Any, Callable, Collection, Generic, Iterator, List, Optional, TypeVar, TYPE_CHECKING
 
+from hazelcast.protocol.codec import QueueCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
+
+if TYPE_CHECKING:
+    from hazelcast.protocol.client_message import ClientMessage
 
 E = TypeVar("E")
 
@@ -88,7 +93,7 @@ class QueueProxy(Proxy, Generic[E]):
 
     def __init__(self, name: str, context: Optional[ProxyContext] = None):
         super().__init__(self.SERVICE_NAME, name, context)
-        self._item_listeners: dict[str, tuple[Any, bool]] = {}
+        self._item_listeners: dict[str, tuple[Any, bool, Optional[uuid_module.UUID]]] = {}
 
     def add(self, item: E) -> bool:
         """Add an item to the queue.
@@ -113,10 +118,7 @@ class QueueProxy(Proxy, Generic[E]):
         Returns:
             A Future that will contain a boolean result.
         """
-        self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        return self.offer_async(item, 0)
 
     def offer(self, item: E, timeout: float = 0) -> bool:
         """Offer an item to the queue.
@@ -141,9 +143,14 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        item_data = self._to_data(item)
+        timeout_millis = int(timeout * 1000)
+        request = QueueCodec.encode_offer_request(self._name, item_data, timeout_millis)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return QueueCodec.decode_offer_response(response)
+
+        return self._invoke(request, handle_response)
 
     def put(self, item: E) -> None:
         """Put an item in the queue, waiting if necessary.
@@ -163,9 +170,9 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that completes when the item is added.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        item_data = self._to_data(item)
+        request = QueueCodec.encode_put_request(self._name, item_data)
+        return self._invoke(request)
 
     def poll(self, timeout: float = 0) -> Optional[E]:
         """Poll an item from the queue.
@@ -188,9 +195,14 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain the item or None.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        timeout_millis = int(timeout * 1000)
+        request = QueueCodec.encode_poll_request(self._name, timeout_millis)
+
+        def handle_response(response: "ClientMessage") -> Optional[E]:
+            data = QueueCodec.decode_poll_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def take(self) -> E:
         """Take an item from the queue, waiting if necessary.
@@ -207,9 +219,13 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain the item.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = QueueCodec.encode_take_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> Optional[E]:
+            data = QueueCodec.decode_take_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def peek(self) -> Optional[E]:
         """Peek at the head of the queue without removing.
@@ -226,9 +242,13 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain the head item or None.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = QueueCodec.encode_peek_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> Optional[E]:
+            data = QueueCodec.decode_peek_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def remove(self, item: E) -> bool:
         """Remove a specific item from the queue.
@@ -251,9 +271,13 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        item_data = self._to_data(item)
+        request = QueueCodec.encode_remove_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return QueueCodec.decode_remove_response(response)
+
+        return self._invoke(request, handle_response)
 
     def contains(self, item: E) -> bool:
         """Check if the queue contains an item.
@@ -276,9 +300,13 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        item_data = self._to_data(item)
+        request = QueueCodec.encode_contains_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return QueueCodec.decode_contains_response(response)
+
+        return self._invoke(request, handle_response)
 
     def contains_all(self, items: Collection[E]) -> bool:
         """Check if the queue contains all items.
@@ -301,9 +329,13 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = QueueCodec.encode_contains_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return QueueCodec.decode_contains_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def drain_to(self, target: List[E], max_elements: int = -1) -> int:
         """Drain items to a collection.
@@ -328,9 +360,15 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain the number of items drained.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(0)
-        return future
+        request = QueueCodec.encode_drain_to_request(self._name, max_elements)
+
+        def handle_response(response: "ClientMessage") -> int:
+            items_data = QueueCodec.decode_drain_to_response(response)
+            for data in items_data:
+                target.append(self._to_object(data))
+            return len(items_data)
+
+        return self._invoke(request, handle_response)
 
     def size(self) -> int:
         """Get the size of the queue.
@@ -347,9 +385,12 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain the size.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(0)
-        return future
+        request = QueueCodec.encode_size_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> int:
+            return QueueCodec.decode_size_response(response)
+
+        return self._invoke(request, handle_response)
 
     def is_empty(self) -> bool:
         """Check if the queue is empty.
@@ -366,9 +407,12 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        request = QueueCodec.encode_is_empty_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return QueueCodec.decode_is_empty_response(response)
+
+        return self._invoke(request, handle_response)
 
     def remaining_capacity(self) -> int:
         """Get the remaining capacity of the queue.
@@ -385,9 +429,12 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain the capacity.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(0)
-        return future
+        request = QueueCodec.encode_remaining_capacity_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> int:
+            return QueueCodec.decode_remaining_capacity_response(response)
+
+        return self._invoke(request, handle_response)
 
     def clear(self) -> None:
         """Clear the queue."""
@@ -400,9 +447,8 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that completes when the clear is done.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = QueueCodec.encode_clear_request(self._name)
+        return self._invoke(request)
 
     def get_all(self) -> List[E]:
         """Get all items in the queue.
@@ -419,9 +465,13 @@ class QueueProxy(Proxy, Generic[E]):
             A Future that will contain a list of items.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result([])
-        return future
+        request = QueueCodec.encode_get_all_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> List[E]:
+            items_data = QueueCodec.decode_get_all_response(response)
+            return [self._to_object(data) for data in items_data]
+
+        return self._invoke(request, handle_response)
 
     def add_item_listener(
         self,
@@ -453,17 +503,24 @@ class QueueProxy(Proxy, Generic[E]):
                 "Either listener or at least one callback must be provided"
             )
 
-        import uuid
-
         effective_listener: Any
         if listener is not None:
             effective_listener = listener
         else:
             effective_listener = _CallbackItemListener(item_added, item_removed)
 
-        registration_id = str(uuid.uuid4())
-        self._item_listeners[registration_id] = (effective_listener, include_value)
-        return registration_id
+        local_id = str(uuid_module.uuid4())
+        request = QueueCodec.encode_add_item_listener_request(
+            self._name, include_value, False
+        )
+
+        def handle_response(response: "ClientMessage") -> str:
+            server_id = QueueCodec.decode_add_item_listener_response(response)
+            self._item_listeners[local_id] = (effective_listener, include_value, server_id)
+            return local_id
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def remove_item_listener(self, registration_id: str) -> bool:
         """Remove an item listener.
@@ -474,7 +531,23 @@ class QueueProxy(Proxy, Generic[E]):
         Returns:
             True if the listener was removed.
         """
-        return self._item_listeners.pop(registration_id, None) is not None
+        self._check_not_destroyed()
+
+        entry = self._item_listeners.pop(registration_id, None)
+        if entry is None:
+            return False
+
+        _, _, server_id = entry
+        if server_id is None:
+            return True
+
+        request = QueueCodec.encode_remove_item_listener_request(self._name, server_id)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return QueueCodec.decode_remove_item_listener_response(response)
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def _notify_item_added(self, item: E) -> None:
         """Notify listeners of an item added event."""

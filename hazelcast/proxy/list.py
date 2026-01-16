@@ -1,9 +1,14 @@
 """List distributed data structure proxy."""
 
+import uuid as uuid_module
 from concurrent.futures import Future
-from typing import Any, Collection, Generic, Iterator, List, Optional, TypeVar
+from typing import Any, Collection, Generic, Iterator, List, Optional, TypeVar, TYPE_CHECKING
 
+from hazelcast.protocol.codec import ListCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
+
+if TYPE_CHECKING:
+    from hazelcast.protocol.client_message import ClientMessage
 
 E = TypeVar("E")
 
@@ -18,7 +23,7 @@ class ListProxy(Proxy, Generic[E]):
 
     def __init__(self, name: str, context: Optional[ProxyContext] = None):
         super().__init__(self.SERVICE_NAME, name, context)
-        self._item_listeners: dict = {}
+        self._item_listeners: dict[str, tuple[Any, bool, Optional[uuid_module.UUID]]] = {}
 
     def add(self, item: E) -> bool:
         """Add an item to the list.
@@ -41,9 +46,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        item_data = self._to_data(item)
+        request = ListCodec.encode_add_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_add_response(response)
+
+        return self._invoke(request, handle_response)
 
     def add_at(self, index: int, item: E) -> None:
         """Add an item at a specific index.
@@ -65,9 +74,9 @@ class ListProxy(Proxy, Generic[E]):
             A Future that completes when the add is done.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        item_data = self._to_data(item)
+        request = ListCodec.encode_add_at_request(self._name, index, item_data)
+        return self._invoke(request)
 
     def add_all(self, items: Collection[E]) -> bool:
         """Add multiple items to the list.
@@ -90,9 +99,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = ListCodec.encode_add_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_add_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def add_all_at(self, index: int, items: Collection[E]) -> bool:
         """Add multiple items at a specific index.
@@ -117,9 +130,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = ListCodec.encode_add_all_at_request(self._name, index, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_add_all_at_response(response)
+
+        return self._invoke(request, handle_response)
 
     def get(self, index: int) -> E:
         """Get the item at a specific index.
@@ -142,9 +159,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain the item.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = ListCodec.encode_get_request(self._name, index)
+
+        def handle_response(response: "ClientMessage") -> Optional[E]:
+            data = ListCodec.decode_get_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def set(self, index: int, item: E) -> E:
         """Set the item at a specific index.
@@ -169,9 +190,14 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain the old item.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        item_data = self._to_data(item)
+        request = ListCodec.encode_set_request(self._name, index, item_data)
+
+        def handle_response(response: "ClientMessage") -> Optional[E]:
+            data = ListCodec.decode_set_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def remove(self, item: E) -> bool:
         """Remove the first occurrence of an item.
@@ -194,9 +220,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        item_data = self._to_data(item)
+        request = ListCodec.encode_remove_item_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_remove_item_response(response)
+
+        return self._invoke(request, handle_response)
 
     def remove_at(self, index: int) -> E:
         """Remove the item at a specific index.
@@ -219,9 +249,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain the removed item.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = ListCodec.encode_remove_at_request(self._name, index)
+
+        def handle_response(response: "ClientMessage") -> Optional[E]:
+            data = ListCodec.decode_remove_at_response(response)
+            return self._to_object(data) if data else None
+
+        return self._invoke(request, handle_response)
 
     def remove_all(self, items: Collection[E]) -> bool:
         """Remove all occurrences of items.
@@ -244,9 +278,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = ListCodec.encode_remove_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_remove_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def contains(self, item: E) -> bool:
         """Check if the list contains an item.
@@ -269,9 +307,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        item_data = self._to_data(item)
+        request = ListCodec.encode_contains_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_contains_response(response)
+
+        return self._invoke(request, handle_response)
 
     def contains_all(self, items: Collection[E]) -> bool:
         """Check if the list contains all items.
@@ -294,9 +336,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = ListCodec.encode_contains_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_contains_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def retain_all(self, items: Collection[E]) -> bool:
         """Retain only items in the given collection.
@@ -319,9 +365,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = ListCodec.encode_retain_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_retain_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def index_of(self, item: E) -> int:
         """Get the index of the first occurrence of an item.
@@ -344,9 +394,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain the index.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(-1)
-        return future
+        item_data = self._to_data(item)
+        request = ListCodec.encode_index_of_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> int:
+            return ListCodec.decode_index_of_response(response)
+
+        return self._invoke(request, handle_response)
 
     def last_index_of(self, item: E) -> int:
         """Get the index of the last occurrence of an item.
@@ -369,9 +423,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain the index.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(-1)
-        return future
+        item_data = self._to_data(item)
+        request = ListCodec.encode_last_index_of_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> int:
+            return ListCodec.decode_last_index_of_response(response)
+
+        return self._invoke(request, handle_response)
 
     def sub_list(self, from_index: int, to_index: int) -> List[E]:
         """Get a sublist.
@@ -396,9 +454,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain the sublist.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result([])
-        return future
+        request = ListCodec.encode_sub_list_request(self._name, from_index, to_index)
+
+        def handle_response(response: "ClientMessage") -> List[E]:
+            items_data = ListCodec.decode_sub_list_response(response)
+            return [self._to_object(data) for data in items_data]
+
+        return self._invoke(request, handle_response)
 
     def size(self) -> int:
         """Get the size of the list.
@@ -415,9 +477,12 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain the size.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(0)
-        return future
+        request = ListCodec.encode_size_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> int:
+            return ListCodec.decode_size_response(response)
+
+        return self._invoke(request, handle_response)
 
     def is_empty(self) -> bool:
         """Check if the list is empty.
@@ -434,9 +499,12 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        request = ListCodec.encode_is_empty_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_is_empty_response(response)
+
+        return self._invoke(request, handle_response)
 
     def clear(self) -> None:
         """Clear the list."""
@@ -449,9 +517,8 @@ class ListProxy(Proxy, Generic[E]):
             A Future that completes when the clear is done.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = ListCodec.encode_clear_request(self._name)
+        return self._invoke(request)
 
     def get_all(self) -> List[E]:
         """Get all items in the list.
@@ -468,9 +535,13 @@ class ListProxy(Proxy, Generic[E]):
             A Future that will contain a list of items.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result([])
-        return future
+        request = ListCodec.encode_get_all_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> List[E]:
+            items_data = ListCodec.decode_get_all_response(response)
+            return [self._to_object(data) for data in items_data]
+
+        return self._invoke(request, handle_response)
 
     def add_item_listener(
         self,
@@ -486,10 +557,19 @@ class ListProxy(Proxy, Generic[E]):
         Returns:
             A registration ID.
         """
-        import uuid
-        registration_id = str(uuid.uuid4())
-        self._item_listeners[registration_id] = (listener, include_value)
-        return registration_id
+        self._check_not_destroyed()
+        local_id = str(uuid_module.uuid4())
+        request = ListCodec.encode_add_item_listener_request(
+            self._name, include_value, False
+        )
+
+        def handle_response(response: "ClientMessage") -> str:
+            server_id = ListCodec.decode_add_item_listener_response(response)
+            self._item_listeners[local_id] = (listener, include_value, server_id)
+            return local_id
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def remove_item_listener(self, registration_id: str) -> bool:
         """Remove an item listener.
@@ -500,7 +580,23 @@ class ListProxy(Proxy, Generic[E]):
         Returns:
             True if the listener was removed.
         """
-        return self._item_listeners.pop(registration_id, None) is not None
+        self._check_not_destroyed()
+
+        entry = self._item_listeners.pop(registration_id, None)
+        if entry is None:
+            return False
+
+        _, _, server_id = entry
+        if server_id is None:
+            return True
+
+        request = ListCodec.encode_remove_item_listener_request(self._name, server_id)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return ListCodec.decode_remove_item_listener_response(response)
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def __len__(self) -> int:
         return self.size()

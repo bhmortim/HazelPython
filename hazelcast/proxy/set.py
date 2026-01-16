@@ -1,9 +1,14 @@
 """Set distributed data structure proxy."""
 
+import uuid as uuid_module
 from concurrent.futures import Future
-from typing import Any, Collection, Generic, Iterator, List, Optional, TypeVar
+from typing import Any, Collection, Generic, Iterator, List, Optional, TypeVar, TYPE_CHECKING
 
+from hazelcast.protocol.codec import SetCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
+
+if TYPE_CHECKING:
+    from hazelcast.protocol.client_message import ClientMessage
 
 E = TypeVar("E")
 
@@ -18,7 +23,7 @@ class SetProxy(Proxy, Generic[E]):
 
     def __init__(self, name: str, context: Optional[ProxyContext] = None):
         super().__init__(self.SERVICE_NAME, name, context)
-        self._item_listeners: dict = {}
+        self._item_listeners: dict[str, tuple[Any, bool, Optional[uuid_module.UUID]]] = {}
 
     def add(self, item: E) -> bool:
         """Add an item to the set.
@@ -41,9 +46,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        item_data = self._to_data(item)
+        request = SetCodec.encode_add_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_add_response(response)
+
+        return self._invoke(request, handle_response)
 
     def add_all(self, items: Collection[E]) -> bool:
         """Add multiple items to the set.
@@ -66,9 +75,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = SetCodec.encode_add_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_add_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def remove(self, item: E) -> bool:
         """Remove an item from the set.
@@ -91,9 +104,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        item_data = self._to_data(item)
+        request = SetCodec.encode_remove_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_remove_response(response)
+
+        return self._invoke(request, handle_response)
 
     def remove_all(self, items: Collection[E]) -> bool:
         """Remove multiple items from the set.
@@ -116,9 +133,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = SetCodec.encode_remove_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_remove_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def contains(self, item: E) -> bool:
         """Check if the set contains an item.
@@ -141,9 +162,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        item_data = self._to_data(item)
+        request = SetCodec.encode_contains_request(self._name, item_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_contains_response(response)
+
+        return self._invoke(request, handle_response)
 
     def contains_all(self, items: Collection[E]) -> bool:
         """Check if the set contains all items.
@@ -166,9 +191,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = SetCodec.encode_contains_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_contains_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def retain_all(self, items: Collection[E]) -> bool:
         """Retain only items that are in the given collection.
@@ -191,9 +220,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(False)
-        return future
+        items_data = [self._to_data(item) for item in items]
+        request = SetCodec.encode_retain_all_request(self._name, items_data)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_retain_all_response(response)
+
+        return self._invoke(request, handle_response)
 
     def size(self) -> int:
         """Get the size of the set.
@@ -210,9 +243,12 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain the size.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(0)
-        return future
+        request = SetCodec.encode_size_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> int:
+            return SetCodec.decode_size_response(response)
+
+        return self._invoke(request, handle_response)
 
     def is_empty(self) -> bool:
         """Check if the set is empty.
@@ -229,9 +265,12 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a boolean result.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(True)
-        return future
+        request = SetCodec.encode_is_empty_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_is_empty_response(response)
+
+        return self._invoke(request, handle_response)
 
     def clear(self) -> None:
         """Clear the set."""
@@ -244,9 +283,8 @@ class SetProxy(Proxy, Generic[E]):
             A Future that completes when the clear is done.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result(None)
-        return future
+        request = SetCodec.encode_clear_request(self._name)
+        return self._invoke(request)
 
     def get_all(self) -> List[E]:
         """Get all items in the set.
@@ -263,9 +301,13 @@ class SetProxy(Proxy, Generic[E]):
             A Future that will contain a list of items.
         """
         self._check_not_destroyed()
-        future: Future = Future()
-        future.set_result([])
-        return future
+        request = SetCodec.encode_get_all_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> List[E]:
+            items_data = SetCodec.decode_get_all_response(response)
+            return [self._to_object(data) for data in items_data]
+
+        return self._invoke(request, handle_response)
 
     def add_item_listener(
         self,
@@ -281,10 +323,19 @@ class SetProxy(Proxy, Generic[E]):
         Returns:
             A registration ID.
         """
-        import uuid
-        registration_id = str(uuid.uuid4())
-        self._item_listeners[registration_id] = (listener, include_value)
-        return registration_id
+        self._check_not_destroyed()
+        local_id = str(uuid_module.uuid4())
+        request = SetCodec.encode_add_item_listener_request(
+            self._name, include_value, False
+        )
+
+        def handle_response(response: "ClientMessage") -> str:
+            server_id = SetCodec.decode_add_item_listener_response(response)
+            self._item_listeners[local_id] = (listener, include_value, server_id)
+            return local_id
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def remove_item_listener(self, registration_id: str) -> bool:
         """Remove an item listener.
@@ -295,7 +346,23 @@ class SetProxy(Proxy, Generic[E]):
         Returns:
             True if the listener was removed.
         """
-        return self._item_listeners.pop(registration_id, None) is not None
+        self._check_not_destroyed()
+
+        entry = self._item_listeners.pop(registration_id, None)
+        if entry is None:
+            return False
+
+        _, _, server_id = entry
+        if server_id is None:
+            return True
+
+        request = SetCodec.encode_remove_item_listener_request(self._name, server_id)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return SetCodec.decode_remove_item_listener_response(response)
+
+        future = self._invoke(request, handle_response)
+        return future.result()
 
     def __len__(self) -> int:
         return self.size()
