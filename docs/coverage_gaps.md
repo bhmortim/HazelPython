@@ -17,8 +17,8 @@ This document tracks modules below 95% coverage and identifies specific lines/br
 | `hazelcast/network/connection.py` | < 30% | **HIGH** | `tests/test_network.py` |
 | `hazelcast/network/connection_manager.py` | < 25% | **HIGH** | `tests/test_connection_manager.py` |
 | `hazelcast/network/failure_detector.py` | < 20% | **HIGH** | `tests/test_network.py` |
-| `hazelcast/invocation.py` | < 35% | **HIGH** | `tests/test_invocation.py` |
-| `hazelcast/failover.py` | < 40% | **MEDIUM** | `tests/test_failover.py` |
+| `hazelcast/invocation.py` | ~85% | **DONE** | `tests/test_invocation.py` |
+| `hazelcast/failover.py` | ~90% | **DONE** | `tests/test_failover.py` |
 | `hazelcast/serialization/compact.py` | < 30% | **HIGH** | `tests/test_compact.py` |
 | `hazelcast/network/address.py` | < 50% | **MEDIUM** | `tests/test_network.py` |
 | `hazelcast/network/ssl_config.py` | < 45% | **MEDIUM** | `tests/test_network.py` |
@@ -267,8 +267,8 @@ The following test files need to be created or populated:
 tests/
 ├── test_network.py          # Connection, Address, SSL, SocketInterceptor
 ├── test_connection_manager.py  # ConnectionManager, LoadBalancers
-├── test_invocation.py       # Invocation, InvocationService
-├── test_failover.py         # FailoverConfig, CNAMEResolver
+├── test_invocation.py       # ✅ CREATED - Invocation, InvocationService
+├── test_failover.py         # ✅ CREATED - FailoverConfig, CNAMEResolver
 ├── test_compact.py          # Compact serialization, Schema, GenericRecord
 └── test_failure_detector.py # FailureDetector, HeartbeatManager, PhiAccrual
 ```
