@@ -129,6 +129,18 @@ from hazelcast.transaction import (
     TransactionalQueue,
     TransactionalMultiMap,
 )
+from hazelcast.store import (
+    MapLoader,
+    MapStore,
+    MapLoaderLifecycleSupport,
+    EntryLoader,
+    EntryLoaderEntry,
+    LoadAllKeysCallback,
+)
+from hazelcast.config import (
+    MapStoreConfig,
+    InitialLoadMode,
+)
 
 __all__ = [
     # Core
@@ -273,6 +285,15 @@ __all__ = [
     "NearCache",
     "NearCacheManager",
     "NearCacheStats",
+    # Map Store/Loader
+    "MapLoader",
+    "MapStore",
+    "MapLoaderLifecycleSupport",
+    "EntryLoader",
+    "EntryLoaderEntry",
+    "LoadAllKeysCallback",
+    "MapStoreConfig",
+    "InitialLoadMode",
 ]
 
 __version__ = "0.1.0"

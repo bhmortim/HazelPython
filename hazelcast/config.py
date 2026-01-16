@@ -624,6 +624,193 @@ class SplitBrainProtectionConfig:
         return config
 
 
+class InitialLoadMode(Enum):
+    """Initial load mode for MapStore."""
+    LAZY = "LAZY"
+    EAGER = "EAGER"
+
+
+class MapStoreConfig:
+    """Configuration for Map Store/Loader.
+
+    Map stores allow maps to be backed by an external data source,
+    enabling read-through, write-through, and write-behind persistence.
+
+    Attributes:
+        enabled: Whether the map store is enabled.
+        class_name: Fully qualified class name of the MapStore implementation.
+        factory_class_name: Factory class for creating MapStore instances.
+        write_coalescing: Whether to coalesce write operations.
+        write_delay_seconds: Delay before persisting (0 = write-through).
+        write_batch_size: Maximum batch size for write-behind operations.
+        initial_load_mode: When to load data (LAZY or EAGER).
+        properties: Additional configuration properties.
+
+    Example:
+        Write-through configuration::
+
+            config = MapStoreConfig()
+            config.enabled = True
+            config.class_name = "com.example.MyMapStore"
+            config.write_delay_seconds = 0  # Write-through
+
+        Write-behind configuration::
+
+            config = MapStoreConfig()
+            config.enabled = True
+            config.class_name = "com.example.MyMapStore"
+            config.write_delay_seconds = 5  # 5 second delay
+            config.write_batch_size = 100
+            config.write_coalescing = True
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        class_name: Optional[str] = None,
+        factory_class_name: Optional[str] = None,
+        write_coalescing: bool = True,
+        write_delay_seconds: int = 0,
+        write_batch_size: int = 1,
+        initial_load_mode: InitialLoadMode = InitialLoadMode.LAZY,
+        properties: Optional[Dict[str, str]] = None,
+    ):
+        self._enabled = enabled
+        self._class_name = class_name
+        self._factory_class_name = factory_class_name
+        self._write_coalescing = write_coalescing
+        self._write_delay_seconds = write_delay_seconds
+        self._write_batch_size = write_batch_size
+        self._initial_load_mode = initial_load_mode
+        self._properties = properties or {}
+        self._validate()
+
+    def _validate(self) -> None:
+        if self._write_delay_seconds < 0:
+            raise ConfigurationException("write_delay_seconds cannot be negative")
+        if self._write_batch_size < 1:
+            raise ConfigurationException("write_batch_size must be at least 1")
+
+    @property
+    def enabled(self) -> bool:
+        """Get whether the map store is enabled."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    @property
+    def class_name(self) -> Optional[str]:
+        """Get the MapStore implementation class name."""
+        return self._class_name
+
+    @class_name.setter
+    def class_name(self, value: Optional[str]) -> None:
+        self._class_name = value
+
+    @property
+    def factory_class_name(self) -> Optional[str]:
+        """Get the MapStore factory class name."""
+        return self._factory_class_name
+
+    @factory_class_name.setter
+    def factory_class_name(self, value: Optional[str]) -> None:
+        self._factory_class_name = value
+
+    @property
+    def write_coalescing(self) -> bool:
+        """Get whether write operations are coalesced."""
+        return self._write_coalescing
+
+    @write_coalescing.setter
+    def write_coalescing(self, value: bool) -> None:
+        self._write_coalescing = value
+
+    @property
+    def write_delay_seconds(self) -> int:
+        """Get the write delay in seconds (0 = write-through)."""
+        return self._write_delay_seconds
+
+    @write_delay_seconds.setter
+    def write_delay_seconds(self, value: int) -> None:
+        self._write_delay_seconds = value
+        self._validate()
+
+    @property
+    def write_batch_size(self) -> int:
+        """Get the write batch size."""
+        return self._write_batch_size
+
+    @write_batch_size.setter
+    def write_batch_size(self, value: int) -> None:
+        self._write_batch_size = value
+        self._validate()
+
+    @property
+    def initial_load_mode(self) -> InitialLoadMode:
+        """Get the initial load mode."""
+        return self._initial_load_mode
+
+    @initial_load_mode.setter
+    def initial_load_mode(self, value: InitialLoadMode) -> None:
+        self._initial_load_mode = value
+
+    @property
+    def properties(self) -> Dict[str, str]:
+        """Get the configuration properties."""
+        return self._properties
+
+    @properties.setter
+    def properties(self, value: Dict[str, str]) -> None:
+        self._properties = value
+
+    def set_property(self, key: str, value: str) -> "MapStoreConfig":
+        """Set a configuration property.
+
+        Args:
+            key: The property name.
+            value: The property value.
+
+        Returns:
+            This config for chaining.
+        """
+        self._properties[key] = value
+        return self
+
+    @property
+    def is_write_through(self) -> bool:
+        """Check if this is a write-through configuration."""
+        return self._write_delay_seconds == 0
+
+    @property
+    def is_write_behind(self) -> bool:
+        """Check if this is a write-behind configuration."""
+        return self._write_delay_seconds > 0
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MapStoreConfig":
+        """Create MapStoreConfig from a dictionary."""
+        load_mode_str = data.get("initial_load_mode", "LAZY")
+        try:
+            initial_load_mode = InitialLoadMode(load_mode_str.upper())
+        except ValueError:
+            raise ConfigurationException(
+                f"Invalid initial_load_mode: {load_mode_str}"
+            )
+
+        return cls(
+            enabled=data.get("enabled", True),
+            class_name=data.get("class_name"),
+            factory_class_name=data.get("factory_class_name"),
+            write_coalescing=data.get("write_coalescing", True),
+            write_delay_seconds=data.get("write_delay_seconds", 0),
+            write_batch_size=data.get("write_batch_size", 1),
+            initial_load_mode=initial_load_mode,
+            properties=data.get("properties", {}),
+        )
+
+
 class ReconnectMode(Enum):
     """Reconnection behavior mode."""
     OFF = "OFF"

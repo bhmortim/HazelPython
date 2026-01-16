@@ -1641,34 +1641,130 @@ class MapProxy(Proxy, Generic[K, V]):
 
         return self._invoke(request)
 
-    def load_all(self, keys: Optional[Set[K]] = None, replace_existing: bool = True) -> None:
+    def load_all(
+        self,
+        keys: Optional[Set[K]] = None,
+        replace_existing: bool = True,
+        callback: Optional[Callable[[int, Optional[Exception]], None]] = None,
+    ) -> None:
         """Load entries from the map store.
 
+        Triggers loading of entries from the configured MapStore/MapLoader.
+        If no keys are specified, loads all keys returned by the loader's
+        `load_all_keys()` method.
+
         Args:
-            keys: Optional set of keys to load. If None, loads all.
-            replace_existing: Whether to replace existing entries.
+            keys: Optional set of keys to load. If None, loads all keys
+                from the external store.
+            replace_existing: Whether to replace entries that already exist
+                in the map. If False, only missing entries are loaded.
+            callback: Optional callback invoked when loading completes.
+                The callback receives (entries_loaded, error) where error
+                is None on success.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            Load all entries::
+
+                my_map.load_all()
+
+            Load specific keys::
+
+                my_map.load_all(keys={"user:1", "user:2", "user:3"})
+
+            With completion callback::
+
+                def on_complete(count, error):
+                    if error:
+                        print(f"Load failed: {error}")
+                    else:
+                        print(f"Loaded {count} entries")
+
+                my_map.load_all(callback=on_complete)
         """
-        self.load_all_async(keys, replace_existing).result()
+        future = self.load_all_async(keys, replace_existing)
+        try:
+            future.result()
+            if callback:
+                loaded_count = len(keys) if keys else -1
+                callback(loaded_count, None)
+        except Exception as e:
+            if callback:
+                callback(0, e)
+            else:
+                raise
 
     def load_all_async(
-        self, keys: Optional[Set[K]] = None, replace_existing: bool = True
+        self,
+        keys: Optional[Set[K]] = None,
+        replace_existing: bool = True,
     ) -> Future:
         """Load entries from the map store asynchronously.
 
+        Triggers asynchronous loading of entries from the configured
+        MapStore/MapLoader. The returned Future completes when the
+        loading operation finishes.
+
         Args:
-            keys: Optional set of keys to load.
-            replace_existing: Whether to replace existing entries.
+            keys: Optional set of keys to load. If None, loads all keys
+                from the external store.
+            replace_existing: Whether to replace entries that already exist
+                in the map.
 
         Returns:
-            A Future that completes when the load is done.
+            A Future that completes when the load operation finishes.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+
+        Example:
+            Async loading with future::
+
+                future = my_map.load_all_async(keys={"key1", "key2"})
+                # Do other work...
+                future.result()  # Wait for completion
         """
         self._check_not_destroyed()
+
+        if self._near_cache is not None and keys:
+            for key in keys:
+                self._near_cache.invalidate(key)
 
         keys_data = [self._to_data(k) for k in keys] if keys else None
 
         request = MapCodec.encode_load_all_request(self._name, keys_data, replace_existing)
 
         return self._invoke(request)
+
+    def is_loaded(self) -> bool:
+        """Check if initial loading from the map store has completed.
+
+        Returns:
+            True if the map has finished its initial load from the
+            configured MapStore, False if loading is still in progress
+            or not yet started.
+
+        Raises:
+            IllegalStateException: If the map has been destroyed.
+        """
+        return self.is_loaded_async().result()
+
+    def is_loaded_async(self) -> Future:
+        """Check if initial loading has completed asynchronously.
+
+        Returns:
+            A Future that will contain True if loaded, False otherwise.
+        """
+        self._check_not_destroyed()
+
+        request = MapCodec.encode_is_loaded_request(self._name)
+
+        def handle_response(response: "ClientMessage") -> bool:
+            return MapCodec.decode_is_loaded_response(response)
+
+        return self._invoke(request, handle_response)
 
     def set_ttl(self, key: K, ttl: float) -> bool:
         """Update the TTL of an existing entry.
