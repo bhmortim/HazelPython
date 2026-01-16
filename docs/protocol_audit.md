@@ -30,7 +30,7 @@ This document compares the Python client protocol implementation against the Jav
 | CP Session | 5 | 5 | 0 | 100% |
 | CP Group | 4 | 4 | 0 | 100% |
 | SQL | 4 | 3 | 1 | 75% |
-| Jet | 15+ | 0 | 15+ | 0% |
+| Jet | 15+ | 19 | 0 | 100% |
 | Cache (JCache) | 20 | 20 | 0 | 100% |
 | ExecutorService | 4 | 4 | 0 | 100% |
 | DurableExecutor | 6 | 6 | 0 | 100% |
@@ -172,29 +172,29 @@ Required for proper CP subsystem functionality.
 | 0x1E0300 | GetCPGroupIds | ✅ Implemented | Get CP group IDs |
 | 0x1E0400 | GetCPObjectInfos | ✅ Implemented | Get CP object infos |
 
-### Jet Operations (0x FE00xx) - **MISSING**
+### Jet Operations (0xFE00xx) - **IMPLEMENTED**
 
 | Message Type ID | Operation | Python Status | Notes |
 |-----------------|-----------|---------------|-------|
-| 0xFE0100 | SubmitJob | ❌ Missing | Submit Jet job |
-| 0xFE0200 | TerminateJob | ❌ Missing | Terminate job |
-| 0xFE0300 | GetJobStatus | ❌ Missing | Get job status |
-| 0xFE0400 | GetJobIds | ❌ Missing | Get all job IDs |
-| 0xFE0500 | GetJobSubmissionTime | ❌ Missing | Get submission time |
-| 0xFE0600 | GetJobConfig | ❌ Missing | Get job configuration |
-| 0xFE0700 | ResumeJob | ❌ Missing | Resume suspended job |
-| 0xFE0800 | ExportSnapshot | ❌ Missing | Export job snapshot |
-| 0xFE0900 | GetJobSummaryList | ❌ Missing | Get job summaries |
-| 0xFE0A00 | ExistsDistributedObject | ❌ Missing | Check object exists |
-| 0xFE0B00 | GetJobMetrics | ❌ Missing | Get job metrics |
-| 0xFE0C00 | GetJobSuspensionCause | ❌ Missing | Get suspension cause |
-| 0xFE0D00 | GetJobAndSqlSummaryList | ❌ Missing | Get job/SQL summaries |
-| 0xFE0E00 | IsJobUserCancelled | ❌ Missing | Check if user cancelled |
-| 0xFE0F00 | UploadJobMetaData | ❌ Missing | Upload job metadata |
-| 0xFE1000 | UploadJobMultipart | ❌ Missing | Upload job multipart |
-| 0xFE1100 | AddJobStatusListener | ❌ Missing | Job status listener |
-| 0xFE1200 | RemoveJobStatusListener | ❌ Missing | Remove status listener |
-| 0xFE1300 | UpdateJobConfig | ❌ Missing | Update job config |
+| 0xFE0100 | SubmitJob | ✅ Implemented | Submit Jet job |
+| 0xFE0200 | TerminateJob | ✅ Implemented | Terminate job |
+| 0xFE0300 | GetJobStatus | ✅ Implemented | Get job status |
+| 0xFE0400 | GetJobIds | ✅ Implemented | Get all job IDs |
+| 0xFE0500 | GetJobSubmissionTime | ✅ Implemented | Get submission time |
+| 0xFE0600 | GetJobConfig | ✅ Implemented | Get job configuration |
+| 0xFE0700 | ResumeJob | ✅ Implemented | Resume suspended job |
+| 0xFE0800 | ExportSnapshot | ✅ Implemented | Export job snapshot |
+| 0xFE0900 | GetJobSummaryList | ✅ Implemented | Get job summaries |
+| 0xFE0A00 | ExistsDistributedObject | ✅ Implemented | Check object exists |
+| 0xFE0B00 | GetJobMetrics | ✅ Implemented | Get job metrics |
+| 0xFE0C00 | GetJobSuspensionCause | ✅ Implemented | Get suspension cause |
+| 0xFE0D00 | GetJobAndSqlSummaryList | ✅ Implemented | Get job/SQL summaries |
+| 0xFE0E00 | IsJobUserCancelled | ✅ Implemented | Check if user cancelled |
+| 0xFE0F00 | UploadJobMetaData | ✅ Implemented | Upload job metadata |
+| 0xFE1000 | UploadJobMultipart | ✅ Implemented | Upload job multipart |
+| 0xFE1100 | AddJobStatusListener | ✅ Implemented | Job status listener |
+| 0xFE1200 | RemoveJobStatusListener | ✅ Implemented | Remove status listener |
+| 0xFE1300 | UpdateJobConfig | ✅ Implemented | Update job config |
 
 ### Map Event Journal (0x0141xx) - **MISSING**
 
@@ -288,7 +288,7 @@ Missing advanced operations:
 
 ### P2 - Medium (Advanced features)
 
-1. **Jet Operations** - Required for stream processing
+1. ~~**Jet Operations**~~ - ✅ Implemented for stream processing
 2. **Event Journal** - Required for CDC-style applications
 3. **Map Near Cache Invalidation** - Required for proper near cache
 4. **SQL Batch Execute** - Performance optimization

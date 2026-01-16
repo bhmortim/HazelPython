@@ -1,318 +1,98 @@
-"""Jet service for pipeline submission and job management."""
+"""Jet service for managing Jet jobs."""
 
-from concurrent.futures import Future
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
-import threading
+from typing import Any, Callable, Dict, List, Optional
+import time
+import uuid as uuid_module
 
+from hazelcast.jet.job import Job, JobConfig, JobStatus, TerminationMode
 from hazelcast.jet.pipeline import Pipeline
-from hazelcast.jet.job import Job, JobConfig, JobStatus, ProcessingGuarantee
-from hazelcast.exceptions import IllegalArgumentException
-from hazelcast.exceptions import HazelcastException, IllegalStateException
-
-if TYPE_CHECKING:
-    from hazelcast.invocation import InvocationService
-
-
-class JobStateListener:
-    """Listener for job state changes."""
-
-    def on_state_changed(self, job: Job, old_status: JobStatus, new_status: JobStatus) -> None:
-        """Called when job state changes.
-
-        Args:
-            job: The job that changed.
-            old_status: The previous status.
-            new_status: The new status.
-        """
-        pass
-
-    def on_job_completed(self, job: Job) -> None:
-        """Called when a job completes successfully.
-
-        Args:
-            job: The completed job.
-        """
-        pass
-
-    def on_job_failed(self, job: Job, reason: str) -> None:
-        """Called when a job fails.
-
-        Args:
-            job: The failed job.
-            reason: The failure reason.
-        """
-        pass
 
 
 class JetService:
-    """Service for submitting and managing Jet jobs.
+    """Service for managing Jet jobs.
 
-    Provides methods to submit pipelines, retrieve jobs,
-    and manage their lifecycle.
+    The JetService provides methods to submit, manage, and monitor Jet jobs.
+
+    Attributes:
+        client: The Hazelcast client instance.
     """
 
-    def __init__(
-        self,
-        invocation_service: Optional["InvocationService"] = None,
-        serialization_service: Optional[Any] = None,
-    ):
-        self._invocation_service = invocation_service
-        self._serialization_service = serialization_service
-        self._running = False
-        self._jobs: Dict[int, Job] = {}
-        self._jobs_by_name: Dict[str, Job] = {}
-        self._job_id_counter = 0
-        self._lock = threading.Lock()
-        self._state_listeners: Dict[str, JobStateListener] = {}
-        self._listener_id_counter = 0
-        self._metrics_collection_interval_ms = 1000
-
-    def start(self) -> None:
-        """Start the Jet service."""
-        self._running = True
-
-    def shutdown(self) -> None:
-        """Shutdown the Jet service."""
-        self._running = False
-        with self._lock:
-            self._state_listeners.clear()
-
-    @property
-    def is_running(self) -> bool:
-        """Check if the service is running."""
-        return self._running
-
-    def add_job_state_listener(self, listener: JobStateListener) -> str:
-        """Add a listener for job state changes.
-
-        Args:
-            listener: The listener to add.
-
-        Returns:
-            Registration ID for removing the listener.
-        """
-        with self._lock:
-            self._listener_id_counter += 1
-            listener_id = f"job-state-{self._listener_id_counter}"
-            self._state_listeners[listener_id] = listener
-        return listener_id
-
-    def remove_job_state_listener(self, registration_id: str) -> bool:
-        """Remove a job state listener.
-
-        Args:
-            registration_id: The registration ID from add_job_state_listener.
-
-        Returns:
-            True if the listener was removed.
-        """
-        with self._lock:
-            return self._state_listeners.pop(registration_id, None) is not None
-
-    def _fire_state_change(
-        self,
-        job: Job,
-        old_status: JobStatus,
-        new_status: JobStatus,
-    ) -> None:
-        """Fire state change events to listeners."""
-        with self._lock:
-            listeners = list(self._state_listeners.values())
-
-        for listener in listeners:
-            try:
-                listener.on_state_changed(job, old_status, new_status)
-                if new_status == JobStatus.COMPLETED:
-                    listener.on_job_completed(job)
-                elif new_status == JobStatus.FAILED:
-                    listener.on_job_failed(job, job.failure_reason or "Unknown")
-            except Exception:
-                pass
-
-    def submit(
-        self,
-        pipeline: Pipeline,
-        config: Optional[JobConfig] = None,
-    ) -> Job:
-        """Submit a pipeline for execution.
-
-        Args:
-            pipeline: The pipeline to execute.
-            config: Optional job configuration.
-
-        Returns:
-            The submitted Job.
-
-        Raises:
-            IllegalStateException: If the service is not running.
-        """
-        return self.submit_async(pipeline, config).result()
-
-    def submit_async(
-        self,
-        pipeline: Pipeline,
-        config: Optional[JobConfig] = None,
-    ) -> Future:
-        """Submit a pipeline asynchronously.
-
-        Args:
-            pipeline: The pipeline to execute.
-            config: Optional job configuration.
-
-        Returns:
-            Future containing the Job.
-        """
-        future: Future = Future()
-
-        if not self._running:
-            future.set_exception(
-                IllegalStateException("Jet service is not running")
-            )
-            return future
-
-        if pipeline is None:
-            future.set_exception(
-                IllegalArgumentException("Pipeline cannot be None")
-            )
-            return future
-
-        if not pipeline.is_complete():
-            future.set_exception(
-                IllegalArgumentException(
-                    "Pipeline must have both source and sink defined"
-                )
-            )
-            return future
-
-        with self._lock:
-            self._job_id_counter += 1
-            job_id = self._job_id_counter
-
-        config = config or JobConfig()
-        job = Job(job_id, config.name, config)
-        job._start()
-
-        with self._lock:
-            self._jobs[job_id] = job
-            if job.name:
-                self._jobs_by_name[job.name] = job
-
-        future.set_result(job)
-        return future
+    def __init__(self, client: Any):
+        self._client = client
+        self._invocation_service = getattr(client, "_invocation_service", None)
+        self._serialization_service = getattr(client, "_serialization_service", None)
 
     def new_job(
         self,
         pipeline: Pipeline,
         config: Optional[JobConfig] = None,
     ) -> Job:
-        """Create and submit a new job.
-
-        Alias for submit().
+        """Submit a new job from a pipeline.
 
         Args:
             pipeline: The pipeline to execute.
             config: Optional job configuration.
 
         Returns:
-            The submitted Job.
-        """
-        return self.submit(pipeline, config)
+            A Job instance representing the submitted job.
 
-    def new_job_async(
+        Raises:
+            ValueError: If the pipeline is empty.
+        """
+        if pipeline.is_empty():
+            raise ValueError("Cannot submit an empty pipeline")
+
+        job_id = self._generate_job_id()
+        dag_data = self._serialize_pipeline(pipeline)
+        config_data = self._serialize_config(config or JobConfig())
+
+        self._submit_job(job_id, dag_data, config_data)
+
+        job = Job(self, job_id, config.name if config else None)
+        return job
+
+    def new_light_job(
         self,
         pipeline: Pipeline,
         config: Optional[JobConfig] = None,
-    ) -> Future:
-        """Create and submit a new job asynchronously.
+    ) -> Job:
+        """Submit a new light job from a pipeline.
+
+        Light jobs are optimized for low-latency, short-lived computations.
 
         Args:
             pipeline: The pipeline to execute.
             config: Optional job configuration.
 
         Returns:
-            Future containing the Job.
+            A Job instance representing the submitted job.
         """
-        return self.submit_async(pipeline, config)
+        if pipeline.is_empty():
+            raise ValueError("Cannot submit an empty pipeline")
 
-    def new_job_if_absent(
-        self,
-        pipeline: Pipeline,
-        config: JobConfig,
-    ) -> Job:
-        """Submit a job only if a job with the same name doesn't exist.
+        job_id = self._generate_job_id()
+        dag_data = self._serialize_pipeline(pipeline)
+        config_data = self._serialize_config(config or JobConfig())
 
-        Args:
-            pipeline: The pipeline to execute.
-            config: Job configuration (name is required).
+        coordinator = self._get_light_job_coordinator()
+        self._submit_job(job_id, dag_data, config_data, coordinator)
 
-        Returns:
-            The existing or new Job.
-
-        Raises:
-            ValueError: If config.name is not set.
-        """
-        return self.new_job_if_absent_async(pipeline, config).result()
-
-    def new_job_if_absent_async(
-        self,
-        pipeline: Pipeline,
-        config: JobConfig,
-    ) -> Future:
-        """Submit a job if absent asynchronously.
-
-        Args:
-            pipeline: The pipeline to execute.
-            config: Job configuration.
-
-        Returns:
-            Future containing the Job.
-        """
-        future: Future = Future()
-
-        if not config.name:
-            future.set_exception(
-                ValueError("JobConfig.name is required for new_job_if_absent")
-            )
-            return future
-
-        if not self._running:
-            future.set_exception(
-                IllegalStateException("Jet service is not running")
-            )
-            return future
-
-        with self._lock:
-            existing = self._jobs_by_name.get(config.name)
-            if existing:
-                future.set_result(existing)
-                return future
-
-        return self.submit_async(pipeline, config)
+        job = Job(self, job_id, config.name if config else None, coordinator)
+        return job
 
     def get_job(self, job_id: int) -> Optional[Job]:
         """Get a job by ID.
 
         Args:
-            job_id: The job ID.
+            job_id: The job identifier.
 
         Returns:
-            The Job, or None if not found.
+            The Job instance or None if not found.
         """
-        return self.get_job_async(job_id).result()
-
-    def get_job_async(self, job_id: int) -> Future:
-        """Get a job by ID asynchronously.
-
-        Args:
-            job_id: The job ID.
-
-        Returns:
-            Future containing the Job or None.
-        """
-        future: Future = Future()
-        with self._lock:
-            future.set_result(self._jobs.get(job_id))
-        return future
+        job_ids = self._get_job_ids()
+        if job_id not in job_ids:
+            return None
+        return Job(self, job_id)
 
     def get_job_by_name(self, name: str) -> Optional[Job]:
         """Get a job by name.
@@ -321,177 +101,274 @@ class JetService:
             name: The job name.
 
         Returns:
-            The Job, or None if not found.
+            The Job instance or None if not found.
         """
-        return self.get_job_by_name_async(name).result()
-
-    def get_job_by_name_async(self, name: str) -> Future:
-        """Get a job by name asynchronously.
-
-        Args:
-            name: The job name.
-
-        Returns:
-            Future containing the Job or None.
-        """
-        future: Future = Future()
-        with self._lock:
-            future.set_result(self._jobs_by_name.get(name))
-        return future
+        summaries = self.get_jobs()
+        for job in summaries:
+            if job.name == name:
+                return job
+        return None
 
     def get_jobs(self) -> List[Job]:
         """Get all jobs.
 
         Returns:
-            List of all jobs.
+            List of Job instances.
         """
-        return self.get_jobs_async().result()
+        summaries = self._get_job_summary_list()
+        jobs = []
+        for summary in summaries:
+            job = Job(self, summary["job_id"], summary.get("name"))
+            job._status = JobStatus.from_code(summary.get("status", 0))
+            job._submission_time = summary.get("submission_time", 0)
+            job._completion_time = summary.get("completion_time", 0)
+            jobs.append(job)
+        return jobs
 
-    def get_jobs_async(self) -> Future:
-        """Get all jobs asynchronously.
+    def get_job_ids(self) -> List[int]:
+        """Get all job IDs.
 
         Returns:
-            Future containing list of jobs.
+            List of job IDs.
         """
-        future: Future = Future()
-        with self._lock:
-            future.set_result(list(self._jobs.values()))
-        return future
+        return self._get_job_ids()
 
-    def get_jobs_by_name(self, name: str) -> List[Job]:
-        """Get all jobs with a specific name.
+    def exists_distributed_object(
+        self,
+        service_name: str,
+        object_name: str,
+    ) -> bool:
+        """Check if a distributed object exists.
 
         Args:
-            name: The job name.
+            service_name: The service name.
+            object_name: The object name.
 
         Returns:
-            List of jobs with the given name.
+            True if the object exists.
         """
-        return self.get_jobs_by_name_async(name).result()
+        return self._exists_distributed_object(service_name, object_name)
 
-    def get_jobs_by_name_async(self, name: str) -> Future:
-        """Get jobs by name asynchronously.
+    def _generate_job_id(self) -> int:
+        """Generate a unique job ID."""
+        return int(time.time() * 1000) ^ (uuid_module.uuid4().int & 0xFFFFFFFFFFFFFFFF)
 
-        Args:
-            name: The job name.
+    def _get_light_job_coordinator(self) -> uuid_module.UUID:
+        """Get the coordinator UUID for light jobs."""
+        return uuid_module.uuid4()
 
-        Returns:
-            Future containing list of matching jobs.
-        """
-        future: Future = Future()
-        with self._lock:
-            job = self._jobs_by_name.get(name)
-            future.set_result([job] if job else [])
-        return future
+    def _serialize_pipeline(self, pipeline: Pipeline) -> bytes:
+        """Serialize a pipeline to bytes."""
+        import json
+        return json.dumps(pipeline.to_dag()).encode("utf-8")
 
-    def new_light_job(self, pipeline: Pipeline) -> Job:
-        """Submit a light job (no fault tolerance).
+    def _serialize_config(self, config: JobConfig) -> bytes:
+        """Serialize a job configuration to bytes."""
+        import json
+        return json.dumps(config.to_dict()).encode("utf-8")
 
-        Light jobs have lower overhead but no fault tolerance.
+    def _submit_job(
+        self,
+        job_id: int,
+        dag_data: bytes,
+        config_data: bytes,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> None:
+        """Submit a job to the cluster."""
+        from hazelcast.protocol.codec import JetCodec
 
-        Args:
-            pipeline: The pipeline to execute.
-
-        Returns:
-            The submitted Job.
-        """
-        return self.new_light_job_async(pipeline).result()
-
-    def new_light_job_async(self, pipeline: Pipeline) -> Future:
-        """Submit a light job asynchronously.
-
-        Args:
-            pipeline: The pipeline to execute.
-
-        Returns:
-            Future containing the Job.
-        """
-        future: Future = Future()
-
-        if not self._running:
-            future.set_exception(
-                IllegalStateException("Jet service is not running")
-            )
-            return future
-
-        if pipeline is None:
-            future.set_exception(
-                IllegalArgumentException("Pipeline cannot be None")
-            )
-            return future
-
-        if not pipeline.is_complete():
-            future.set_exception(
-                IllegalArgumentException(
-                    "Pipeline must have both source and sink defined"
-                )
-            )
-            return future
-
-        with self._lock:
-            self._job_id_counter += 1
-            job_id = self._job_id_counter
-
-        config = JobConfig()
-        config.processing_guarantee = ProcessingGuarantee.NONE
-        job = Job(job_id, None, config)
-        job._light_job = True
-        job._start()
-
-        with self._lock:
-            self._jobs[job_id] = job
-
-        future.set_result(job)
-        return future
-
-    def get_active_jobs(self) -> List[Job]:
-        """Get all active (non-terminal) jobs.
-
-        Returns:
-            List of active jobs.
-        """
-        with self._lock:
-            return [j for j in self._jobs.values() if not j.is_terminal()]
-
-    def get_active_jobs_async(self) -> Future:
-        """Get all active jobs asynchronously.
-
-        Returns:
-            Future containing list of active jobs.
-        """
-        future: Future = Future()
-        future.set_result(self.get_active_jobs())
-        return future
-
-    def resume_job(self, job_id: int) -> None:
-        """Resume a suspended job.
-
-        Args:
-            job_id: The job ID.
-        """
-        self.resume_job_async(job_id).result()
-
-    def resume_job_async(self, job_id: int) -> Future:
-        """Resume a job asynchronously.
-
-        Args:
-            job_id: The job ID.
-
-        Returns:
-            Future that completes when the job is resumed.
-        """
-        future: Future = Future()
-        with self._lock:
-            job = self._jobs.get(job_id)
-        if job:
-            return job.resume_async()
-        future.set_exception(
-            IllegalArgumentException(f"Job not found: {job_id}")
+        request = JetCodec.encode_submit_job_request(
+            job_id, dag_data, config_data, light_job_coordinator
         )
-        return future
+        if self._invocation_service:
+            self._invocation_service.invoke(request)
 
-    def __repr__(self) -> str:
-        with self._lock:
-            job_count = len(self._jobs)
-            active_count = sum(1 for j in self._jobs.values() if not j.is_terminal())
-        return f"JetService(running={self._running}, jobs={job_count}, active={active_count})"
+    def _terminate_job(
+        self,
+        job_id: int,
+        terminate_mode: TerminationMode,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> None:
+        """Terminate a job."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_terminate_job_request(
+            job_id, int(terminate_mode), light_job_coordinator
+        )
+        if self._invocation_service:
+            self._invocation_service.invoke(request)
+
+    def _get_job_status(self, job_id: int) -> int:
+        """Get the status of a job."""
+        from hazelcast.protocol.codec import JetCodec, JOB_STATUS_NOT_RUNNING
+
+        request = JetCodec.encode_get_job_status_request(job_id)
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_get_job_status_response(response)
+        return JOB_STATUS_NOT_RUNNING
+
+    def _get_job_ids(
+        self,
+        only_name: Optional[str] = None,
+        only_job_id: int = -1,
+    ) -> List[int]:
+        """Get job IDs."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_get_job_ids_request(only_name, only_job_id)
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_get_job_ids_response(response)
+        return []
+
+    def _get_job_submission_time(
+        self,
+        job_id: int,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> int:
+        """Get the submission time of a job."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_get_job_submission_time_request(
+            job_id, light_job_coordinator
+        )
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_get_job_submission_time_response(response)
+        return 0
+
+    def _get_job_config(
+        self,
+        job_id: int,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> Optional[bytes]:
+        """Get the configuration of a job."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_get_job_config_request(job_id, light_job_coordinator)
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_get_job_config_response(response)
+        return None
+
+    def _resume_job(self, job_id: int) -> None:
+        """Resume a suspended job."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_resume_job_request(job_id)
+        if self._invocation_service:
+            self._invocation_service.invoke(request)
+
+    def _export_snapshot(
+        self,
+        job_id: int,
+        name: str,
+        cancel_job: bool,
+    ) -> None:
+        """Export a job snapshot."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_export_snapshot_request(job_id, name, cancel_job)
+        if self._invocation_service:
+            self._invocation_service.invoke(request)
+
+    def _get_job_summary_list(self) -> List[dict]:
+        """Get the list of job summaries."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_get_job_summary_list_request()
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_get_job_summary_list_response(response)
+        return []
+
+    def _exists_distributed_object(
+        self,
+        service_name: str,
+        object_name: str,
+    ) -> bool:
+        """Check if a distributed object exists."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_exists_distributed_object_request(
+            service_name, object_name
+        )
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_exists_distributed_object_response(response)
+        return False
+
+    def _get_job_metrics(self, job_id: int) -> Optional[bytes]:
+        """Get job metrics."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_get_job_metrics_request(job_id)
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_get_job_metrics_response(response)
+        return None
+
+    def _get_job_suspension_cause(self, job_id: int) -> Optional[str]:
+        """Get the suspension cause for a job."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_get_job_suspension_cause_request(job_id)
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_get_job_suspension_cause_response(response)
+        return None
+
+    def _is_job_user_cancelled(self, job_id: int) -> bool:
+        """Check if a job was cancelled by user."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_is_job_user_cancelled_request(job_id)
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_is_job_user_cancelled_response(response)
+        return False
+
+    def _add_job_status_listener(
+        self,
+        job_id: int,
+        light_job_coordinator: Optional[uuid_module.UUID],
+        local_only: bool,
+    ) -> Optional[uuid_module.UUID]:
+        """Add a job status listener."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_add_job_status_listener_request(
+            job_id, light_job_coordinator, local_only
+        )
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_add_job_status_listener_response(response)
+        return None
+
+    def _remove_job_status_listener(
+        self,
+        job_id: int,
+        registration_id: uuid_module.UUID,
+    ) -> bool:
+        """Remove a job status listener."""
+        from hazelcast.protocol.codec import JetCodec
+
+        request = JetCodec.encode_remove_job_status_listener_request(
+            job_id, registration_id
+        )
+        if self._invocation_service:
+            response = self._invocation_service.invoke(request)
+            if response:
+                return JetCodec.decode_remove_job_status_listener_response(response)
+        return False

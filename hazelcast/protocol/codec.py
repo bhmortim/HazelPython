@@ -6496,6 +6496,791 @@ class CPSessionCodec:
         return result
 
 
+# Jet protocol constants
+JET_SUBMIT_JOB = 0xFE0100
+JET_TERMINATE_JOB = 0xFE0200
+JET_GET_JOB_STATUS = 0xFE0300
+JET_GET_JOB_IDS = 0xFE0400
+JET_GET_JOB_SUBMISSION_TIME = 0xFE0500
+JET_GET_JOB_CONFIG = 0xFE0600
+JET_RESUME_JOB = 0xFE0700
+JET_EXPORT_SNAPSHOT = 0xFE0800
+JET_GET_JOB_SUMMARY_LIST = 0xFE0900
+JET_EXISTS_DISTRIBUTED_OBJECT = 0xFE0A00
+JET_GET_JOB_METRICS = 0xFE0B00
+JET_GET_JOB_SUSPENSION_CAUSE = 0xFE0C00
+JET_GET_JOB_AND_SQL_SUMMARY_LIST = 0xFE0D00
+JET_IS_JOB_USER_CANCELLED = 0xFE0E00
+JET_UPLOAD_JOB_META_DATA = 0xFE0F00
+JET_UPLOAD_JOB_MULTIPART = 0xFE1000
+JET_ADD_JOB_STATUS_LISTENER = 0xFE1100
+JET_REMOVE_JOB_STATUS_LISTENER = 0xFE1200
+JET_UPDATE_JOB_CONFIG = 0xFE1300
+
+# Jet job status constants
+JOB_STATUS_NOT_RUNNING = 0
+JOB_STATUS_STARTING = 1
+JOB_STATUS_RUNNING = 2
+JOB_STATUS_SUSPENDED = 3
+JOB_STATUS_SUSPENDED_EXPORTING_SNAPSHOT = 4
+JOB_STATUS_COMPLETING = 5
+JOB_STATUS_FAILED = 6
+JOB_STATUS_COMPLETED = 7
+
+# Jet termination mode constants
+TERMINATE_MODE_RESTART_GRACEFUL = 0
+TERMINATE_MODE_RESTART_FORCEFUL = 1
+TERMINATE_MODE_SUSPEND_GRACEFUL = 2
+TERMINATE_MODE_SUSPEND_FORCEFUL = 3
+TERMINATE_MODE_CANCEL_GRACEFUL = 4
+TERMINATE_MODE_CANCEL_FORCEFUL = 5
+
+
+class JetCodec:
+    """Codec for Jet protocol messages."""
+
+    @staticmethod
+    def encode_submit_job_request(
+        job_id: int,
+        dag_data: bytes,
+        job_config_data: bytes,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> "ClientMessage":
+        """Encode a Jet.submitJob request.
+
+        Args:
+            job_id: The unique job identifier.
+            dag_data: Serialized DAG (Directed Acyclic Graph) data.
+            job_config_data: Serialized job configuration.
+            light_job_coordinator: Optional coordinator UUID for light jobs.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_SUBMIT_JOB)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+        FixSizedTypesCodec.encode_uuid(
+            buffer, REQUEST_HEADER_SIZE + LONG_SIZE, light_job_coordinator
+        )
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        msg.add_frame(Frame(dag_data))
+        msg.add_frame(Frame(job_config_data))
+        return msg
+
+    @staticmethod
+    def encode_terminate_job_request(
+        job_id: int,
+        terminate_mode: int,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> "ClientMessage":
+        """Encode a Jet.terminateJob request.
+
+        Args:
+            job_id: The job identifier to terminate.
+            terminate_mode: The termination mode (cancel, suspend, restart).
+            light_job_coordinator: Optional coordinator UUID for light jobs.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_TERMINATE_JOB)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, job_id)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, terminate_mode)
+        offset += INT_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, light_job_coordinator)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def encode_get_job_status_request(job_id: int) -> "ClientMessage":
+        """Encode a Jet.getJobStatus request.
+
+        Args:
+            job_id: The job identifier.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_STATUS)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_job_status_response(msg: "ClientMessage") -> int:
+        """Decode a Jet.getJobStatus response.
+
+        Returns:
+            The job status code.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
+            return JOB_STATUS_NOT_RUNNING
+        return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_get_job_ids_request(
+        only_name: Optional[str] = None,
+        only_job_id: int = -1,
+    ) -> "ClientMessage":
+        """Encode a Jet.getJobIds request.
+
+        Args:
+            only_name: Optional job name filter.
+            only_job_id: Optional specific job ID (-1 for all).
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_IDS)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, only_job_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        if only_name is not None:
+            StringCodec.encode(msg, only_name)
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_get_job_ids_response(msg: "ClientMessage") -> List[int]:
+        """Decode a Jet.getJobIds response.
+
+        Returns:
+            List of job IDs.
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return []
+
+        result = []
+        content = frame.content
+        offset = RESPONSE_HEADER_SIZE
+
+        if len(content) >= offset + INT_SIZE:
+            count = struct.unpack_from("<i", content, offset)[0]
+            offset += INT_SIZE
+            for _ in range(count):
+                if offset + LONG_SIZE <= len(content):
+                    job_id = struct.unpack_from("<q", content, offset)[0]
+                    result.append(job_id)
+                    offset += LONG_SIZE
+
+        return result
+
+    @staticmethod
+    def encode_get_job_submission_time_request(
+        job_id: int,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> "ClientMessage":
+        """Encode a Jet.getJobSubmissionTime request.
+
+        Args:
+            job_id: The job identifier.
+            light_job_coordinator: Optional coordinator UUID for light jobs.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_SUBMISSION_TIME)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+        FixSizedTypesCodec.encode_uuid(
+            buffer, REQUEST_HEADER_SIZE + LONG_SIZE, light_job_coordinator
+        )
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_job_submission_time_response(msg: "ClientMessage") -> int:
+        """Decode a Jet.getJobSubmissionTime response.
+
+        Returns:
+            The submission time in milliseconds since epoch.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_get_job_config_request(
+        job_id: int,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+    ) -> "ClientMessage":
+        """Encode a Jet.getJobConfig request.
+
+        Args:
+            job_id: The job identifier.
+            light_job_coordinator: Optional coordinator UUID for light jobs.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_CONFIG)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+        FixSizedTypesCodec.encode_uuid(
+            buffer, REQUEST_HEADER_SIZE + LONG_SIZE, light_job_coordinator
+        )
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_job_config_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Jet.getJobConfig response.
+
+        Returns:
+            The serialized job configuration or None.
+        """
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_resume_job_request(job_id: int) -> "ClientMessage":
+        """Encode a Jet.resumeJob request.
+
+        Args:
+            job_id: The job identifier to resume.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_RESUME_JOB)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def encode_export_snapshot_request(
+        job_id: int,
+        name: str,
+        cancel_job: bool,
+    ) -> "ClientMessage":
+        """Encode a Jet.exportSnapshot request.
+
+        Args:
+            job_id: The job identifier.
+            name: The snapshot name.
+            cancel_job: Whether to cancel the job after export.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_EXPORT_SNAPSHOT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+        struct.pack_into(
+            "<B", buffer, REQUEST_HEADER_SIZE + LONG_SIZE, 1 if cancel_job else 0
+        )
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_get_job_summary_list_request() -> "ClientMessage":
+        """Encode a Jet.getJobSummaryList request.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_SUMMARY_LIST)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_job_summary_list_response(
+        msg: "ClientMessage",
+    ) -> List[dict]:
+        """Decode a Jet.getJobSummaryList response.
+
+        Returns:
+            List of job summary dictionaries.
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return []
+
+        result = []
+        content = frame.content
+        offset = RESPONSE_HEADER_SIZE
+
+        if len(content) >= offset + INT_SIZE:
+            count = struct.unpack_from("<i", content, offset)[0]
+            offset += INT_SIZE
+
+            for _ in range(count):
+                if offset + LONG_SIZE + LONG_SIZE + INT_SIZE + INT_SIZE <= len(content):
+                    job_id = struct.unpack_from("<q", content, offset)[0]
+                    offset += LONG_SIZE
+                    submission_time = struct.unpack_from("<q", content, offset)[0]
+                    offset += LONG_SIZE
+                    status = struct.unpack_from("<i", content, offset)[0]
+                    offset += INT_SIZE
+                    completion_time = struct.unpack_from("<q", content, offset)[0]
+                    offset += LONG_SIZE
+
+                    name_frame = msg.next_frame()
+                    name = ""
+                    if name_frame and not name_frame.is_null_frame:
+                        name = name_frame.content.decode("utf-8")
+
+                    result.append({
+                        "job_id": job_id,
+                        "name": name,
+                        "status": status,
+                        "submission_time": submission_time,
+                        "completion_time": completion_time,
+                    })
+
+        return result
+
+    @staticmethod
+    def encode_exists_distributed_object_request(
+        service_name: str,
+        object_name: str,
+    ) -> "ClientMessage":
+        """Encode a Jet.existsDistributedObject request.
+
+        Args:
+            service_name: The service name.
+            object_name: The object name.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_EXISTS_DISTRIBUTED_OBJECT)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, service_name)
+        StringCodec.encode(msg, object_name)
+        return msg
+
+    @staticmethod
+    def decode_exists_distributed_object_response(msg: "ClientMessage") -> bool:
+        """Decode a Jet.existsDistributedObject response.
+
+        Returns:
+            True if the object exists.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_get_job_metrics_request(job_id: int) -> "ClientMessage":
+        """Encode a Jet.getJobMetrics request.
+
+        Args:
+            job_id: The job identifier.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_METRICS)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_job_metrics_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Jet.getJobMetrics response.
+
+        Returns:
+            The serialized metrics data or None.
+        """
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_get_job_suspension_cause_request(job_id: int) -> "ClientMessage":
+        """Encode a Jet.getJobSuspensionCause request.
+
+        Args:
+            job_id: The job identifier.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_SUSPENSION_CAUSE)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_job_suspension_cause_response(msg: "ClientMessage") -> Optional[str]:
+        """Decode a Jet.getJobSuspensionCause response.
+
+        Returns:
+            The suspension cause message or None.
+        """
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content.decode("utf-8")
+
+    @staticmethod
+    def encode_get_job_and_sql_summary_list_request() -> "ClientMessage":
+        """Encode a Jet.getJobAndSqlSummaryList request.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_GET_JOB_AND_SQL_SUMMARY_LIST)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_get_job_and_sql_summary_list_response(
+        msg: "ClientMessage",
+    ) -> List[dict]:
+        """Decode a Jet.getJobAndSqlSummaryList response.
+
+        Returns:
+            List of job/SQL summary dictionaries.
+        """
+        return JetCodec.decode_get_job_summary_list_response(msg)
+
+    @staticmethod
+    def encode_is_job_user_cancelled_request(job_id: int) -> "ClientMessage":
+        """Encode a Jet.isJobUserCancelled request.
+
+        Args:
+            job_id: The job identifier.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_IS_JOB_USER_CANCELLED)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_is_job_user_cancelled_response(msg: "ClientMessage") -> bool:
+        """Decode a Jet.isJobUserCancelled response.
+
+        Returns:
+            True if the job was cancelled by user.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_upload_job_meta_data_request(
+        session_id: uuid_module.UUID,
+        jar_on_member: bool,
+        file_name: str,
+        sha256_hex: str,
+        snapshot_name: Optional[str],
+        job_name: Optional[str],
+        main_class: Optional[str],
+        job_parameters: List[str],
+    ) -> "ClientMessage":
+        """Encode a Jet.uploadJobMetaData request.
+
+        Args:
+            session_id: Upload session identifier.
+            jar_on_member: Whether the JAR is already on member.
+            file_name: The JAR file name.
+            sha256_hex: SHA256 hash of the JAR.
+            snapshot_name: Optional snapshot name.
+            job_name: Optional job name.
+            main_class: Optional main class.
+            job_parameters: List of job parameters.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_UPLOAD_JOB_META_DATA)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, session_id)
+        offset += UUID_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if jar_on_member else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, file_name)
+        StringCodec.encode(msg, sha256_hex)
+        if snapshot_name:
+            StringCodec.encode(msg, snapshot_name)
+        else:
+            msg.add_frame(NULL_FRAME)
+        if job_name:
+            StringCodec.encode(msg, job_name)
+        else:
+            msg.add_frame(NULL_FRAME)
+        if main_class:
+            StringCodec.encode(msg, main_class)
+        else:
+            msg.add_frame(NULL_FRAME)
+        _encode_string_list(msg, job_parameters)
+        return msg
+
+    @staticmethod
+    def encode_upload_job_multipart_request(
+        session_id: uuid_module.UUID,
+        part_number: int,
+        part_data: bytes,
+        part_size: int,
+        total_size: int,
+        sha256_hex: str,
+    ) -> "ClientMessage":
+        """Encode a Jet.uploadJobMultipart request.
+
+        Args:
+            session_id: Upload session identifier.
+            part_number: The part number.
+            part_data: The part data.
+            part_size: Size of this part.
+            total_size: Total size of all parts.
+            sha256_hex: SHA256 hash of the complete data.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + INT_SIZE + INT_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_UPLOAD_JOB_MULTIPART)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, session_id)
+        offset += UUID_SIZE
+        struct.pack_into("<i", buffer, offset, part_number)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, part_size)
+        offset += INT_SIZE
+        struct.pack_into("<q", buffer, offset, total_size)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        msg.add_frame(Frame(part_data))
+        StringCodec.encode(msg, sha256_hex)
+        return msg
+
+    @staticmethod
+    def encode_add_job_status_listener_request(
+        job_id: int,
+        light_job_coordinator: Optional[uuid_module.UUID] = None,
+        local_only: bool = False,
+    ) -> "ClientMessage":
+        """Encode a Jet.addJobStatusListener request.
+
+        Args:
+            job_id: The job identifier.
+            light_job_coordinator: Optional coordinator UUID for light jobs.
+            local_only: Whether to listen only to local events.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + UUID_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_ADD_JOB_STATUS_LISTENER)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, job_id)
+        offset += LONG_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, light_job_coordinator)
+        offset += UUID_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if local_only else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_add_job_status_listener_response(
+        msg: "ClientMessage",
+    ) -> Optional[uuid_module.UUID]:
+        """Decode a Jet.addJobStatusListener response.
+
+        Returns:
+            The registration UUID.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + UUID_SIZE:
+            return None
+        uuid_val, _ = FixSizedTypesCodec.decode_uuid(frame.content, RESPONSE_HEADER_SIZE)
+        return uuid_val
+
+    @staticmethod
+    def encode_remove_job_status_listener_request(
+        job_id: int,
+        registration_id: uuid_module.UUID,
+    ) -> "ClientMessage":
+        """Encode a Jet.removeJobStatusListener request.
+
+        Args:
+            job_id: The job identifier.
+            registration_id: The listener registration ID.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_REMOVE_JOB_STATUS_LISTENER)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+        FixSizedTypesCodec.encode_uuid(
+            buffer, REQUEST_HEADER_SIZE + LONG_SIZE, registration_id
+        )
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        return msg
+
+    @staticmethod
+    def decode_remove_job_status_listener_response(msg: "ClientMessage") -> bool:
+        """Decode a Jet.removeJobStatusListener response.
+
+        Returns:
+            True if the listener was removed.
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_update_job_config_request(
+        job_id: int,
+        delta_config_data: bytes,
+    ) -> "ClientMessage":
+        """Encode a Jet.updateJobConfig request.
+
+        Args:
+            job_id: The job identifier.
+            delta_config_data: Serialized configuration delta.
+
+        Returns:
+            The encoded ClientMessage.
+        """
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE)
+        struct.pack_into("<I", buffer, 0, JET_UPDATE_JOB_CONFIG)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<q", buffer, REQUEST_HEADER_SIZE, job_id)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        msg.add_frame(Frame(delta_config_data))
+        return msg
+
+    @staticmethod
+    def decode_update_job_config_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a Jet.updateJobConfig response.
+
+        Returns:
+            The updated configuration data or None.
+        """
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+
 # Cache (JCache JSR-107) protocol constants
 CACHE_GET = 0x130100
 CACHE_CONTAINS_KEY = 0x130200

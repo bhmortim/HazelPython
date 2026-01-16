@@ -1,37 +1,20 @@
-"""Hazelcast Jet - Distributed Stream Processing Engine.
+"""Hazelcast Jet streaming engine support.
 
-This module provides the Jet API for building and executing
-distributed stream and batch processing pipelines.
+This package provides the Pipeline API and Job management for Hazelcast Jet,
+enabling distributed stream and batch processing.
 """
 
-from hazelcast.jet.job import Job, JobConfig, JobStatus
-from hazelcast.jet.pipeline import (
-    Pipeline,
-    Stage,
-    Source,
-    Sink,
-    BatchSource,
-    StreamSource,
-    MapSource,
-    ListSource,
-    MapSink,
-    ListSink,
-)
+from hazelcast.jet.job import Job, JobStatus, TerminationMode
+from hazelcast.jet.pipeline import Pipeline, Source, Sink, Stage
 from hazelcast.jet.service import JetService
 
 __all__ = [
     "JetService",
     "Pipeline",
-    "Stage",
     "Source",
     "Sink",
-    "BatchSource",
-    "StreamSource",
-    "MapSource",
-    "ListSource",
-    "MapSink",
-    "ListSink",
+    "Stage",
     "Job",
-    "JobConfig",
     "JobStatus",
+    "TerminationMode",
 ]
