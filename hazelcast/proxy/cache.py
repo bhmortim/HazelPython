@@ -39,6 +39,12 @@ from typing import (
 
 from hazelcast.protocol.codec import CacheCodec
 from hazelcast.proxy.base import Proxy, ProxyContext
+from hazelcast.event_journal import (
+    EventJournalReader,
+    EventJournalEvent,
+    EventType,
+    ReadResultSet,
+)
 
 if TYPE_CHECKING:
     from hazelcast.protocol.client_message import ClientMessage
@@ -1312,6 +1318,91 @@ class Cache(Proxy, Generic[K, V]):
             result_future.set_exception(e)
 
         return result_future
+
+    def get_event_journal_reader(self) -> EventJournalReader[K, V]:
+        """Get an event journal reader for this cache.
+
+        Creates and returns a new EventJournalReader that can be used
+        to read events from this cache's event journal. The event journal
+        must be enabled in the cache configuration on the server.
+
+        Returns:
+            A new EventJournalReader instance for this cache.
+
+        Raises:
+            IllegalStateException: If the cache has been destroyed.
+
+        Example:
+            >>> reader = cache.get_event_journal_reader()
+            >>> state = reader.subscribe()
+            >>> result = reader.read_many(
+            ...     start_sequence=state.oldest_sequence,
+            ...     max_size=100
+            ... )
+            >>> for event in result:
+            ...     if event.is_added:
+            ...         print(f"Added: {event.key} = {event.new_value}")
+        """
+        self._check_not_destroyed()
+        return EventJournalReader[K, V](self)
+
+    def read_from_event_journal(
+        self,
+        start_sequence: int,
+        min_size: int = 1,
+        max_size: int = 100,
+    ) -> ReadResultSet[K, V]:
+        """Read events from the cache's event journal.
+
+        Reads a batch of events starting from the given sequence number.
+        This is a convenience method that creates a reader internally.
+
+        Args:
+            start_sequence: The sequence number to start reading from.
+            min_size: Minimum number of events to read.
+            max_size: Maximum number of events to read.
+
+        Returns:
+            A ReadResultSet containing the events read.
+
+        Raises:
+            ValueError: If parameters are invalid.
+            IllegalStateException: If the cache has been destroyed.
+
+        Example:
+            >>> result = cache.read_from_event_journal(
+            ...     start_sequence=0,
+            ...     max_size=100
+            ... )
+            >>> for event in result:
+            ...     if event.is_added:
+            ...         print(f"Added: {event.key} = {event.new_value}")
+        """
+        return self.read_from_event_journal_async(
+            start_sequence, min_size, max_size
+        ).result()
+
+    def read_from_event_journal_async(
+        self,
+        start_sequence: int,
+        min_size: int = 1,
+        max_size: int = 100,
+    ) -> Future:
+        """Read events from the cache's event journal asynchronously.
+
+        Args:
+            start_sequence: The sequence number to start reading from.
+            min_size: Minimum number of events to read.
+            max_size: Maximum number of events to read.
+
+        Returns:
+            A Future that will contain a ReadResultSet.
+        """
+        self._check_not_destroyed()
+        reader = EventJournalReader[K, V](self)
+        return reader.read_from_event_journal_async(
+            start_sequence, min_size, max_size
+        )
 
     def _on_destroy(self) -> None:
         """Called when the cache is destroyed."""

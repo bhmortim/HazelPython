@@ -7281,6 +7281,14 @@ class JetCodec:
         return frame.content
 
 
+# Map Event Journal protocol constants
+MAP_EVENT_JOURNAL_SUBSCRIBE = 0x014100
+MAP_EVENT_JOURNAL_READ = 0x014200
+
+# Cache Event Journal protocol constants
+CACHE_EVENT_JOURNAL_SUBSCRIBE = 0x131600
+CACHE_EVENT_JOURNAL_READ = 0x131700
+
 # Cache (JCache JSR-107) protocol constants
 CACHE_GET = 0x130100
 CACHE_CONTAINS_KEY = 0x130200
@@ -8982,6 +8990,232 @@ class TransactionalMultiMapCodec:
         if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + INT_SIZE:
             return 0
         return struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+
+class MapEventJournalCodec:
+    """Codec for Map Event Journal protocol messages."""
+
+    @staticmethod
+    def encode_subscribe_request(name: str) -> "ClientMessage":
+        """Encode a MapEventJournal.subscribe request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_EVENT_JOURNAL_SUBSCRIBE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_subscribe_response(msg: "ClientMessage") -> Tuple[int, int]:
+        """Decode a MapEventJournal.subscribe response.
+
+        Returns:
+            Tuple of (oldest_sequence, newest_sequence).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + 2 * LONG_SIZE:
+            return 0, -1
+
+        oldest = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+        newest = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE + LONG_SIZE)[0]
+        return oldest, newest
+
+    @staticmethod
+    def encode_read_request(
+        name: str,
+        start_sequence: int,
+        min_size: int,
+        max_size: int,
+        filter_data: Optional[bytes] = None,
+    ) -> "ClientMessage":
+        """Encode a MapEventJournal.read request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, MAP_EVENT_JOURNAL_READ)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, start_sequence)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, min_size)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, max_size)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        if filter_data is not None:
+            msg.add_frame(Frame(filter_data))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_read_response(
+        msg: "ClientMessage",
+    ) -> Tuple[int, int, List[Tuple[int, Optional[bytes], Optional[bytes], Optional[bytes]]], List[int]]:
+        """Decode a MapEventJournal.read response.
+
+        Returns:
+            Tuple of (read_count, next_sequence, events, sequences).
+            Each event is (event_type, key_data, value_data, old_value_data).
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return 0, 0, [], []
+
+        content = frame.content
+        offset = RESPONSE_HEADER_SIZE
+
+        read_count = struct.unpack_from("<i", content, offset)[0]
+        offset += INT_SIZE
+        next_seq = struct.unpack_from("<q", content, offset)[0]
+
+        events = []
+        sequences = []
+
+        while msg.has_next_frame():
+            event_frame = msg.peek_next_frame()
+            if event_frame is None or event_frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            msg.next_frame()
+
+            event_type_frame = msg.next_frame()
+            event_type = 0
+            if event_type_frame and len(event_type_frame.content) >= INT_SIZE:
+                event_type = struct.unpack_from("<i", event_type_frame.content, 0)[0]
+
+            key_frame = msg.next_frame()
+            key_data = key_frame.content if key_frame and not key_frame.is_null_frame else None
+
+            value_frame = msg.next_frame()
+            value_data = value_frame.content if value_frame and not value_frame.is_null_frame else None
+
+            old_value_frame = msg.next_frame()
+            old_value_data = old_value_frame.content if old_value_frame and not old_value_frame.is_null_frame else None
+
+            events.append((event_type, key_data, value_data, old_value_data))
+
+        return read_count, next_seq, events, sequences
+
+
+class CacheEventJournalCodec:
+    """Codec for Cache Event Journal protocol messages."""
+
+    @staticmethod
+    def encode_subscribe_request(name: str) -> "ClientMessage":
+        """Encode a CacheEventJournal.subscribe request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_EVENT_JOURNAL_SUBSCRIBE)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_subscribe_response(msg: "ClientMessage") -> Tuple[int, int]:
+        """Decode a CacheEventJournal.subscribe response.
+
+        Returns:
+            Tuple of (oldest_sequence, newest_sequence).
+        """
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + 2 * LONG_SIZE:
+            return 0, -1
+
+        oldest = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+        newest = struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE + LONG_SIZE)[0]
+        return oldest, newest
+
+    @staticmethod
+    def encode_read_request(
+        name: str,
+        start_sequence: int,
+        min_size: int,
+        max_size: int,
+        filter_data: Optional[bytes] = None,
+    ) -> "ClientMessage":
+        """Encode a CacheEventJournal.read request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + INT_SIZE + INT_SIZE)
+        struct.pack_into("<I", buffer, 0, CACHE_EVENT_JOURNAL_READ)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, start_sequence)
+        offset += LONG_SIZE
+        struct.pack_into("<i", buffer, offset, min_size)
+        offset += INT_SIZE
+        struct.pack_into("<i", buffer, offset, max_size)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        if filter_data is not None:
+            msg.add_frame(Frame(filter_data))
+        else:
+            msg.add_frame(NULL_FRAME)
+        return msg
+
+    @staticmethod
+    def decode_read_response(
+        msg: "ClientMessage",
+    ) -> Tuple[int, int, List[Tuple[int, Optional[bytes], Optional[bytes], Optional[bytes]]], List[int]]:
+        """Decode a CacheEventJournal.read response.
+
+        Returns:
+            Tuple of (read_count, next_sequence, events, sequences).
+            Each event is (event_type, key_data, value_data, old_value_data).
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return 0, 0, [], []
+
+        content = frame.content
+        offset = RESPONSE_HEADER_SIZE
+
+        read_count = struct.unpack_from("<i", content, offset)[0]
+        offset += INT_SIZE
+        next_seq = struct.unpack_from("<q", content, offset)[0]
+
+        events = []
+        sequences = []
+
+        while msg.has_next_frame():
+            event_frame = msg.peek_next_frame()
+            if event_frame is None or event_frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+
+            msg.next_frame()
+
+            event_type_frame = msg.next_frame()
+            event_type = 0
+            if event_type_frame and len(event_type_frame.content) >= INT_SIZE:
+                event_type = struct.unpack_from("<i", event_type_frame.content, 0)[0]
+
+            key_frame = msg.next_frame()
+            key_data = key_frame.content if key_frame and not key_frame.is_null_frame else None
+
+            value_frame = msg.next_frame()
+            value_data = value_frame.content if value_frame and not value_frame.is_null_frame else None
+
+            old_value_frame = msg.next_frame()
+            old_value_data = old_value_frame.content if old_value_frame and not old_value_frame.is_null_frame else None
+
+            events.append((event_type, key_data, value_data, old_value_data))
+
+        return read_count, next_seq, events, sequences
 
 
 class ReplicatedMapCodec:

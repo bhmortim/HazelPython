@@ -35,7 +35,7 @@ This document compares the Python client protocol implementation against the Jav
 | ExecutorService | 4 | 4 | 0 | 100% |
 | DurableExecutor | 6 | 6 | 0 | 100% |
 | ScheduledExecutor | 11 | 11 | 0 | 100% |
-| Event Journal | 4 | 0 | 4 | 0% |
+| Event Journal | 4 | 4 | 0 | 100% |
 | Continuous Query | 8 | 0 | 8 | 0% |
 
 ## Detailed Gap Analysis
@@ -196,19 +196,19 @@ Required for proper CP subsystem functionality.
 | 0xFE1200 | RemoveJobStatusListener | ✅ Implemented | Remove status listener |
 | 0xFE1300 | UpdateJobConfig | ✅ Implemented | Update job config |
 
-### Map Event Journal (0x0141xx) - **MISSING**
+### Map Event Journal (0x0141xx) - **IMPLEMENTED**
 
 | Message Type ID | Operation | Python Status | Notes |
 |-----------------|-----------|---------------|-------|
-| 0x014100 | MAP_EVENT_JOURNAL_SUBSCRIBE | ❌ Missing | Subscribe to journal |
-| 0x014200 | MAP_EVENT_JOURNAL_READ | ❌ Missing | Read from journal |
+| 0x014100 | MAP_EVENT_JOURNAL_SUBSCRIBE | ✅ Implemented | Subscribe to journal |
+| 0x014200 | MAP_EVENT_JOURNAL_READ | ✅ Implemented | Read from journal |
 
-### Cache Event Journal (0x1316xx) - **MISSING**
+### Cache Event Journal (0x1316xx) - **IMPLEMENTED**
 
 | Message Type ID | Operation | Python Status | Notes |
 |-----------------|-----------|---------------|-------|
-| 0x131600 | CACHE_EVENT_JOURNAL_SUBSCRIBE | ❌ Missing | Subscribe to cache journal |
-| 0x131700 | CACHE_EVENT_JOURNAL_READ | ❌ Missing | Read from cache journal |
+| 0x131600 | CACHE_EVENT_JOURNAL_SUBSCRIBE | ✅ Implemented | Subscribe to cache journal |
+| 0x131700 | CACHE_EVENT_JOURNAL_READ | ✅ Implemented | Read from cache journal |
 
 ### Continuous Query Cache (0x0160xx) - **MISSING**
 

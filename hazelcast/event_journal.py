@@ -1,7 +1,32 @@
-"""Event Journal support for tracking distributed data structure changes."""
+"""Event Journal support for Hazelcast Map and Cache.
+
+Event journals provide a stream of change events for distributed data
+structures. They are useful for CDC (Change Data Capture) patterns and
+event-driven architectures.
+
+Example:
+    Reading from a map's event journal::
+
+        reader = my_map.get_event_journal_reader()
+        state = reader.subscribe()
+        
+        # Read events from the oldest available sequence
+        result = reader.read_many(
+            start_sequence=state.oldest_sequence,
+            min_size=1,
+            max_size=100
+        )
+        
+        for event in result:
+            if event.is_added:
+                print(f"Added: {event.key} = {event.new_value}")
+            elif event.is_updated:
+                print(f"Updated: {event.key}: {event.old_value} -> {event.new_value}")
+            elif event.is_removed:
+                print(f"Removed: {event.key}")
+"""
 
 from concurrent.futures import Future
-from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import (
     Any,
@@ -15,213 +40,258 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from hazelcast.proxy.base import Proxy
+    from hazelcast.proxy.map import MapProxy
+    from hazelcast.proxy.cache import Cache
+    from hazelcast.protocol.client_message import ClientMessage
 
 K = TypeVar("K")
 V = TypeVar("V")
 
 
 class EventType(IntEnum):
-    """Type of event stored in the event journal."""
+    """Type of event in the event journal."""
 
     ADDED = 1
     REMOVED = 2
     UPDATED = 4
     EVICTED = 8
     EXPIRED = 16
-    LOADED = 32
+    MERGED = 32
+    LOADED = 64
 
 
-@dataclass
 class EventJournalEvent(Generic[K, V]):
-    """A single event from the event journal.
+    """A single event from an event journal.
 
-    Represents a change that occurred to an entry in a map or cache.
+    Represents a change that occurred to an entry in a Map or Cache.
 
     Attributes:
+        event_type: The type of event (ADDED, REMOVED, UPDATED, etc.).
+        key: The key of the affected entry.
+        new_value: The new value after the event (None for removals).
+        old_value: The old value before the event (None for additions).
         sequence: The sequence number of this event in the journal.
-        key: The key affected by this event.
-        new_value: The new value (for ADDED/UPDATED events).
-        old_value: The previous value (for UPDATED/REMOVED events).
-        event_type: The type of event that occurred.
+
+    Example:
+        >>> for event in result:
+        ...     if event.is_added:
+        ...         print(f"New entry: {event.key} = {event.new_value}")
+        ...     elif event.is_updated:
+        ...         print(f"Changed: {event.old_value} -> {event.new_value}")
     """
 
-    sequence: int
-    key: K
-    event_type: EventType
-    new_value: Optional[V] = None
-    old_value: Optional[V] = None
+    def __init__(
+        self,
+        event_type: int,
+        key: K,
+        new_value: Optional[V] = None,
+        old_value: Optional[V] = None,
+        sequence: int = 0,
+    ):
+        self._event_type = event_type
+        self._key = key
+        self._new_value = new_value
+        self._old_value = old_value
+        self._sequence = sequence
+
+    @property
+    def event_type(self) -> int:
+        """Get the event type."""
+        return self._event_type
+
+    @property
+    def key(self) -> K:
+        """Get the key of the affected entry."""
+        return self._key
+
+    @property
+    def new_value(self) -> Optional[V]:
+        """Get the new value after the event."""
+        return self._new_value
+
+    @property
+    def old_value(self) -> Optional[V]:
+        """Get the old value before the event."""
+        return self._old_value
+
+    @property
+    def sequence(self) -> int:
+        """Get the sequence number of this event."""
+        return self._sequence
 
     @property
     def is_added(self) -> bool:
-        """Check if this is an ADDED event."""
-        return self.event_type == EventType.ADDED
+        """Check if this is an addition event."""
+        return self._event_type == EventType.ADDED
 
     @property
     def is_removed(self) -> bool:
-        """Check if this is a REMOVED event."""
-        return self.event_type == EventType.REMOVED
+        """Check if this is a removal event."""
+        return self._event_type == EventType.REMOVED
 
     @property
     def is_updated(self) -> bool:
-        """Check if this is an UPDATED event."""
-        return self.event_type == EventType.UPDATED
+        """Check if this is an update event."""
+        return self._event_type == EventType.UPDATED
 
     @property
     def is_evicted(self) -> bool:
-        """Check if this is an EVICTED event."""
-        return self.event_type == EventType.EVICTED
+        """Check if this is an eviction event."""
+        return self._event_type == EventType.EVICTED
 
     @property
     def is_expired(self) -> bool:
-        """Check if this is an EXPIRED event."""
-        return self.event_type == EventType.EXPIRED
+        """Check if this is an expiration event."""
+        return self._event_type == EventType.EXPIRED
 
-    @property
-    def is_loaded(self) -> bool:
-        """Check if this is a LOADED event."""
-        return self.event_type == EventType.LOADED
+    def __repr__(self) -> str:
+        type_name = EventType(self._event_type).name if self._event_type in EventType._value2member_map_ else str(self._event_type)
+        return (
+            f"EventJournalEvent(type={type_name}, key={self._key!r}, "
+            f"new_value={self._new_value!r}, old_value={self._old_value!r}, "
+            f"sequence={self._sequence})"
+        )
 
 
-@dataclass
-class EventJournalInitialSubscriberState:
-    """Initial state returned when subscribing to an event journal.
+class EventJournalState:
+    """State information about an event journal subscription.
 
-    Contains the oldest and newest sequence numbers available in the journal,
-    allowing clients to determine the valid range of events to read.
+    Contains sequence information needed to read from the journal.
 
     Attributes:
-        oldest_sequence: The oldest sequence number available.
-        newest_sequence: The newest sequence number available.
+        oldest_sequence: The oldest available sequence in the journal.
+        newest_sequence: The newest sequence in the journal.
     """
 
-    oldest_sequence: int
-    newest_sequence: int
+    def __init__(self, oldest_sequence: int, newest_sequence: int):
+        self._oldest_sequence = oldest_sequence
+        self._newest_sequence = newest_sequence
 
     @property
-    def event_count(self) -> int:
-        """Get the number of events available in the journal."""
-        if self.newest_sequence < self.oldest_sequence:
-            return 0
-        return self.newest_sequence - self.oldest_sequence + 1
+    def oldest_sequence(self) -> int:
+        """Get the oldest available sequence number."""
+        return self._oldest_sequence
+
+    @property
+    def newest_sequence(self) -> int:
+        """Get the newest sequence number."""
+        return self._newest_sequence
+
+    @property
+    def is_empty(self) -> bool:
+        """Check if the journal is empty."""
+        return self._newest_sequence < self._oldest_sequence
+
+    def __repr__(self) -> str:
+        return f"EventJournalState(oldest={self._oldest_sequence}, newest={self._newest_sequence})"
 
 
-@dataclass
 class ReadResultSet(Generic[K, V]):
-    """Result set from reading event journal entries.
+    """Result set from reading an event journal.
 
-    Provides access to a batch of events read from the journal along with
-    metadata about the read operation.
+    Contains the events read and metadata for pagination.
 
     Attributes:
+        events: List of events read from the journal.
         read_count: Number of events read.
-        items: List of events read from the journal.
-        next_sequence: The sequence number to use for the next read.
-        sequence_unavailable_count: Number of sequences that were unavailable.
+        next_sequence: The next sequence number to read from.
+
+    Example:
+        >>> result = reader.read_many(start_sequence=0, max_size=100)
+        >>> for event in result:
+        ...     process(event)
+        >>> # Continue reading from where we left off
+        >>> result = reader.read_many(start_sequence=result.next_sequence, max_size=100)
     """
 
-    read_count: int
-    items: List[EventJournalEvent[K, V]] = field(default_factory=list)
-    next_sequence: int = 0
-    sequence_unavailable_count: int = 0
+    def __init__(
+        self,
+        events: List[EventJournalEvent[K, V]],
+        read_count: int,
+        next_sequence: int,
+    ):
+        self._events = events
+        self._read_count = read_count
+        self._next_sequence = next_sequence
+
+    @property
+    def events(self) -> List[EventJournalEvent[K, V]]:
+        """Get the list of events."""
+        return self._events
+
+    @property
+    def read_count(self) -> int:
+        """Get the number of events read."""
+        return self._read_count
+
+    @property
+    def next_sequence(self) -> int:
+        """Get the next sequence to read from."""
+        return self._next_sequence
 
     def __len__(self) -> int:
-        return len(self.items)
+        return len(self._events)
 
     def __iter__(self) -> Iterator[EventJournalEvent[K, V]]:
-        return iter(self.items)
+        return iter(self._events)
 
     def __getitem__(self, index: int) -> EventJournalEvent[K, V]:
-        return self.items[index]
+        return self._events[index]
 
-    @property
-    def size(self) -> int:
-        """Get the number of items in the result set."""
-        return len(self.items)
+    def __repr__(self) -> str:
+        return f"ReadResultSet(count={self._read_count}, next_seq={self._next_sequence})"
 
 
 class EventJournalReader(Generic[K, V]):
-    """Reader for consuming events from a distributed data structure's event journal.
+    """Reader for event journals on Map and Cache data structures.
 
-    Provides methods to read events sequentially from the journal, track
-    the current position, and handle batch reads efficiently.
+    Provides methods to subscribe to and read events from an event journal.
+    The event journal must be enabled in the Hazelcast server configuration.
 
-    The reader maintains the current sequence position and provides
-    convenient methods for reading events starting from the oldest
-    available, newest available, or a specific sequence number.
-
-    Attributes:
-        proxy: The proxy (Map or Cache) to read events from.
-        current_sequence: The current sequence position for reading.
+    Type Parameters:
+        K: The key type of the data structure.
+        V: The value type of the data structure.
 
     Example:
-        Reading events from a map::
-
-            reader = EventJournalReader(my_map)
-            state = reader.subscribe()
-            
-            # Read from oldest available
-            reader.current_sequence = state.oldest_sequence
-            result = reader.read_many(100)
-            
-            for event in result:
-                print(f"Event: {event.event_type} - {event.key}")
+        >>> reader = my_map.get_event_journal_reader()
+        >>> state = reader.subscribe()
+        >>> print(f"Journal has sequences {state.oldest_sequence} to {state.newest_sequence}")
+        >>> 
+        >>> result = reader.read_many(
+        ...     start_sequence=state.oldest_sequence,
+        ...     min_size=1,
+        ...     max_size=100
+        ... )
+        >>> 
+        >>> for event in result:
+        ...     print(f"{event.event_type}: {event.key}")
     """
 
-    def __init__(self, proxy: "Proxy"):
+    def __init__(self, proxy: Any):
         """Initialize the event journal reader.
 
         Args:
-            proxy: The proxy (Map or Cache) whose event journal to read.
+            proxy: The Map or Cache proxy to read events from.
         """
         self._proxy = proxy
-        self._current_sequence: int = 0
-        self._subscribed: bool = False
-        self._initial_state: Optional[EventJournalInitialSubscriberState] = None
+        self._is_cache = hasattr(proxy, 'config') and hasattr(proxy.config, 'key_type')
 
-    @property
-    def proxy(self) -> "Proxy":
-        """Get the proxy being read from."""
-        return self._proxy
-
-    @property
-    def current_sequence(self) -> int:
-        """Get the current sequence position."""
-        return self._current_sequence
-
-    @current_sequence.setter
-    def current_sequence(self, value: int) -> None:
-        """Set the current sequence position."""
-        if value < 0:
-            raise ValueError("sequence cannot be negative")
-        self._current_sequence = value
-
-    @property
-    def is_subscribed(self) -> bool:
-        """Check if the reader has been subscribed."""
-        return self._subscribed
-
-    @property
-    def initial_state(self) -> Optional[EventJournalInitialSubscriberState]:
-        """Get the initial subscriber state from the last subscribe call."""
-        return self._initial_state
-
-    def subscribe(self) -> EventJournalInitialSubscriberState:
+    def subscribe(self) -> EventJournalState:
         """Subscribe to the event journal and get initial state.
 
-        Returns the oldest and newest available sequence numbers,
-        allowing the client to determine where to start reading.
+        Returns the oldest and newest sequence numbers available in
+        the journal. Use these to determine where to start reading.
 
         Returns:
-            The initial subscriber state with sequence information.
+            EventJournalState with sequence information.
 
         Raises:
             IllegalStateException: If the proxy has been destroyed.
 
         Example:
-            >>> reader = EventJournalReader(my_map)
             >>> state = reader.subscribe()
-            >>> print(f"Events available: {state.event_count}")
+            >>> if not state.is_empty:
+            ...     print(f"Events available from {state.oldest_sequence}")
         """
         return self.subscribe_async().result()
 
@@ -229,186 +299,159 @@ class EventJournalReader(Generic[K, V]):
         """Subscribe to the event journal asynchronously.
 
         Returns:
-            A Future that will contain the EventJournalInitialSubscriberState.
+            A Future that will contain the EventJournalState.
         """
         self._proxy._check_not_destroyed()
 
-        future: Future = Future()
-        state = EventJournalInitialSubscriberState(
-            oldest_sequence=0,
-            newest_sequence=-1,
-        )
-        self._initial_state = state
-        self._subscribed = True
-        future.set_result(state)
-        return future
+        if self._is_cache:
+            from hazelcast.protocol.codec import CacheEventJournalCodec
+            request = CacheEventJournalCodec.encode_subscribe_request(self._proxy._name)
 
-    def read_from_event_journal(
+            def handle_response(response: "ClientMessage") -> EventJournalState:
+                oldest, newest = CacheEventJournalCodec.decode_subscribe_response(response)
+                return EventJournalState(oldest, newest)
+        else:
+            from hazelcast.protocol.codec import MapEventJournalCodec
+            request = MapEventJournalCodec.encode_subscribe_request(self._proxy._name)
+
+            def handle_response(response: "ClientMessage") -> EventJournalState:
+                oldest, newest = MapEventJournalCodec.decode_subscribe_response(response)
+                return EventJournalState(oldest, newest)
+
+        return self._proxy._invoke(request, handle_response)
+
+    def read_many(
         self,
         start_sequence: int,
         min_size: int = 1,
         max_size: int = 100,
-        predicate: Optional[Callable[[EventJournalEvent[K, V]], bool]] = None,
-        projection: Optional[Callable[[EventJournalEvent[K, V]], Any]] = None,
+        filter_predicate: Optional[Any] = None,
     ) -> ReadResultSet[K, V]:
-        """Read events from the event journal starting at a specific sequence.
+        """Read multiple events from the event journal.
 
-        Reads a batch of events starting from the given sequence number.
-        The read operation blocks until at least min_size events are
-        available or a timeout occurs.
+        Reads up to max_size events starting from the given sequence.
+        The call will block until at least min_size events are available
+        or a timeout occurs.
 
         Args:
             start_sequence: The sequence number to start reading from.
-            min_size: Minimum number of events to read (blocks until available).
-            max_size: Maximum number of events to read in one batch.
-            predicate: Optional function to filter events.
-            projection: Optional function to transform events.
+            min_size: Minimum number of events to read (1-1000).
+            max_size: Maximum number of events to read (1-1000).
+            filter_predicate: Optional predicate to filter events.
 
         Returns:
-            A ReadResultSet containing the events read.
+            A ReadResultSet containing the events and next sequence.
 
         Raises:
-            ValueError: If start_sequence is negative or sizes are invalid.
+            ValueError: If min_size > max_size or values out of range.
             IllegalStateException: If the proxy has been destroyed.
 
         Example:
-            >>> result = reader.read_from_event_journal(
+            >>> result = reader.read_many(
             ...     start_sequence=0,
             ...     min_size=1,
             ...     max_size=100
             ... )
             >>> for event in result:
-            ...     print(f"{event.key}: {event.new_value}")
+            ...     print(event)
+            >>> # Continue from next sequence
+            >>> next_result = reader.read_many(result.next_sequence)
         """
-        return self.read_from_event_journal_async(
-            start_sequence, min_size, max_size, predicate, projection
-        ).result()
+        return self.read_many_async(start_sequence, min_size, max_size, filter_predicate).result()
+
+    def read_many_async(
+        self,
+        start_sequence: int,
+        min_size: int = 1,
+        max_size: int = 100,
+        filter_predicate: Optional[Any] = None,
+    ) -> Future:
+        """Read multiple events asynchronously.
+
+        Args:
+            start_sequence: The sequence number to start reading from.
+            min_size: Minimum number of events to read.
+            max_size: Maximum number of events to read.
+            filter_predicate: Optional predicate to filter events.
+
+        Returns:
+            A Future that will contain a ReadResultSet.
+        """
+        self._proxy._check_not_destroyed()
+
+        if min_size < 0:
+            raise ValueError("min_size must be non-negative")
+        if max_size < min_size:
+            raise ValueError("max_size must be >= min_size")
+        if max_size > 1000:
+            raise ValueError("max_size must be <= 1000")
+
+        filter_data = None
+        if filter_predicate is not None:
+            filter_data = self._proxy._to_data(filter_predicate)
+
+        if self._is_cache:
+            from hazelcast.protocol.codec import CacheEventJournalCodec
+            request = CacheEventJournalCodec.encode_read_request(
+                self._proxy._name, start_sequence, min_size, max_size, filter_data
+            )
+
+            def handle_response(response: "ClientMessage") -> ReadResultSet[K, V]:
+                read_count, next_seq, events_data, sequences = CacheEventJournalCodec.decode_read_response(response)
+                events = self._deserialize_events(events_data, sequences)
+                return ReadResultSet(events, read_count, next_seq)
+        else:
+            from hazelcast.protocol.codec import MapEventJournalCodec
+            request = MapEventJournalCodec.encode_read_request(
+                self._proxy._name, start_sequence, min_size, max_size, filter_data
+            )
+
+            def handle_response(response: "ClientMessage") -> ReadResultSet[K, V]:
+                read_count, next_seq, events_data, sequences = MapEventJournalCodec.decode_read_response(response)
+                events = self._deserialize_events(events_data, sequences)
+                return ReadResultSet(events, read_count, next_seq)
+
+        return self._proxy._invoke(request, handle_response)
 
     def read_from_event_journal_async(
         self,
         start_sequence: int,
         min_size: int = 1,
         max_size: int = 100,
-        predicate: Optional[Callable[[EventJournalEvent[K, V]], bool]] = None,
-        projection: Optional[Callable[[EventJournalEvent[K, V]], Any]] = None,
     ) -> Future:
-        """Read events from the event journal asynchronously.
+        """Read from event journal asynchronously (compatibility method).
+
+        This method provides compatibility with the MapProxy interface.
 
         Args:
             start_sequence: The sequence number to start reading from.
             min_size: Minimum number of events to read.
             max_size: Maximum number of events to read.
-            predicate: Optional function to filter events.
-            projection: Optional function to transform events.
 
         Returns:
             A Future that will contain a ReadResultSet.
         """
-        self._proxy._check_not_destroyed()
+        return self.read_many_async(start_sequence, min_size, max_size)
 
-        if start_sequence < 0:
-            raise ValueError("start_sequence cannot be negative")
-        if min_size < 0:
-            raise ValueError("min_size cannot be negative")
-        if max_size <= 0:
-            raise ValueError("max_size must be positive")
-        if min_size > max_size:
-            raise ValueError("min_size cannot be greater than max_size")
-
-        future: Future = Future()
-        result = ReadResultSet[K, V](
-            read_count=0,
-            items=[],
-            next_sequence=start_sequence,
-        )
-        future.set_result(result)
-        return future
-
-    def read_many(
+    def _deserialize_events(
         self,
-        max_size: int = 100,
-        predicate: Optional[Callable[[EventJournalEvent[K, V]], bool]] = None,
-        projection: Optional[Callable[[EventJournalEvent[K, V]], Any]] = None,
-    ) -> ReadResultSet[K, V]:
-        """Read multiple events starting from the current sequence.
+        events_data: List[tuple],
+        sequences: List[int],
+    ) -> List[EventJournalEvent[K, V]]:
+        """Deserialize event data into EventJournalEvent objects."""
+        events = []
+        for i, (event_type, key_data, value_data, old_value_data) in enumerate(events_data):
+            key = self._proxy._to_object(key_data) if key_data else None
+            new_value = self._proxy._to_object(value_data) if value_data else None
+            old_value = self._proxy._to_object(old_value_data) if old_value_data else None
+            sequence = sequences[i] if i < len(sequences) else 0
 
-        Convenience method that reads events starting from current_sequence
-        and automatically updates current_sequence after the read.
-
-        Args:
-            max_size: Maximum number of events to read.
-            predicate: Optional function to filter events.
-            projection: Optional function to transform events.
-
-        Returns:
-            A ReadResultSet containing the events read.
-
-        Raises:
-            ValueError: If max_size is not positive.
-            IllegalStateException: If the proxy has been destroyed.
-
-        Example:
-            >>> reader.current_sequence = 0
-            >>> result = reader.read_many(100)
-            >>> print(f"Read {len(result)} events")
-            >>> print(f"Next sequence: {reader.current_sequence}")
-        """
-        return self.read_many_async(max_size, predicate, projection).result()
-
-    def read_many_async(
-        self,
-        max_size: int = 100,
-        predicate: Optional[Callable[[EventJournalEvent[K, V]], bool]] = None,
-        projection: Optional[Callable[[EventJournalEvent[K, V]], Any]] = None,
-    ) -> Future:
-        """Read multiple events asynchronously from the current sequence.
-
-        Args:
-            max_size: Maximum number of events to read.
-            predicate: Optional function to filter events.
-            projection: Optional function to transform events.
-
-        Returns:
-            A Future that will contain a ReadResultSet.
-        """
-        future = self.read_from_event_journal_async(
-            self._current_sequence, 0, max_size, predicate, projection
-        )
-
-        original_future = future
-        result_future: Future = Future()
-
-        def update_sequence(f: Future) -> None:
-            try:
-                result = f.result()
-                self._current_sequence = result.next_sequence
-                result_future.set_result(result)
-            except Exception as e:
-                result_future.set_exception(e)
-
-        original_future.add_done_callback(update_sequence)
-        return result_future
-
-    def reset_to_oldest(self) -> None:
-        """Reset the current sequence to the oldest available.
-
-        Requires a prior call to subscribe() to have the initial state.
-
-        Raises:
-            RuntimeError: If subscribe() has not been called.
-        """
-        if not self._subscribed or self._initial_state is None:
-            raise RuntimeError("Must call subscribe() before reset_to_oldest()")
-        self._current_sequence = self._initial_state.oldest_sequence
-
-    def reset_to_newest(self) -> None:
-        """Reset the current sequence to the newest available.
-
-        Requires a prior call to subscribe() to have the initial state.
-
-        Raises:
-            RuntimeError: If subscribe() has not been called.
-        """
-        if not self._subscribed or self._initial_state is None:
-            raise RuntimeError("Must call subscribe() before reset_to_newest()")
-        self._current_sequence = self._initial_state.newest_sequence
+            event = EventJournalEvent(
+                event_type=event_type,
+                key=key,
+                new_value=new_value,
+                old_value=old_value,
+                sequence=sequence,
+            )
+            events.append(event)
+        return events
