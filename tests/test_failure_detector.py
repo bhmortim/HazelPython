@@ -1,7 +1,9 @@
 """Unit tests for hazelcast.network.failure_detector module."""
 
 import asyncio
+import os
 import socket
+import struct
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1001,3 +1003,497 @@ class TestHeartbeatManager:
         await hm.stop()
 
         assert hm._running is False
+
+
+class TestPhiAccrualHeartbeatPatterns:
+    """Tests for PhiAccrualFailureDetector with various heartbeat patterns."""
+
+    def test_regular_heartbeat_pattern(self):
+        """Regular heartbeats should keep phi low."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        base_time = 1000000.0
+        interval = 500.0
+
+        for i in range(10):
+            pafd.heartbeat(1, base_time + i * interval)
+
+        phi = pafd.phi(1, base_time + 10 * interval + 100)
+        assert phi < 2.0
+
+    def test_irregular_heartbeat_pattern(self):
+        """Irregular heartbeats should increase variance and affect phi."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0, min_std_deviation_ms=10.0)
+        pafd.register_connection(1)
+
+        timestamps = [0, 100, 350, 400, 800, 850, 1400, 1450, 2000, 2100]
+        for ts in timestamps:
+            pafd.heartbeat(1, float(ts))
+
+        history = pafd._heartbeat_history[1]
+        assert history.std_deviation > 0
+
+    def test_bursty_heartbeat_pattern(self):
+        """Bursty heartbeats followed by silence should increase phi."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        base_time = 1000000.0
+        for i in range(5):
+            pafd.heartbeat(1, base_time + i * 10)
+
+        phi_after_burst = pafd.phi(1, base_time + 50)
+        phi_after_delay = pafd.phi(1, base_time + 5000)
+
+        assert phi_after_delay > phi_after_burst
+
+    def test_recovery_after_long_pause(self):
+        """Connection should recover after heartbeats resume."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        base_time = 1000000.0
+        for i in range(5):
+            pafd.heartbeat(1, base_time + i * 500)
+
+        phi_before_pause = pafd.phi(1, base_time + 2500)
+
+        phi_during_pause = pafd.phi(1, base_time + 20000)
+        assert phi_during_pause > phi_before_pause
+
+        for i in range(5):
+            pafd.heartbeat(1, base_time + 20000 + i * 500)
+
+        phi_after_recovery = pafd.phi(1, base_time + 22500)
+        assert phi_after_recovery < phi_during_pause
+
+    def test_phi_increases_monotonically_without_heartbeats(self):
+        """Phi should increase monotonically when no heartbeats arrive."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        pafd.heartbeat(1, 1000.0)
+        pafd.heartbeat(1, 1500.0)
+
+        phi_values = []
+        for delay in [100, 500, 1000, 2000, 5000, 10000]:
+            phi = pafd.phi(1, 1500.0 + delay)
+            phi_values.append(phi)
+
+        for i in range(1, len(phi_values)):
+            assert phi_values[i] >= phi_values[i - 1]
+
+    def test_multiple_connections_independent(self):
+        """Each connection should have independent phi calculations."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+        pafd.register_connection(2)
+
+        base_time = 1000000.0
+        for i in range(5):
+            pafd.heartbeat(1, base_time + i * 500)
+            pafd.heartbeat(2, base_time + i * 500)
+
+        pafd.heartbeat(1, base_time + 2500)
+
+        check_time = base_time + 5000
+        phi1 = pafd.phi(1, check_time)
+        phi2 = pafd.phi(2, check_time)
+
+        assert phi1 < phi2
+
+    def test_threshold_boundary_available(self):
+        """Connection at threshold boundary should report correctly."""
+        pafd = PhiAccrualFailureDetector(threshold=5.0)
+        pafd.register_connection(1)
+
+        pafd.heartbeat(1, 1000.0)
+        pafd.heartbeat(1, 1500.0)
+
+        delay = 500
+        while pafd.phi(1, 1500.0 + delay) < 5.0 and delay < 100000:
+            delay += 100
+
+        assert pafd.is_available(1, 1500.0 + delay - 100) is True
+        assert pafd.is_available(1, 1500.0 + delay + 1000) is False
+
+    def test_very_high_frequency_heartbeats(self):
+        """Very frequent heartbeats should result in low phi."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0, min_std_deviation_ms=1.0)
+        pafd.register_connection(1)
+
+        base_time = 1000000.0
+        for i in range(100):
+            pafd.heartbeat(1, base_time + i * 10)
+
+        phi = pafd.phi(1, base_time + 1000 + 50)
+        assert phi < 3.0
+
+
+class TestPingFailureDetectorNetworkPartition:
+    """Tests for PingFailureDetector simulating network partitions."""
+
+    @pytest.mark.asyncio
+    async def test_successful_ping_with_mocked_response(self):
+        """Test successful ICMP ping with mocked socket."""
+        pfd = PingFailureDetector(ping_timeout=1.0)
+        pfd._can_ping = True
+        pfd.register_host("192.168.1.1")
+
+        icmp_reply = struct.pack(
+            "!BBHHH",
+            0,
+            0,
+            0,
+            os.getpid() & 0xFFFF,
+            1,
+        ) + b"hazelcast-ping"
+
+        mock_sock = MagicMock()
+        mock_sock.setblocking = MagicMock()
+        mock_sock.settimeout = MagicMock()
+        mock_sock.close = MagicMock()
+
+        with patch("socket.socket", return_value=mock_sock):
+            with patch("socket.gethostbyname", return_value="192.168.1.1"):
+                with patch("asyncio.get_event_loop") as mock_loop:
+                    mock_event_loop = MagicMock()
+                    mock_event_loop.sock_sendto = AsyncMock()
+                    mock_event_loop.sock_recvfrom = AsyncMock(
+                        return_value=(icmp_reply, ("192.168.1.1", 0))
+                    )
+                    mock_loop.return_value = mock_event_loop
+
+                    with patch("asyncio.wait_for", new_callable=AsyncMock) as mock_wait:
+                        mock_wait.return_value = (icmp_reply, ("192.168.1.1", 0))
+                        success, latency = await pfd._send_ping("192.168.1.1")
+
+        assert pfd._failure_counts["192.168.1.1"] == 0
+
+    @pytest.mark.asyncio
+    async def test_network_partition_consecutive_failures(self):
+        """Simulate network partition with consecutive ping failures."""
+        pfd = PingFailureDetector(max_failures=3)
+        pfd._can_ping = True
+        pfd.register_host("192.168.1.1")
+
+        assert pfd.is_host_suspect("192.168.1.1") is False
+
+        for i in range(3):
+            with patch.object(
+                pfd, "_send_ping", new_callable=AsyncMock, side_effect=Exception("Network unreachable")
+            ):
+                await pfd.ping("192.168.1.1")
+
+        assert pfd.is_host_suspect("192.168.1.1") is True
+        assert pfd.get_failure_count("192.168.1.1") == 3
+
+    @pytest.mark.asyncio
+    async def test_network_recovery_resets_failures(self):
+        """Successful ping after failures should reset failure count."""
+        pfd = PingFailureDetector(max_failures=3)
+        pfd._can_ping = True
+        pfd.register_host("192.168.1.1")
+
+        pfd._failure_counts["192.168.1.1"] = 2
+        assert pfd.is_host_suspect("192.168.1.1") is False
+
+        with patch.object(pfd, "_send_ping", new_callable=AsyncMock, return_value=(True, 10.0)):
+            await pfd.ping("192.168.1.1")
+
+        assert pfd.get_failure_count("192.168.1.1") == 0
+        assert pfd.is_host_suspect("192.168.1.1") is False
+
+    @pytest.mark.asyncio
+    async def test_partial_network_partition(self):
+        """Some hosts fail while others succeed."""
+        pfd = PingFailureDetector(max_failures=2)
+        pfd._can_ping = True
+
+        hosts = ["192.168.1.1", "192.168.1.2", "192.168.1.3"]
+        for host in hosts:
+            pfd.register_host(host)
+
+        async def selective_ping(host):
+            if host == "192.168.1.2":
+                raise Exception("Host unreachable")
+            return True, 10.0
+
+        for _ in range(2):
+            for host in hosts:
+                with patch.object(pfd, "_send_ping", new_callable=AsyncMock, side_effect=selective_ping):
+                    await pfd.ping(host)
+
+        assert pfd.is_host_suspect("192.168.1.1") is False
+        assert pfd.is_host_suspect("192.168.1.2") is True
+        assert pfd.is_host_suspect("192.168.1.3") is False
+
+    def test_host_unreachable_all_registered_hosts(self):
+        """All hosts become suspect during complete network partition."""
+        pfd = PingFailureDetector(max_failures=2)
+
+        hosts = ["192.168.1.1", "192.168.1.2", "192.168.1.3"]
+        for host in hosts:
+            pfd.register_host(host)
+            pfd._failure_counts[host] = 2
+
+        suspect_hosts = [host for host in hosts if pfd.is_host_suspect(host)]
+        assert len(suspect_hosts) == 3
+
+
+class TestStateTransitions:
+    """Tests for member state transitions (alive → suspected → dead)."""
+
+    def test_alive_to_suspected_via_failure_detector(self):
+        """Connection transitions from alive to suspected on timeout."""
+        fd = FailureDetector(heartbeat_timeout=0.01)
+        conn = MockConnection(1, is_alive=True)
+        conn._last_read_time = time.time() - 1.0
+
+        assert fd.is_alive(conn) is False
+
+        suspects = fd.get_suspect_connections({1: conn})
+        assert conn in suspects
+
+    def test_alive_state_maintained_with_heartbeats(self):
+        """Connection stays alive with regular heartbeats."""
+        fd = FailureDetector(heartbeat_timeout=60.0)
+        conn = MockConnection(1, is_alive=True)
+        conn._last_read_time = time.time()
+
+        fd.register_connection(conn)
+        fd.on_heartbeat_received(conn)
+
+        assert fd.is_alive(conn) is True
+        suspects = fd.get_suspect_connections({1: conn})
+        assert conn not in suspects
+
+    def test_suspected_to_dead_via_ping_failures(self):
+        """Host becomes dead after max ping failures."""
+        pfd = PingFailureDetector(max_failures=3)
+        pfd.register_host("192.168.1.1")
+
+        assert pfd.is_host_suspect("192.168.1.1") is False
+
+        pfd._record_failure("192.168.1.1")
+        assert pfd.is_host_suspect("192.168.1.1") is False
+
+        pfd._record_failure("192.168.1.1")
+        assert pfd.is_host_suspect("192.168.1.1") is False
+
+        pfd._record_failure("192.168.1.1")
+        assert pfd.is_host_suspect("192.168.1.1") is True
+
+    def test_recovery_from_suspected_state(self):
+        """Host recovers from suspected state on successful communication."""
+        pfd = PingFailureDetector(max_failures=3)
+        pfd.register_host("192.168.1.1")
+        pfd._failure_counts["192.168.1.1"] = 5
+
+        assert pfd.is_host_suspect("192.168.1.1") is True
+
+        pfd._record_success("192.168.1.1")
+
+        assert pfd.is_host_suspect("192.168.1.1") is False
+        assert pfd.get_failure_count("192.168.1.1") == 0
+
+    def test_phi_accrual_alive_suspected_dead_transitions(self):
+        """PhiAccrualFailureDetector transitions through states."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        base_time = 1000000.0
+        for i in range(5):
+            pafd.heartbeat(1, base_time + i * 500)
+
+        assert pafd.is_available(1, base_time + 2500) is True
+
+        suspected_time = base_time + 10000
+        phi_suspected = pafd.phi(1, suspected_time)
+        assert phi_suspected > 2.0
+
+        dead_time = base_time + 50000
+        phi_dead = pafd.phi(1, dead_time)
+        assert phi_dead > pafd.threshold
+        assert pafd.is_available(1, dead_time) is False
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_manager_state_transition(self):
+        """HeartbeatManager triggers failure callback on state transition."""
+        fd = FailureDetector(heartbeat_interval=0.01, heartbeat_timeout=0.001)
+        failed_connections = []
+
+        def on_failed(conn, reason):
+            failed_connections.append((conn, reason))
+
+        send_hb = MagicMock()
+        hm = HeartbeatManager(fd, send_hb, on_failed)
+
+        conn = MockConnection(1, is_alive=True)
+        conn._last_read_time = time.time() - 10.0
+        hm.add_connection(conn)
+
+        await hm._check_connections()
+
+        assert len(failed_connections) == 1
+        assert failed_connections[0][0] is conn
+        assert "Heartbeat timeout" in failed_connections[0][1]
+
+
+class TestNetworkPartitionEdgeCases:
+    """Edge case tests for network partition scenarios."""
+
+    def test_split_brain_detection_pattern(self):
+        """Detect split-brain scenario where half the cluster is unreachable."""
+        pfd = PingFailureDetector(max_failures=2)
+
+        cluster_a = ["192.168.1.1", "192.168.1.2"]
+        cluster_b = ["192.168.2.1", "192.168.2.2"]
+
+        for host in cluster_a + cluster_b:
+            pfd.register_host(host)
+
+        for host in cluster_b:
+            pfd._failure_counts[host] = 3
+
+        reachable = [h for h in cluster_a + cluster_b if not pfd.is_host_suspect(h)]
+        unreachable = [h for h in cluster_a + cluster_b if pfd.is_host_suspect(h)]
+
+        assert set(reachable) == set(cluster_a)
+        assert set(unreachable) == set(cluster_b)
+
+    def test_flapping_connection_detection(self):
+        """Detect flapping connection with alternating success/failure."""
+        pfd = PingFailureDetector(max_failures=3)
+        pfd.register_host("192.168.1.1")
+
+        pfd._record_failure("192.168.1.1")
+        pfd._record_failure("192.168.1.1")
+        assert pfd.get_failure_count("192.168.1.1") == 2
+
+        pfd._record_success("192.168.1.1")
+        assert pfd.get_failure_count("192.168.1.1") == 0
+
+        pfd._record_failure("192.168.1.1")
+        pfd._record_failure("192.168.1.1")
+        assert pfd.get_failure_count("192.168.1.1") == 2
+
+        assert pfd.is_host_suspect("192.168.1.1") is False
+
+    def test_asymmetric_partition_scenario(self):
+        """Test asymmetric network partition detection."""
+        fd = FailureDetector(heartbeat_timeout=0.01)
+
+        conn1 = MockConnection(1, is_alive=True)
+        conn1._last_read_time = time.time() - 100
+        conn1._last_write_time = time.time()
+
+        conn2 = MockConnection(2, is_alive=True)
+        conn2._last_read_time = time.time()
+        conn2._last_write_time = time.time() - 100
+
+        assert fd.is_alive(conn1) is False
+        assert fd.is_alive(conn2) is True
+
+        assert fd.needs_heartbeat(conn1) is False
+        assert fd.needs_heartbeat(conn2) is True
+
+    def test_gradual_partition_onset(self):
+        """Test gradual onset of network partition via phi increase."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        base_time = 1000000.0
+        for i in range(10):
+            pafd.heartbeat(1, base_time + i * 500)
+
+        phi_values = []
+        check_times = [5100, 5500, 6000, 7000, 10000, 20000]
+
+        for offset in check_times:
+            phi = pafd.phi(1, base_time + offset)
+            phi_values.append(phi)
+
+        for i in range(1, len(phi_values)):
+            assert phi_values[i] >= phi_values[i - 1]
+
+        assert phi_values[0] < pafd.threshold
+        assert phi_values[-1] > pafd.threshold
+
+    def test_simultaneous_multiple_connection_failures(self):
+        """Multiple connections fail simultaneously during partition."""
+        fd = FailureDetector(heartbeat_timeout=0.01)
+
+        connections = {}
+        for i in range(5):
+            conn = MockConnection(i, is_alive=True)
+            conn._last_read_time = time.time() - 1.0
+            connections[i] = conn
+
+        suspects = fd.get_suspect_connections(connections)
+
+        assert len(suspects) == 5
+
+    def test_partition_heal_after_timeout(self):
+        """Test connection recovery after partition heals."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        base_time = 1000000.0
+        for i in range(5):
+            pafd.heartbeat(1, base_time + i * 500)
+
+        partition_time = base_time + 50000
+        assert pafd.is_available(1, partition_time) is False
+
+        heal_time = partition_time + 1000
+        pafd.heartbeat(1, heal_time)
+        pafd.heartbeat(1, heal_time + 500)
+        pafd.heartbeat(1, heal_time + 1000)
+
+        assert pafd.is_available(1, heal_time + 1100) is True
+
+    def test_zero_heartbeat_estimate_edge_case(self):
+        """Test behavior with zero first heartbeat estimate."""
+        pafd = PhiAccrualFailureDetector(
+            threshold=8.0,
+            first_heartbeat_estimate_ms=0.0,
+        )
+        pafd.register_connection(1)
+
+        assert pafd.phi(1) == 0.0
+
+        pafd.heartbeat(1, 1000.0)
+        assert pafd.phi(1, 1000.0) == 0.0
+
+    def test_very_large_time_gap(self):
+        """Test phi calculation with very large time gap."""
+        pafd = PhiAccrualFailureDetector(threshold=8.0)
+        pafd.register_connection(1)
+
+        pafd.heartbeat(1, 1000.0)
+        pafd.heartbeat(1, 1500.0)
+
+        phi = pafd.phi(1, 1000000000.0)
+        assert phi > 100.0
+        assert pafd.is_available(1, 1000000000.0) is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_ping_operations(self):
+        """Test concurrent ping operations to multiple hosts."""
+        pfd = PingFailureDetector(max_failures=3)
+        pfd._can_ping = True
+
+        hosts = [f"192.168.1.{i}" for i in range(1, 6)]
+        for host in hosts:
+            pfd.register_host(host)
+
+        async def mock_ping(host):
+            return True, 10.0
+
+        with patch.object(pfd, "_send_ping", new_callable=AsyncMock, side_effect=mock_ping):
+            results = await asyncio.gather(*[pfd.ping(host) for host in hosts])
+
+        assert all(success for success, _ in results)
+        assert all(pfd.get_failure_count(host) == 0 for host in hosts)
