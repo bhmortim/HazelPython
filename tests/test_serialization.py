@@ -810,6 +810,382 @@ class SamplePortableFactory:
         return None
 
 
+class TestArraySerializers:
+    """Tests for array serializers."""
+
+    @pytest.fixture
+    def service(self):
+        return SerializationService()
+
+    def test_boolean_array_roundtrip(self, service):
+        from hazelcast.serialization.builtin import BooleanArraySerializer
+        serializer = BooleanArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        original = [True, False, True, False]
+        serializer.write(output, original)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == original
+
+    def test_boolean_array_none(self, service):
+        from hazelcast.serialization.builtin import BooleanArraySerializer
+        serializer = BooleanArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        serializer.write(output, None)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == []
+
+    def test_short_array_roundtrip(self, service):
+        from hazelcast.serialization.builtin import ShortArraySerializer
+        serializer = ShortArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        original = [100, 200, -300, 32000]
+        serializer.write(output, original)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == original
+
+    def test_short_array_none(self, service):
+        from hazelcast.serialization.builtin import ShortArraySerializer
+        serializer = ShortArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        serializer.write(output, None)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == []
+
+    def test_int_array_roundtrip(self, service):
+        from hazelcast.serialization.builtin import IntArraySerializer
+        serializer = IntArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        original = [1, 2, 3, 100000, -50000]
+        serializer.write(output, original)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == original
+
+    def test_int_array_none(self, service):
+        from hazelcast.serialization.builtin import IntArraySerializer
+        serializer = IntArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        serializer.write(output, None)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == []
+
+    def test_long_array_roundtrip(self, service):
+        from hazelcast.serialization.builtin import LongArraySerializer
+        serializer = LongArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        original = [9999999999, -8888888888, 0]
+        serializer.write(output, original)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == original
+
+    def test_long_array_none(self, service):
+        from hazelcast.serialization.builtin import LongArraySerializer
+        serializer = LongArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        serializer.write(output, None)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == []
+
+    def test_float_array_roundtrip(self, service):
+        from hazelcast.serialization.builtin import FloatArraySerializer
+        serializer = FloatArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        original = [1.1, 2.2, 3.3]
+        serializer.write(output, original)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        for i, val in enumerate(original):
+            assert abs(result[i] - val) < 0.001
+
+    def test_float_array_none(self, service):
+        from hazelcast.serialization.builtin import FloatArraySerializer
+        serializer = FloatArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        serializer.write(output, None)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == []
+
+    def test_double_array_roundtrip(self, service):
+        from hazelcast.serialization.builtin import DoubleArraySerializer
+        serializer = DoubleArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        original = [1.111111, 2.222222, 3.333333]
+        serializer.write(output, original)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        for i, val in enumerate(original):
+            assert abs(result[i] - val) < 0.000001
+
+    def test_double_array_none(self, service):
+        from hazelcast.serialization.builtin import DoubleArraySerializer
+        serializer = DoubleArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        serializer.write(output, None)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == []
+
+    def test_string_array_roundtrip(self, service):
+        from hazelcast.serialization.builtin import StringArraySerializer
+        serializer = StringArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        original = ["hello", "world", "test"]
+        serializer.write(output, original)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == original
+
+    def test_string_array_none(self, service):
+        from hazelcast.serialization.builtin import StringArraySerializer
+        serializer = StringArraySerializer()
+        output = ObjectDataOutputImpl(service)
+        
+        serializer.write(output, None)
+        
+        buffer = output.to_byte_array()
+        input_stream = ObjectDataInputImpl(buffer, service)
+        result = serializer.read(input_stream)
+        
+        assert result == []
+
+
+class TestDateTimeSerializers:
+    """Tests for datetime serializers."""
+
+    @pytest.fixture
+    def service(self):
+        return SerializationService()
+
+    def test_datetime_roundtrip(self, service):
+        from datetime import datetime
+        
+        original = datetime(2023, 6, 15, 10, 30, 45, 123456)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_datetime_midnight(self, service):
+        from datetime import datetime
+        
+        original = datetime(2023, 1, 1, 0, 0, 0, 0)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_datetime_end_of_day(self, service):
+        from datetime import datetime
+        
+        original = datetime(2023, 12, 31, 23, 59, 59, 999999)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_date_roundtrip(self, service):
+        from datetime import date
+        
+        original = date(2023, 6, 15)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_date_leap_year(self, service):
+        from datetime import date
+        
+        original = date(2024, 2, 29)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_time_roundtrip(self, service):
+        from datetime import time
+        
+        original = time(10, 30, 45, 123456)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_time_midnight(self, service):
+        from datetime import time
+        
+        original = time(0, 0, 0, 0)
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+
+class TestBigDecimalSerializer:
+    """Tests for BigDecimal (Decimal) serializer."""
+
+    @pytest.fixture
+    def service(self):
+        return SerializationService()
+
+    def test_positive_decimal_roundtrip(self, service):
+        from decimal import Decimal
+        
+        original = Decimal("123.456")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_negative_decimal_roundtrip(self, service):
+        from decimal import Decimal
+        
+        original = Decimal("-987.654")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_zero_decimal(self, service):
+        from decimal import Decimal
+        
+        original = Decimal("0")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_large_precision(self, service):
+        from decimal import Decimal
+        
+        original = Decimal("123456789012345678901234567890.123456789")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert abs(result - original) < Decimal("0.0000001")
+
+    def test_integer_decimal(self, service):
+        from decimal import Decimal
+        
+        original = Decimal("1000000")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_small_decimal(self, service):
+        from decimal import Decimal
+        
+        original = Decimal("0.000001")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+
+class TestUUIDSerializer:
+    """Tests for UUID serializer."""
+
+    @pytest.fixture
+    def service(self):
+        return SerializationService()
+
+    def test_uuid_roundtrip(self, service):
+        import uuid
+        
+        original = uuid.uuid4()
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_uuid_v1(self, service):
+        import uuid
+        
+        original = uuid.uuid1()
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_uuid_from_string(self, service):
+        import uuid
+        
+        original = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+    def test_uuid_nil(self, service):
+        import uuid
+        
+        original = uuid.UUID("00000000-0000-0000-0000-000000000000")
+        data = service.to_data(original)
+        result = service.to_object(data)
+        
+        assert result == original
+
+
 class TestPortableSerializer:
     """Tests for PortableSerializer."""
 
@@ -868,3 +1244,124 @@ class TestSerializationServiceWithFactories:
         
         service.register_class_definition(cd)
         assert service.class_definition_context.lookup(1, 1, 0) is cd
+
+
+class TestSerializationServiceCompact:
+    """Tests for SerializationService compact serialization."""
+
+    @pytest.fixture
+    def service(self):
+        return SerializationService()
+
+    def test_register_compact_serializer(self, service):
+        from hazelcast.serialization.api import CompactSerializer, CompactWriter, CompactReader
+        
+        class MyClass:
+            def __init__(self, value=0):
+                self.value = value
+        
+        class MySerializer(CompactSerializer[MyClass]):
+            @property
+            def type_name(self) -> str:
+                return "MyClass"
+            
+            @property
+            def clazz(self) -> type:
+                return MyClass
+            
+            def write(self, writer: CompactWriter, obj: MyClass) -> None:
+                writer.write_int32("value", obj.value)
+            
+            def read(self, reader: CompactReader) -> MyClass:
+                return MyClass(value=reader.read_int32("value"))
+        
+        service.register_compact_serializer(MySerializer())
+        
+        obj = MyClass(value=42)
+        data = service.to_data(obj)
+        
+        assert data is not None
+        assert data.get_type_id() == SerializationService.COMPACT_TYPE_ID
+
+    def test_deserialize_compact(self, service):
+        from hazelcast.serialization.api import CompactSerializer, CompactWriter, CompactReader
+        
+        class SimpleClass:
+            def __init__(self, name="", age=0):
+                self.name = name
+                self.age = age
+        
+        class SimpleSerializer(CompactSerializer[SimpleClass]):
+            @property
+            def type_name(self) -> str:
+                return "SimpleClass"
+            
+            @property
+            def clazz(self) -> type:
+                return SimpleClass
+            
+            def write(self, writer: CompactWriter, obj: SimpleClass) -> None:
+                writer.write_string("name", obj.name)
+                writer.write_int32("age", obj.age)
+            
+            def read(self, reader: CompactReader) -> SimpleClass:
+                return SimpleClass(
+                    name=reader.read_string("name"),
+                    age=reader.read_int32("age"),
+                )
+        
+        service.register_compact_serializer(SimpleSerializer())
+        
+        obj = SimpleClass(name="Alice", age=30)
+        data = service.to_data(obj)
+        
+        result = service.deserialize_compact(data, "SimpleClass")
+        
+        assert result.name == "Alice"
+        assert result.age == 30
+
+    def test_deserialize_compact_wrong_type_id(self, service):
+        from hazelcast.exceptions import SerializationException
+        
+        data = Data(struct.pack("<i", 999) + b"payload")
+        
+        with pytest.raises(SerializationException, match="Expected compact type ID"):
+            service.deserialize_compact(data, "SomeType")
+
+    def test_is_compact_object_generic_record(self, service):
+        from hazelcast.serialization.compact import GenericRecord, Schema
+        
+        schema = Schema(type_name="Test")
+        record = GenericRecord(schema, {})
+        
+        assert service._is_compact_object(record) is True
+
+    def test_is_compact_object_not_compact(self, service):
+        assert service._is_compact_object("string") is False
+        assert service._is_compact_object(42) is False
+        assert service._is_compact_object([1, 2, 3]) is False
+
+    def test_find_serializer_for_subclass(self, service):
+        class BaseClass:
+            pass
+        
+        class DerivedClass(BaseClass):
+            pass
+        
+        class BaseSerializer(Serializer[BaseClass]):
+            @property
+            def type_id(self) -> int:
+                return 2000
+            
+            def write(self, output, obj):
+                pass
+            
+            def read(self, input_stream):
+                return BaseClass()
+        
+        service.register_serializer(BaseClass, BaseSerializer())
+        
+        derived = DerivedClass()
+        serializer = service._find_serializer_for_object(derived)
+        
+        assert serializer is not None

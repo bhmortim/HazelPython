@@ -1230,3 +1230,259 @@ class TestConstants:
 
     def test_data_offset(self):
         assert DATA_OFFSET == TYPE_ID_SIZE
+
+
+class TestCompactIntegration:
+    """Tests for compact serialization integration with SerializationService."""
+
+    def test_register_and_use_compact_serializer(self):
+        from hazelcast.serialization.api import CompactSerializer, CompactWriter, CompactReader
+        
+        class Product:
+            def __init__(self, name="", price=0.0):
+                self.name = name
+                self.price = price
+        
+        class ProductSerializer(CompactSerializer[Product]):
+            @property
+            def type_name(self) -> str:
+                return "Product"
+            
+            @property
+            def clazz(self) -> type:
+                return Product
+            
+            def write(self, writer: CompactWriter, obj: Product) -> None:
+                writer.write_string("name", obj.name)
+                writer.write_float64("price", obj.price)
+            
+            def read(self, reader: CompactReader) -> Product:
+                return Product(
+                    name=reader.read_string("name"),
+                    price=reader.read_float64("price"),
+                )
+        
+        service = SerializationService(compact_serializers=[ProductSerializer()])
+        
+        product = Product(name="Widget", price=19.99)
+        data = service.to_data(product)
+        
+        assert data is not None
+        assert data.get_type_id() == SerializationService.COMPACT_TYPE_ID
+
+    def test_serialize_generic_record_through_service(self):
+        from hazelcast.serialization.compact import GenericRecord, GenericRecordBuilder
+        
+        record = (GenericRecordBuilder("TestRecord")
+                  .set_string("name", "Test")
+                  .set_int32("value", 42)
+                  .build())
+        
+        service = SerializationService()
+        data = service.to_data(record)
+        
+        assert data is not None
+        assert data.get_type_id() == SerializationService.COMPACT_TYPE_ID
+
+    def test_deserialize_compact_to_generic_record(self):
+        from hazelcast.serialization.api import CompactSerializer, CompactWriter, CompactReader
+        from hazelcast.serialization.compact import GenericRecord
+        
+        class Item:
+            def __init__(self, id=0, name=""):
+                self.id = id
+                self.name = name
+        
+        class ItemSerializer(CompactSerializer[Item]):
+            @property
+            def type_name(self) -> str:
+                return "Item"
+            
+            @property
+            def clazz(self) -> type:
+                return Item
+            
+            def write(self, writer: CompactWriter, obj: Item) -> None:
+                writer.write_int32("id", obj.id)
+                writer.write_string("name", obj.name)
+            
+            def read(self, reader: CompactReader) -> Item:
+                return Item(
+                    id=reader.read_int32("id"),
+                    name=reader.read_string("name"),
+                )
+        
+        service = SerializationService(compact_serializers=[ItemSerializer()])
+        
+        item = Item(id=1, name="Test Item")
+        data = service.to_data(item)
+        
+        result = service.to_object(data)
+        
+        assert isinstance(result, GenericRecord)
+
+    def test_compact_service_property(self):
+        service = SerializationService()
+        
+        assert service.compact_service is not None
+
+
+class TestEdgeCases:
+    """Tests for edge cases and special scenarios."""
+
+    def test_register_same_serializer_twice(self):
+        service = SerializationService()
+        
+        class MyClass:
+            pass
+        
+        class MySerializer(Serializer[MyClass]):
+            @property
+            def type_id(self) -> int:
+                return 3000
+            
+            def write(self, output, obj):
+                pass
+            
+            def read(self, input_stream):
+                return MyClass()
+        
+        serializer = MySerializer()
+        service.register_serializer(MyClass, serializer)
+        service.register_serializer(MyClass, serializer)
+        
+        assert service._type_to_serializer[MyClass] is serializer
+
+    def test_empty_class_definition(self):
+        cd = ClassDefinition(1, 1, 0)
+        
+        assert cd.get_field_count() == 0
+        assert cd.get_field_names() == []
+        assert cd.fields == []
+
+    def test_class_definition_builder_all_array_types(self):
+        builder = ClassDefinitionBuilder(1, 1, 0)
+        builder.add_boolean_array_field("bools")
+        builder.add_int_array_field("ints")
+        builder.add_long_array_field("longs")
+        builder.add_string_array_field("strings")
+        
+        cd = builder.build()
+        
+        assert cd.get_field_type("bools") == FieldType.BOOLEAN_ARRAY
+        assert cd.get_field_type("ints") == FieldType.INT_ARRAY
+        assert cd.get_field_type("longs") == FieldType.LONG_ARRAY
+        assert cd.get_field_type("strings") == FieldType.STRING_ARRAY
+
+    def test_data_with_only_type_id(self):
+        buffer = struct.pack("<i", 42)
+        data = Data(buffer)
+        
+        assert data.get_type_id() == 42
+        assert data.get_payload() == b""
+        assert data.total_size() == 4
+
+    def test_portable_writer_with_non_null_portable(self):
+        serializer = MagicMock()
+        output = MagicMock()
+        class_def = ClassDefinition(1, 1, 0)
+        writer = DefaultPortableWriter(serializer, output, class_def)
+        
+        nested = MagicMock(spec=Portable)
+        writer.write_portable("nested", nested)
+        
+        output.write_boolean.assert_called_with(False)
+        serializer.write_internal.assert_called_once()
+
+    def test_portable_writer_array_with_items(self):
+        serializer = MagicMock()
+        output = MagicMock()
+        class_def = ClassDefinition(1, 1, 0)
+        writer = DefaultPortableWriter(serializer, output, class_def)
+        
+        items = [MagicMock(spec=Portable), MagicMock(spec=Portable)]
+        writer.write_portable_array("items", items)
+        
+        output.write_int.assert_called_with(2)
+        assert serializer.write_internal.call_count == 2
+
+    def test_portable_reader_array_with_items(self):
+        serializer = MagicMock()
+        input_stream = MagicMock()
+        class_def = ClassDefinition(1, 1, 0)
+        class_def.add_field(FieldDefinition(0, "items", FieldType.PORTABLE_ARRAY, 1, 2, 0))
+        reader = DefaultPortableReader(serializer, input_stream, class_def)
+        
+        input_stream.read_int.return_value = 2
+        serializer.read_internal.side_effect = [MagicMock(), MagicMock()]
+        
+        result = reader.read_portable_array("items")
+        
+        assert len(result) == 2
+
+    def test_portable_reader_non_null_portable(self):
+        serializer = MagicMock()
+        input_stream = MagicMock()
+        class_def = ClassDefinition(1, 1, 0)
+        class_def.add_field(FieldDefinition(0, "nested", FieldType.PORTABLE, 1, 2, 0))
+        reader = DefaultPortableReader(serializer, input_stream, class_def)
+        
+        input_stream.read_boolean.return_value = False
+        nested = MagicMock(spec=Portable)
+        serializer.read_internal.return_value = nested
+        
+        result = reader.read_portable("nested")
+        
+        assert result is nested
+
+    def test_serialization_service_thread_safety(self):
+        import threading
+        
+        service = SerializationService()
+        errors = []
+        
+        def register_and_use():
+            try:
+                class LocalClass:
+                    pass
+                
+                class LocalSerializer(Serializer[LocalClass]):
+                    @property
+                    def type_id(self) -> int:
+                        return threading.current_thread().ident % 10000 + 5000
+                    
+                    def write(self, output, obj):
+                        pass
+                    
+                    def read(self, input_stream):
+                        return LocalClass()
+                
+                service.register_serializer(LocalClass, LocalSerializer())
+            except Exception as e:
+                errors.append(e)
+        
+        threads = [threading.Thread(target=register_and_use) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        
+        assert len(errors) == 0
+
+    def test_nested_object_serialization(self):
+        service = SerializationService()
+        
+        nested = {"level1": {"level2": {"level3": "deep"}}}
+        data = service.to_data(nested)
+        result = service.to_object(data)
+        
+        assert result == nested
+
+    def test_list_with_mixed_types(self):
+        service = SerializationService()
+        
+        mixed = [1, "two", 3.0, True, None]
+        data = service.to_data(mixed)
+        result = service.to_object(data)
+        
+        assert result == mixed
