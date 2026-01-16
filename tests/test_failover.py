@@ -523,3 +523,489 @@ class TestFailoverConfig:
 
         fresh_addresses = config.get_cluster_addresses("test")
         assert fresh_addresses == ["node:5701"]
+
+
+class TestCNAMEResolverEdgeCases:
+    """Additional edge case tests for CNAMEResolver."""
+
+    @patch("socket.gethostbyname_ex")
+    def test_resolve_empty_response(self, mock_dns):
+        """Test resolve handles empty DNS response."""
+        mock_dns.return_value = ("test.example.com", [], [])
+        resolver = CNAMEResolver(dns_name="test.example.com")
+
+        addresses = resolver.resolve()
+
+        assert addresses == []
+
+    @patch("socket.gethostbyname_ex")
+    def test_resolve_single_ip(self, mock_dns):
+        """Test resolve handles single IP response."""
+        mock_dns.return_value = ("test", [], ["10.0.0.1"])
+        resolver = CNAMEResolver(dns_name="test.example.com", port=5703)
+
+        addresses = resolver.resolve()
+
+        assert addresses == ["10.0.0.1:5703"]
+
+    @patch("socket.gethostbyname_ex")
+    def test_resolve_many_ips(self, mock_dns):
+        """Test resolve handles many IPs in response."""
+        ips = [f"10.0.0.{i}" for i in range(1, 11)]
+        mock_dns.return_value = ("test", [], ips)
+        resolver = CNAMEResolver(dns_name="test.example.com")
+
+        addresses = resolver.resolve()
+
+        assert len(addresses) == 10
+        assert addresses[0] == "10.0.0.1:5701"
+        assert addresses[9] == "10.0.0.10:5701"
+
+    @patch("socket.gethostbyname_ex")
+    def test_resolve_updates_on_dns_change(self, mock_dns):
+        """Test resolver picks up DNS changes after refresh interval."""
+        mock_dns.return_value = ("test", [], ["10.0.0.1"])
+        resolver = CNAMEResolver(dns_name="test.example.com", refresh_interval=0.01)
+
+        first = resolver.resolve()
+        assert first == ["10.0.0.1:5701"]
+
+        mock_dns.return_value = ("test", [], ["10.0.0.2", "10.0.0.3"])
+        time.sleep(0.02)
+
+        second = resolver.resolve()
+        assert second == ["10.0.0.2:5701", "10.0.0.3:5701"]
+
+    @patch("socket.gethostbyname_ex")
+    def test_resolve_recovers_after_transient_failure(self, mock_dns):
+        """Test resolver recovers after transient DNS failure."""
+        mock_dns.return_value = ("test", [], ["10.0.0.1"])
+        resolver = CNAMEResolver(dns_name="test.example.com", refresh_interval=0.01)
+
+        first = resolver.resolve()
+        assert first == ["10.0.0.1:5701"]
+
+        mock_dns.side_effect = socket.gaierror("Temporary failure")
+        time.sleep(0.02)
+        cached = resolver.resolve()
+        assert cached == ["10.0.0.1:5701"]
+
+        mock_dns.side_effect = None
+        mock_dns.return_value = ("test", [], ["10.0.0.2"])
+        time.sleep(0.02)
+        recovered = resolver.resolve()
+        assert recovered == ["10.0.0.2:5701"]
+
+    @patch("socket.gethostbyname_ex")
+    def test_refresh_during_concurrent_resolve(self, mock_dns):
+        """Test refresh and resolve can run concurrently."""
+        call_count = [0]
+
+        def slow_dns(*args):
+            call_count[0] += 1
+            time.sleep(0.01)
+            return ("test", [], [f"10.0.0.{call_count[0]}"])
+
+        mock_dns.side_effect = slow_dns
+        resolver = CNAMEResolver(dns_name="test.example.com", refresh_interval=60.0)
+
+        results = []
+        errors = []
+
+        def resolve_task():
+            try:
+                results.append(resolver.resolve())
+            except Exception as e:
+                errors.append(e)
+
+        def refresh_task():
+            try:
+                results.append(resolver.refresh())
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=resolve_task),
+            threading.Thread(target=refresh_task),
+            threading.Thread(target=resolve_task),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+        assert len(results) == 3
+
+
+class TestFailoverStateMachine:
+    """Tests for failover state machine transitions."""
+
+    def test_initial_state(self):
+        """Test initial state is first cluster."""
+        config = FailoverConfig(try_count=3)
+        config.add_cluster("primary", ["p:5701"], priority=0)
+        config.add_cluster("secondary", ["s:5701"], priority=1)
+
+        assert config.current_cluster_index == 0
+        assert config.get_current_cluster().cluster_name == "primary"
+
+    def test_state_transition_on_switch(self):
+        """Test state transitions correctly on each switch."""
+        config = FailoverConfig()
+        config.add_cluster("a", ["a:5701"], priority=0)
+        config.add_cluster("b", ["b:5701"], priority=1)
+        config.add_cluster("c", ["c:5701"], priority=2)
+
+        states = [config.current_cluster_index]
+
+        for _ in range(6):
+            config.switch_to_next_cluster()
+            states.append(config.current_cluster_index)
+
+        assert states == [0, 1, 2, 0, 1, 2, 0]
+
+    def test_reset_from_any_state(self):
+        """Test reset works from any cluster index."""
+        config = FailoverConfig()
+        for i in range(5):
+            config.add_cluster(f"cluster{i}", [f"node{i}:5701"], priority=i)
+
+        for target_index in range(5):
+            for _ in range(target_index):
+                config.switch_to_next_cluster()
+
+            config.reset()
+            assert config.current_cluster_index == 0
+            assert config.get_current_cluster().cluster_name == "cluster0"
+
+    def test_single_cluster_switch_stays_on_same(self):
+        """Test switching with single cluster stays on same cluster."""
+        config = FailoverConfig()
+        config.add_cluster("only", ["only:5701"])
+
+        config.switch_to_next_cluster()
+        assert config.current_cluster_index == 0
+        assert config.get_current_cluster().cluster_name == "only"
+
+        config.switch_to_next_cluster()
+        assert config.current_cluster_index == 0
+
+    def test_state_preserved_after_get_operations(self):
+        """Test get operations do not change state."""
+        config = FailoverConfig()
+        config.add_cluster("a", ["a:5701"], priority=0)
+        config.add_cluster("b", ["b:5701"], priority=1)
+
+        config.switch_to_next_cluster()
+        initial_index = config.current_cluster_index
+
+        config.get_current_cluster()
+        config.get_cluster_addresses("a")
+        config.get_cluster_addresses("b")
+        _ = config.clusters
+        _ = config.cluster_count
+
+        assert config.current_cluster_index == initial_index
+
+
+class TestFailoverRetryExhaustion:
+    """Tests for retry exhaustion and failover triggering."""
+
+    def test_try_count_configuration(self):
+        """Test try_count is correctly configured."""
+        config = FailoverConfig(try_count=5)
+        assert config.try_count == 5
+
+        config.try_count = 10
+        assert config.try_count == 10
+
+    def test_try_count_minimum_boundary(self):
+        """Test try_count boundary at minimum value."""
+        config = FailoverConfig(try_count=1)
+        assert config.try_count == 1
+
+        with pytest.raises(ValueError):
+            config.try_count = 0
+
+    def test_simulated_retry_exhaustion_triggers_switch(self):
+        """Simulate retry exhaustion leading to cluster switch."""
+        config = FailoverConfig(try_count=3)
+        config.add_cluster("primary", ["p1:5701", "p2:5701"], priority=0)
+        config.add_cluster("backup", ["b1:5701"], priority=1)
+
+        connection_attempts = 0
+        max_attempts = config.try_count
+
+        for attempt in range(max_attempts):
+            connection_attempts += 1
+            connection_failed = True
+
+            if connection_failed and attempt == max_attempts - 1:
+                config.switch_to_next_cluster()
+
+        assert connection_attempts == 3
+        assert config.get_current_cluster().cluster_name == "backup"
+
+    def test_full_failover_cycle_with_exhaustion(self):
+        """Test complete failover cycle through all clusters."""
+        config = FailoverConfig(try_count=2)
+        config.add_cluster("dc1", ["dc1:5701"], priority=0)
+        config.add_cluster("dc2", ["dc2:5701"], priority=1)
+        config.add_cluster("dc3", ["dc3:5701"], priority=2)
+
+        visited_clusters = []
+
+        for cycle in range(2):
+            for cluster_idx in range(config.cluster_count):
+                current = config.get_current_cluster()
+                visited_clusters.append(current.cluster_name)
+
+                for _ in range(config.try_count):
+                    pass
+
+                config.switch_to_next_cluster()
+
+        assert visited_clusters == ["dc1", "dc2", "dc3", "dc1", "dc2", "dc3"]
+
+
+class TestMultiClusterIntegration:
+    """Integration-style tests for multi-cluster failover scenarios."""
+
+    def test_three_tier_failover_hierarchy(self):
+        """Test three-tier failover: local -> regional -> global."""
+        config = FailoverConfig(try_count=2)
+        config.add_cluster(
+            "local",
+            ["local1:5701", "local2:5701", "local3:5701"],
+            priority=0,
+        )
+        config.add_cluster(
+            "regional",
+            ["regional1:5701", "regional2:5701"],
+            priority=1,
+        )
+        config.add_cluster(
+            "global",
+            ["global1:5701"],
+            priority=2,
+        )
+
+        assert config.get_current_cluster().cluster_name == "local"
+        assert len(config.get_cluster_addresses("local")) == 3
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "regional"
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "global"
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "local"
+
+    @patch("socket.gethostbyname_ex")
+    def test_mixed_static_and_cname_clusters(self, mock_dns):
+        """Test failover between static and CNAME-based clusters."""
+        mock_dns.return_value = ("dynamic", [], ["10.0.0.1", "10.0.0.2"])
+
+        config = FailoverConfig(try_count=3)
+        config.add_cluster("static-primary", ["static1:5701", "static2:5701"], priority=0)
+        config.add_cname_cluster(
+            "dynamic-backup",
+            dns_name="backup.example.com",
+            priority=1,
+        )
+        config.add_cluster("static-dr", ["dr1:5701"], priority=2)
+
+        assert config.get_current_cluster().cluster_name == "static-primary"
+        static_addrs = config.get_cluster_addresses("static-primary")
+        assert static_addrs == ["static1:5701", "static2:5701"]
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "dynamic-backup"
+        dynamic_addrs = config.get_cluster_addresses("dynamic-backup")
+        assert dynamic_addrs == ["10.0.0.1:5701", "10.0.0.2:5701"]
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "static-dr"
+
+    @patch("socket.gethostbyname_ex")
+    def test_cname_cluster_membership_change_during_failover(self, mock_dns):
+        """Test CNAME cluster membership changes are picked up."""
+        mock_dns.return_value = ("test", [], ["10.0.0.1"])
+
+        config = FailoverConfig(try_count=2)
+        config.add_cname_cluster(
+            "dynamic",
+            dns_name="cluster.example.com",
+            refresh_interval=0.01,
+        )
+        config.add_cluster("static", ["static:5701"], priority=1)
+
+        addrs1 = config.get_cluster_addresses("dynamic")
+        assert addrs1 == ["10.0.0.1:5701"]
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "static"
+
+        mock_dns.return_value = ("test", [], ["10.0.0.2", "10.0.0.3"])
+        time.sleep(0.02)
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "dynamic"
+
+        addrs2 = config.get_cluster_addresses("dynamic")
+        assert addrs2 == ["10.0.0.2:5701", "10.0.0.3:5701"]
+
+    def test_failover_and_recovery_to_primary(self):
+        """Test failover to backup and recovery to primary."""
+        config = FailoverConfig(try_count=3)
+        config.add_cluster("primary", ["p1:5701", "p2:5701"], priority=0)
+        config.add_cluster("backup", ["b1:5701"], priority=1)
+
+        assert config.get_current_cluster().cluster_name == "primary"
+
+        config.switch_to_next_cluster()
+        assert config.get_current_cluster().cluster_name == "backup"
+
+        config.reset()
+        assert config.get_current_cluster().cluster_name == "primary"
+
+    def test_client_config_generation_for_each_cluster(self):
+        """Test ClientConfig generation for all clusters in failover."""
+        config = FailoverConfig(try_count=2)
+        config.add_cluster("prod", ["prod1:5701", "prod2:5701"], priority=0)
+        config.add_cluster("staging", ["staging1:5701"], priority=1)
+
+        prod_config = config.to_client_config(0)
+        assert prod_config.cluster_name == "prod"
+        assert prod_config.cluster_members == ["prod1:5701", "prod2:5701"]
+
+        staging_config = config.to_client_config(1)
+        assert staging_config.cluster_name == "staging"
+        assert staging_config.cluster_members == ["staging1:5701"]
+
+    def test_concurrent_failover_operations(self):
+        """Test thread-safe concurrent failover operations."""
+        config = FailoverConfig(try_count=2)
+        for i in range(5):
+            config.add_cluster(f"cluster{i}", [f"node{i}:5701"], priority=i)
+
+        errors = []
+        operations_completed = []
+
+        def switch_worker():
+            try:
+                for _ in range(10):
+                    config.switch_to_next_cluster()
+                    operations_completed.append("switch")
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        def reset_worker():
+            try:
+                for _ in range(5):
+                    time.sleep(0.005)
+                    config.reset()
+                    operations_completed.append("reset")
+            except Exception as e:
+                errors.append(e)
+
+        def read_worker():
+            try:
+                for _ in range(15):
+                    _ = config.get_current_cluster()
+                    _ = config.current_cluster_index
+                    operations_completed.append("read")
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=switch_worker),
+            threading.Thread(target=switch_worker),
+            threading.Thread(target=reset_worker),
+            threading.Thread(target=read_worker),
+        ]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+        assert len(operations_completed) > 0
+
+    def test_failover_with_priority_reordering(self):
+        """Test clusters are correctly ordered by priority."""
+        config = FailoverConfig()
+
+        config.add_cluster("low-priority", ["low:5701"], priority=10)
+        config.add_cluster("high-priority", ["high:5701"], priority=0)
+        config.add_cluster("medium-priority", ["med:5701"], priority=5)
+
+        cluster_order = [c.cluster_name for c in config.clusters]
+        assert cluster_order == ["high-priority", "medium-priority", "low-priority"]
+
+        assert config.get_current_cluster().cluster_name == "high-priority"
+
+    def test_from_configs_preserves_order_as_priority(self):
+        """Test from_configs uses list order as priority."""
+        configs = []
+        for name in ["first", "second", "third"]:
+            mock_config = MagicMock()
+            mock_config.cluster_name = name
+            mock_config.cluster_members = [f"{name}:5701"]
+            configs.append(mock_config)
+
+        failover = FailoverConfig.from_configs(configs)
+
+        assert failover.clusters[0].cluster_name == "first"
+        assert failover.clusters[0].priority == 0
+        assert failover.clusters[1].cluster_name == "second"
+        assert failover.clusters[1].priority == 1
+        assert failover.clusters[2].cluster_name == "third"
+        assert failover.clusters[2].priority == 2
+
+    @patch("socket.gethostbyname_ex")
+    def test_all_cname_clusters_failover(self, mock_dns):
+        """Test failover between multiple CNAME-based clusters."""
+        dns_responses = {
+            "primary.example.com": ["10.0.1.1", "10.0.1.2"],
+            "backup.example.com": ["10.0.2.1"],
+            "dr.example.com": ["10.0.3.1", "10.0.3.2", "10.0.3.3"],
+        }
+
+        def dns_lookup(name):
+            return (name, [], dns_responses.get(name, []))
+
+        mock_dns.side_effect = dns_lookup
+
+        config = FailoverConfig(try_count=2)
+        config.add_cname_cluster("primary", dns_name="primary.example.com", priority=0)
+        config.add_cname_cluster("backup", dns_name="backup.example.com", priority=1)
+        config.add_cname_cluster("dr", dns_name="dr.example.com", priority=2)
+
+        primary_addrs = config.get_cluster_addresses("primary")
+        assert len(primary_addrs) == 2
+
+        config.switch_to_next_cluster()
+        backup_addrs = config.get_cluster_addresses("backup")
+        assert len(backup_addrs) == 1
+
+        config.switch_to_next_cluster()
+        dr_addrs = config.get_cluster_addresses("dr")
+        assert len(dr_addrs) == 3
+
+    def test_empty_failover_config_edge_cases(self):
+        """Test edge cases with empty failover configuration."""
+        config = FailoverConfig()
+
+        assert config.get_current_cluster() is None
+        assert config.switch_to_next_cluster() is None
+        assert config.get_cluster_addresses("nonexistent") == []
+        assert config.cluster_count == 0
+
+        config.reset()
+        assert config.current_cluster_index == 0
