@@ -56,6 +56,7 @@ if TYPE_CHECKING:
 SERVICE_NAME_CACHE = "hz:impl:cacheService"
 SERVICE_NAME_MAP = "hz:impl:mapService"
 SERVICE_NAME_EXECUTOR = "hz:impl:executorService"
+SERVICE_NAME_SCHEDULED_EXECUTOR = "hz:impl:scheduledExecutorService"
 SERVICE_NAME_CARDINALITY_ESTIMATOR = "hz:impl:cardinalityEstimatorService"
 SERVICE_NAME_FLAKE_ID = "hz:impl:flakeIdGeneratorService"
 SERVICE_NAME_QUEUE = "hz:impl:queueService"
@@ -1007,6 +1008,32 @@ class HazelcastClient:
         """
         from hazelcast.proxy.executor import IExecutorService
         return self._get_or_create_proxy(SERVICE_NAME_EXECUTOR, name, IExecutorService)
+
+    def get_scheduled_executor_service(self, name: str) -> "IScheduledExecutorService":
+        """Get or create a distributed IScheduledExecutorService.
+
+        Returns a proxy to a distributed scheduled executor service that can
+        schedule tasks for delayed and periodic execution. Tasks can be
+        scheduled on specific members or on the owner of a key.
+
+        Args:
+            name: Name of the distributed scheduled executor service.
+
+        Returns:
+            IScheduledExecutorService instance for scheduling tasks.
+
+        Raises:
+            ClientOfflineException: If the client is not connected.
+
+        Example:
+            >>> scheduler = client.get_scheduled_executor_service("my-scheduler")
+            >>> future = scheduler.schedule(my_task, 10, TimeUnit.SECONDS)
+            >>> result = future.get()
+        """
+        from hazelcast.proxy.scheduled_executor import IScheduledExecutorService
+        return self._get_or_create_proxy(
+            SERVICE_NAME_SCHEDULED_EXECUTOR, name, IScheduledExecutorService
+        )
 
     def get_fenced_lock(self, name: str) -> "FencedLock":
         """Get or create a CP FencedLock.

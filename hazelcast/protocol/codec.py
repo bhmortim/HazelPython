@@ -4634,6 +4634,350 @@ EXECUTOR_SUBMIT_TO_MEMBER = 0x080200
 EXECUTOR_SHUTDOWN = 0x080300
 EXECUTOR_IS_SHUTDOWN = 0x080400
 
+# ScheduledExecutorService protocol constants
+SCHEDULED_EXECUTOR_SUBMIT_TO_PARTITION = 0x1A0100
+SCHEDULED_EXECUTOR_SUBMIT_TO_MEMBER = 0x1A0200
+SCHEDULED_EXECUTOR_SHUTDOWN = 0x1A0300
+SCHEDULED_EXECUTOR_GET_ALL_SCHEDULED_FUTURES = 0x1A0500
+SCHEDULED_EXECUTOR_GET_DELAY = 0x1A0700
+SCHEDULED_EXECUTOR_GET_RESULT = 0x1A0900
+SCHEDULED_EXECUTOR_CANCEL = 0x1A0A00
+SCHEDULED_EXECUTOR_IS_CANCELLED = 0x1A0B00
+SCHEDULED_EXECUTOR_IS_DONE = 0x1A0C00
+SCHEDULED_EXECUTOR_DISPOSE = 0x1A0D00
+
+
+class ScheduledExecutorServiceCodec:
+    """Codec for ScheduledExecutorService protocol messages."""
+
+    @staticmethod
+    def encode_submit_to_partition_request(
+        name: str,
+        task_data: bytes,
+        partition_id: int,
+        initial_delay_ms: int,
+        period_ms: int,
+        fixed_rate: bool,
+        auto_disposable: bool,
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.submitToPartition request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + LONG_SIZE + LONG_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_SUBMIT_TO_PARTITION)
+        struct.pack_into("<i", buffer, 12, partition_id)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<q", buffer, offset, initial_delay_ms)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, period_ms)
+        offset += LONG_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if fixed_rate else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if auto_disposable else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(task_data))
+        return msg
+
+    @staticmethod
+    def decode_submit_response(msg: "ClientMessage") -> Tuple[str, int, int]:
+        """Decode a ScheduledExecutorService submit response.
+        
+        Returns:
+            Tuple of (handler_name, partition_id, member_uuid_msb).
+        """
+        frame = msg.next_frame()
+        if frame is None:
+            return "", -1, 0
+        
+        partition_id = struct.unpack_from("<i", frame.content, RESPONSE_HEADER_SIZE)[0]
+        
+        name_frame = msg.next_frame()
+        handler_name = ""
+        if name_frame and not name_frame.is_null_frame:
+            handler_name = name_frame.content.decode("utf-8")
+        
+        return handler_name, partition_id, 0
+
+    @staticmethod
+    def encode_submit_to_member_request(
+        name: str,
+        task_data: bytes,
+        member_uuid: uuid_module.UUID,
+        initial_delay_ms: int,
+        period_ms: int,
+        fixed_rate: bool,
+        auto_disposable: bool,
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.submitToMember request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + UUID_SIZE + LONG_SIZE + LONG_SIZE + BOOLEAN_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_SUBMIT_TO_MEMBER)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, member_uuid)
+        offset += UUID_SIZE
+        struct.pack_into("<q", buffer, offset, initial_delay_ms)
+        offset += LONG_SIZE
+        struct.pack_into("<q", buffer, offset, period_ms)
+        offset += LONG_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if fixed_rate else 0)
+        offset += BOOLEAN_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if auto_disposable else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        msg.add_frame(Frame(task_data))
+        return msg
+
+    @staticmethod
+    def encode_shutdown_request(name: str) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.shutdown request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_SHUTDOWN)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def encode_get_all_scheduled_futures_request(name: str) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.getAllScheduledFutures request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_GET_ALL_SCHEDULED_FUTURES)
+        struct.pack_into("<i", buffer, 12, -1)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, name)
+        return msg
+
+    @staticmethod
+    def decode_get_all_scheduled_futures_response(
+        msg: "ClientMessage",
+    ) -> List[Tuple[str, int, Optional[uuid_module.UUID]]]:
+        """Decode a ScheduledExecutorService.getAllScheduledFutures response.
+        
+        Returns:
+            List of (handler_name, partition_id, member_uuid) tuples.
+        """
+        msg.next_frame()
+        result = []
+        
+        while msg.has_next_frame():
+            frame = msg.peek_next_frame()
+            if frame is None or frame.is_end_data_structure_frame:
+                msg.skip_frame()
+                break
+            
+            handler_frame = msg.next_frame()
+            if handler_frame is None:
+                break
+            
+            handler_name = handler_frame.content.decode("utf-8") if not handler_frame.is_null_frame else ""
+            
+            partition_frame = msg.next_frame()
+            partition_id = -1
+            if partition_frame and len(partition_frame.content) >= INT_SIZE:
+                partition_id = struct.unpack_from("<i", partition_frame.content, 0)[0]
+            
+            member_uuid = None
+            uuid_frame = msg.next_frame()
+            if uuid_frame and len(uuid_frame.content) >= UUID_SIZE:
+                member_uuid, _ = FixSizedTypesCodec.decode_uuid(uuid_frame.content, 0)
+            
+            result.append((handler_name, partition_id, member_uuid))
+        
+        return result
+
+    @staticmethod
+    def encode_get_delay_request(
+        scheduler_name: str,
+        handler_name: str,
+        partition_id: int,
+        member_uuid: Optional[uuid_module.UUID],
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.getDelay request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame, NULL_FRAME
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_GET_DELAY)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, partition_id)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE + INT_SIZE, member_uuid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, scheduler_name)
+        StringCodec.encode(msg, handler_name)
+        return msg
+
+    @staticmethod
+    def decode_get_delay_response(msg: "ClientMessage") -> int:
+        """Decode a ScheduledExecutorService.getDelay response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + LONG_SIZE:
+            return 0
+        return struct.unpack_from("<q", frame.content, RESPONSE_HEADER_SIZE)[0]
+
+    @staticmethod
+    def encode_get_result_request(
+        scheduler_name: str,
+        handler_name: str,
+        partition_id: int,
+        member_uuid: Optional[uuid_module.UUID],
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.getResult request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_GET_RESULT)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, partition_id)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE + INT_SIZE, member_uuid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, scheduler_name)
+        StringCodec.encode(msg, handler_name)
+        return msg
+
+    @staticmethod
+    def decode_get_result_response(msg: "ClientMessage") -> Optional[bytes]:
+        """Decode a ScheduledExecutorService.getResult response."""
+        msg.next_frame()
+        frame = msg.next_frame()
+        if frame is None or frame.is_null_frame:
+            return None
+        return frame.content
+
+    @staticmethod
+    def encode_cancel_request(
+        scheduler_name: str,
+        handler_name: str,
+        partition_id: int,
+        member_uuid: Optional[uuid_module.UUID],
+        may_interrupt_if_running: bool,
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.cancel request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE + UUID_SIZE + BOOLEAN_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_CANCEL)
+        struct.pack_into("<i", buffer, 12, -1)
+        offset = REQUEST_HEADER_SIZE
+        struct.pack_into("<i", buffer, offset, partition_id)
+        offset += INT_SIZE
+        FixSizedTypesCodec.encode_uuid(buffer, offset, member_uuid)
+        offset += UUID_SIZE
+        struct.pack_into("<B", buffer, offset, 1 if may_interrupt_if_running else 0)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, scheduler_name)
+        StringCodec.encode(msg, handler_name)
+        return msg
+
+    @staticmethod
+    def decode_cancel_response(msg: "ClientMessage") -> bool:
+        """Decode a ScheduledExecutorService.cancel response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_is_cancelled_request(
+        scheduler_name: str,
+        handler_name: str,
+        partition_id: int,
+        member_uuid: Optional[uuid_module.UUID],
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.isCancelled request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_IS_CANCELLED)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, partition_id)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE + INT_SIZE, member_uuid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, scheduler_name)
+        StringCodec.encode(msg, handler_name)
+        return msg
+
+    @staticmethod
+    def decode_is_cancelled_response(msg: "ClientMessage") -> bool:
+        """Decode a ScheduledExecutorService.isCancelled response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_is_done_request(
+        scheduler_name: str,
+        handler_name: str,
+        partition_id: int,
+        member_uuid: Optional[uuid_module.UUID],
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.isDone request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_IS_DONE)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, partition_id)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE + INT_SIZE, member_uuid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, scheduler_name)
+        StringCodec.encode(msg, handler_name)
+        return msg
+
+    @staticmethod
+    def decode_is_done_response(msg: "ClientMessage") -> bool:
+        """Decode a ScheduledExecutorService.isDone response."""
+        frame = msg.next_frame()
+        if frame is None or len(frame.content) < RESPONSE_HEADER_SIZE + BOOLEAN_SIZE:
+            return False
+        return struct.unpack_from("<B", frame.content, RESPONSE_HEADER_SIZE)[0] != 0
+
+    @staticmethod
+    def encode_dispose_request(
+        scheduler_name: str,
+        handler_name: str,
+        partition_id: int,
+        member_uuid: Optional[uuid_module.UUID],
+    ) -> "ClientMessage":
+        """Encode a ScheduledExecutorService.dispose request."""
+        from hazelcast.protocol.client_message import ClientMessage, Frame
+
+        buffer = bytearray(REQUEST_HEADER_SIZE + INT_SIZE + UUID_SIZE)
+        struct.pack_into("<I", buffer, 0, SCHEDULED_EXECUTOR_DISPOSE)
+        struct.pack_into("<i", buffer, 12, -1)
+        struct.pack_into("<i", buffer, REQUEST_HEADER_SIZE, partition_id)
+        FixSizedTypesCodec.encode_uuid(buffer, REQUEST_HEADER_SIZE + INT_SIZE, member_uuid)
+
+        msg = ClientMessage.create_for_encode()
+        msg.add_frame(Frame(bytes(buffer)))
+        StringCodec.encode(msg, scheduler_name)
+        StringCodec.encode(msg, handler_name)
+        return msg
+
 
 class ExecutorServiceCodec:
     """Codec for ExecutorService protocol messages."""
